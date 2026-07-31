@@ -1,0 +1,25 @@
+# Go
+/bridge/gothalo-bridge
+/bridge/*.exe
+*.test
+*.out
+
+# Secrets / local config
+*.env
+.env
+*-service-account*.json
+firebase-*.json
+config.local.*
+
+# Flutter (app/ — added in Phase 3)
+/app/build/
+/app/.dart_tool/
+/app/.flutter-plugins*
+/app/ios/Pods/
+/app/android/.gradle/
+*.iml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
