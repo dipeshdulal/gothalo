@@ -19,6 +19,25 @@ class AppTheme {
   static ThemeData get dark => _build(Brightness.dark);
   static ThemeData get light => _build(Brightness.light);
 
+  /// A subtle full-screen backdrop gradient, painted behind every screen (see
+  /// [GothaloApp]). Kept low-contrast so content and cards still read clearly —
+  /// a faint teal glow up top fading to near-black.
+  static Gradient backgroundGradient(Brightness brightness) {
+    if (brightness == Brightness.dark) {
+      return const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0xFF102021), Color(0xFF0A0E0F), Color(0xFF0C1314)],
+        stops: [0.0, 0.5, 1.0],
+      );
+    }
+    return const LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [Color(0xFFF1F6F5), Color(0xFFE8F0EF)],
+    );
+  }
+
   static ThemeData _build(Brightness brightness) {
     final scheme = ColorScheme.fromSeed(
       seedColor: _seed,
@@ -28,9 +47,10 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       fontFamily: fontFamily,
-      scaffoldBackgroundColor: scheme.surface,
-      appBarTheme: AppBarTheme(
-        backgroundColor: scheme.surface,
+      // Transparent so the app-wide backdrop gradient shows through.
+      scaffoldBackgroundColor: Colors.transparent,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         centerTitle: false,
         elevation: 0,

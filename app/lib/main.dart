@@ -21,6 +21,14 @@ class GothaloApp extends ConsumerWidget {
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.system,
       routerConfig: ref.watch(routerProvider),
+      // Paint the subtle backdrop gradient behind every screen. Scaffolds are
+      // transparent (see AppTheme), so this shows through.
+      builder: (context, child) => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: AppTheme.backgroundGradient(Theme.of(context).brightness),
+        ),
+        child: child,
+      ),
     );
   }
 }
