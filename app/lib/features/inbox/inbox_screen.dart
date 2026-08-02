@@ -5,8 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../alerts/alerts_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../approvals/approve_action.dart';
 import 'inbox_providers.dart';
 import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
@@ -49,6 +51,16 @@ class InboxScreen extends ConsumerWidget {
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: 'Alerts',
+              onPressed: () => context.push('/alerts'),
+              icon: Badge(
+                isLabelVisible:
+                    (ref.watch(unreadAlertsProvider).asData?.value ?? 0) > 0,
+                label: Text('${ref.watch(unreadAlertsProvider).asData?.value ?? 0}'),
+                child: const Icon(Icons.notifications_none),
+              ),
+            ),
             IconButton(
               tooltip: 'Refresh',
               onPressed: () =>
@@ -221,7 +233,7 @@ class _ProjectSection extends StatelessWidget {
   }
 }
 
-class _AgentTile extends StatelessWidget {
+class _AgentTile extends ConsumerWidget {
   const _AgentTile({required this.agent, this.showProject = true});
 
   final Agent agent;
@@ -231,7 +243,7 @@ class _AgentTile extends StatelessWidget {
   final bool showProject;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final isWt = agent.isWorktree;
     final dim = scheme.onSurfaceVariant;
@@ -288,9 +300,26 @@ class _AgentTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: StatusBadge(agent.agentStatus),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const SizedBox(height: 2),
+                StatusBadge(agent.agentStatus),
+                // One-tap approve for a blocked agent (D7/D8). The bridge picks
+                // the confirm keystroke and no-ops a stale tap.
+                if (agent.agentStatus == AgentStatus.blocked) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.tonal(
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: () => approveAgent(context, ref, agent),
+                    child: const Text('Approve'),
+                  ),
+                ],
+              ],
             ),
           ],
         ),
