@@ -94,6 +94,7 @@ flutter:
   assets:
     - assets/img/flock_bg.png
     - assets/img/servers_bg.png
+    - assets/agents/
 
   fonts:
     # UI typeface — Inter (OFL). Bundled so it renders crisp offline, no flash.

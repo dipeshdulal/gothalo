@@ -8,6 +8,7 @@ import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import 'inbox_providers.dart';
+import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
 
 /// The inbox for the active server, structured like Herdr's sidebar: an
@@ -244,17 +245,7 @@ class _AgentTile extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: scheme.surfaceContainerHighest,
-              child: Text(
-                agent.agent.isEmpty ? '?' : agent.agent[0].toUpperCase(),
-                style: TextStyle(
-                  color: dim,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
+            AgentAvatar(agent: agent.agent),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
