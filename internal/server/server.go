@@ -23,6 +23,14 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/store"
 )
 
+// herdrRequester is the one call the generic /herdr proxy needs: an
+// id-correlated request/response round-trip to the Herdr socket. *herdr.Client
+// satisfies it; tests substitute a fake. Kept as a narrow interface so the proxy
+// handler stays testable without a live socket.
+type herdrRequester interface {
+	Request(method string, params any) (json.RawMessage, error)
+}
+
 // Server bundles the dependencies the handlers need.
 type Server struct {
 	cfg     *config.Config
@@ -32,11 +40,13 @@ type Server struct {
 	pairing *pairing.Manager
 	web     fs.FS       // static receiver page assets
 	bus     *events.Bus // unified event bus; may be nil (WS /events disabled)
+	// requester backs POST /herdr; defaults to herdr but is swappable for tests.
+	requester herdrRequester
 }
 
 // New constructs a Server. push and bus may be nil.
 func New(cfg *config.Config, h *herdr.Client, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus) *Server {
-	return &Server{cfg: cfg, herdr: h, push: p, store: st, pairing: pm, web: web, bus: bus}
+	return &Server{cfg: cfg, herdr: h, push: p, store: st, pairing: pm, web: web, bus: bus, requester: h}
 }
 
 // publish emits a gothalo.* system event onto the bus, if one is wired. It never
@@ -64,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)
+	mux.HandleFunc("/herdr", s.handleHerdrProxy)
 	mux.HandleFunc("/register-token", s.handleRegisterToken)
 	mux.HandleFunc("/testpush", s.handleTestPush)
 	mux.HandleFunc("/pair", s.handlePair)

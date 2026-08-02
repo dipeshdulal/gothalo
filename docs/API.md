@@ -60,6 +60,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
+| POST | `/herdr` | `{method, params}` | `{result}` or `{error}` | allowlisted generic proxy onto Herdr's command surface (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
 | POST | `/testpush` | — | `{ok:true,sent:true}` | fan a sample push to all devices (test your FCM handler) |
 
@@ -310,8 +311,40 @@ Response `200`: `{ "closed": true, "pane_id": "w4:p7" }`. Closing a tab's last
 pane closes the tab too. Errors: `400` missing `pane_id` · `404` unknown pane ·
 `401` no/invalid token · `502` herdr failed.
 
+## POST /herdr — allowlisted generic proxy (Herdr command parity)
+One authenticated endpoint that forwards a **Herdr socket method** straight to
+Herdr and returns its result — so the app gets parity with Herdr's command
+surface (new worktree, new tab, split/close pane, close tab, plus reads) without
+a bespoke bridge endpoint per operation. New Herdr methods become available with
+no bridge change, as long as they are added to the allowlist.
+```
+POST /herdr
+{ "method": "pane.split", "params": { "target_pane_id": "w4:p1", "direction": "down" } }
+```
+- `method` is a Herdr socket method id (from `herdr api schema --json`,
+  `schemas.request`) — dotted, e.g. `tab.create`, NOT the CLI subcommand.
+- `params` is forwarded verbatim; use the shapes from the schema. Omit or `{}`
+  for reads that take no params.
+- Success `200`: `{ "result": <herdr result, verbatim> }`.
+- Failure: `{ "error": "<message>" }` with a status (see below).
+
+**Only allowlisted methods are proxied; everything else is `403`.** The
+authoritative allowlist, each method's params, and real captured examples live in
+[`docs/CONTRACT-herdr-proxy.md`](CONTRACT-herdr-proxy.md) — the contract the
+worktree/tab/pane controls are built against. Currently allowed: reads
+(`session.snapshot`, `workspace.list/get`, `worktree.list`, `tab.list/get`,
+`pane.list/get`, `agent.list/get`) and mutations (`worktree.create/open/remove`,
+`workspace.create`, `tab.create/close/focus`, `pane.split/close/focus`,
+`agent.focus`).
+
+Status codes: `200` ok · `400` malformed body / missing `method` · `401`
+no/invalid token · `403` method not on the allowlist · `404` Herdr
+target-not-found (e.g. `pane_not_found`) · `502` socket/herdr unreachable or
+other Herdr error.
+
 ## Errors
-`401` missing/invalid bearer · `403` invalid pairing code · `400` bad body ·
+`401` missing/invalid bearer · `403` invalid pairing code / method not allowlisted
+(`/herdr`) · `400` bad body ·
 `404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
 `/agent-transcript`), or no transcript file / unsupported kind
 (`/agent-transcript`) · `500` transcript read failed (`/agent-transcript`) · `502`
