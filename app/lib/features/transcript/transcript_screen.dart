@@ -13,6 +13,7 @@ import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import 'transcript_models.dart';
 
@@ -67,6 +68,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
 
+  /// The blocked prompt (question + options) fetched from `/agent-state`, shown
+  /// as an approval bar while the agent is blocked; null otherwise.
+  AgentState? _agentState;
+  bool _fetchingState = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +108,33 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
       );
+    }
+  }
+
+  /// Pull the blocked prompt (question + options) for the approval bar.
+  Future<void> _fetchAgentState() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      final s = await client.getAgentState(widget.pane);
+      if (mounted) {
+        setState(() {
+          _agentState = s;
+          _fetchingState = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _fetchingState = false);
+    }
+  }
+
+  /// Act on a tapped option: the highlighted default approves (idempotent via
+  /// `/approve`); any other choice types its number + Enter.
+  void _handleOption(BlockedOption opt, Agent agent) {
+    if (opt.selected) {
+      approveAgent(context, ref, agent);
+    } else {
+      _client?.sendText(widget.pane, '${opt.index}\r');
     }
   }
 
@@ -330,6 +363,23 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
 
+    // While the agent is blocked, surface its question + options as an approval
+    // bar (fetched once from /agent-state); clear it once it moves on.
+    final blocked = agent?.agentStatus == AgentStatus.blocked;
+    if (blocked && _agentState == null && !_fetchingState) {
+      _fetchingState = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _fetchAgentState());
+    } else if (!blocked && (_agentState != null || _fetchingState)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _agentState = null;
+            _fetchingState = false;
+          });
+        }
+      });
+    }
+
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
@@ -389,6 +439,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
                 ],
               ),
             ),
+            // Blocked → show the pending question + options as tappable buttons.
+            if (blocked && _agentState?.isBlocked == true && agent != null)
+              _ApprovalBar(
+                state: _agentState!,
+                onOption: (opt) => _handleOption(opt, agent!),
+              ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
@@ -459,6 +515,88 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 }
 
 /// Dispatches one entry to the right bubble/card by kind.
+/// Shown above the composer while the agent is blocked: the pending question and
+/// its options as tappable buttons (the default is highlighted). Tapping the
+/// default approves via `/approve`; any other option types its number.
+class _ApprovalBar extends StatelessWidget {
+  const _ApprovalBar({required this.state, required this.onOption});
+
+  final AgentState state;
+  final void Function(BlockedOption) onOption;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final maxW = MediaQuery.sizeOf(context).width * 0.82;
+    final question = (state.blockedQuestion?.isNotEmpty ?? false)
+        ? state.blockedQuestion!
+        : (state.headline.isNotEmpty ? state.headline : 'Waiting for you');
+
+    return Container(
+      width: double.infinity,
+      color: scheme.errorContainer.withValues(alpha: 0.32),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2, right: 8),
+                child: Icon(Icons.pan_tool_outlined,
+                    size: 15, color: scheme.error),
+              ),
+              Expanded(
+                child: Text(
+                  question,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (state.options.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final o in state.options)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxW),
+                    child: o.selected
+                        ? FilledButton(
+                            onPressed: () => onOption(o),
+                            child: Text(o.label,
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          )
+                        : OutlinedButton(
+                            onPressed: () => onOption(o),
+                            child: Text(o.label,
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          ),
+                  ),
+              ],
+            ),
+          ] else
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Type your answer below.',
+                style:
+                    TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The bottom input bar — type a prompt (or an option number for a blocked
 /// prompt) and send it to the agent. The send button submits with a trailing
 /// newline; an empty send is a bare Enter (accepts a default prompt).
