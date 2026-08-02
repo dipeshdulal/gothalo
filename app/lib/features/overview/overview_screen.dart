@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +11,7 @@ import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
+import '../state_refresh.dart';
 import '../inbox/widgets/agent_avatar.dart';
 import '../inbox/widgets/status_badge.dart';
 
@@ -590,7 +593,9 @@ Future<void> _newTerminal(
   );
   try {
     final pane = await client.createPane(workspaceId: workspaceId);
-    ref.read(snapshotControllerProvider.notifier).refresh();
+    // Refresh everywhere so the new pane shows up in the space and dashboards;
+    // fire-and-forget so navigation isn't held up by the settle delay.
+    unawaited(refreshHerdrState(ref));
     if (!context.mounted) return;
     router.push('/terminal/${Uri.encodeComponent(pane.paneId)}');
   } on BridgeException catch (e) {
