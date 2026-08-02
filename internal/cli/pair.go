@@ -34,18 +34,18 @@ func runPair(configPath string) error {
 
 	client := newDaemonClient(cfg.Transport.Addr, cfg.AdminToken)
 	var res struct {
-		Code    string `json:"code"`
-		PairURL string `json:"pair_url"`
+		Code string `json:"code"`
+		URL  string `json:"url"`
 	}
 	if err := client.do("POST", "/admin/pairing", nil, &res); err != nil {
 		return err
 	}
-	if res.PairURL == "" || cfg.Transport.PublicURL == "" {
+	if res.URL == "" {
 		fmt.Fprintln(os.Stderr, "warning: no public_url configured — the QR has no reachable URL for the phone")
 	}
 
 	fmt.Println(titleStyle.Render("Scan this with the gothalo app to pair") +
 		hintStyle.Render("  (valid ~5 min)"))
 	fmt.Println()
-	return pairing.RenderQR(res.PairURL, os.Stdout)
+	return pairing.RenderQR(pairing.ConnectPayload{URL: res.URL, Code: res.Code}, os.Stdout)
 }

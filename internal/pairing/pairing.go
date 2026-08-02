@@ -1,18 +1,15 @@
 // Package pairing issues short-lived, one-time pairing codes and renders the QR
-// a phone scans to connect. The QR encodes a **deep-link URL**
-// (<base>/pair?code=<code>) rather than a JSON blob: it's the idiomatic mobile
-// shape (the app can register it as a deep link), it's human-openable, and the
-// app derives the bridge base URL from the URL's origin — so nothing about the
-// transport (tailnet URL now, relay URL later) is hardcoded.
+// a phone scans to connect. The QR encodes a small JSON payload — the bridge
+// base URL + a one-time code — so nothing about the transport (a tailnet URL
+// today, a relay URL later) is hardcoded in the app.
 package pairing
 
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -78,16 +75,22 @@ func (m *Manager) pruneLocked(now time.Time) {
 	}
 }
 
-// URL builds the deep-link a phone scans: <base>/pair?code=<code>. The app POSTs
-// to <base>/pair and uses <base> as the bridge URL thereafter.
-func URL(base, code string) string {
-	return strings.TrimRight(base, "/") + "/pair?code=" + url.QueryEscape(code)
+// ConnectPayload is the JSON a pairing QR encodes: the bridge base URL and a
+// one-time code. The app parses it and POSTs {code, device_name, fcm_token} to
+// <URL>/pair, then uses <URL> as the bridge base thereafter.
+type ConnectPayload struct {
+	URL  string `json:"url"`
+	Code string `json:"code"`
 }
 
-// RenderQR prints the QR for the pairing URL to w, with the URL beneath it for
+// RenderQR prints the QR for the payload to w, with the JSON beneath it for
 // debugging / manual entry.
-func RenderQR(pairURL string, w io.Writer) error {
-	qrterminal.Generate(pairURL, qrterminal.M, w)
-	fmt.Fprintf(w, "\n%s\n", pairURL)
+func RenderQR(p ConnectPayload, w io.Writer) error {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	qrterminal.Generate(string(b), qrterminal.M, w)
+	fmt.Fprintf(w, "\n%s\n", b)
 	return nil
 }

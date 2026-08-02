@@ -218,10 +218,7 @@ func (s *Server) handleAdminPairing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{
-		"code":     code,
-		"pair_url": pairing.URL(s.cfg.Transport.PublicURL, code),
-	})
+	writeJSON(w, map[string]string{"code": code, "url": s.cfg.Transport.PublicURL})
 }
 
 // GET /admin/devices -> list paired devices (admin-authed). Used by

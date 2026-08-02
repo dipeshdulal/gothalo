@@ -21,15 +21,15 @@ QR's origin (a tailnet URL today, a relay URL later).
   your own pairing codes for testing). Treat it as dev-only.
 
 ## Pairing flow (the real onboarding)
-1. Operator runs `gothalo pair` on the host; it prints a QR encoding a **deep-link
-   URL**:
+1. Operator runs `gothalo pair` on the host; it prints a QR encoding a small JSON
+   payload:
+   ```json
+   { "url": "https://my-mac.tailnet.ts.net:5338", "code": "<8-hex one-time code>" }
    ```
-   https://my-mac.tailnet.ts.net:5338/pair?code=<8-hex one-time code>
+2. App scans the QR and parses the JSON — `url` is the bridge base URL, `code` is
+   the one-time code — then:
    ```
-2. App scans the QR and parses the URL: the **origin** (`scheme://host:port`) is the
-   bridge base URL, and `code` is the query param. Then:
-   ```
-   POST <base>/pair
+   POST <url>/pair
    Content-Type: application/json
    { "code": "<code>", "device_name": "Dipesh S22", "fcm_token": "<this device's FCM token>" }
    ```
@@ -38,14 +38,14 @@ QR's origin (a tailnet URL today, a relay URL later).
    ```json
    { "id": "92787cfa", "bearer": "<64-hex per-device bearer>", "name": "Dipesh S22" }
    ```
-   Store `{ baseUrl: <origin>, bearer }` in secure storage; use `bearer` for all calls.
+   Store `{ baseUrl: url, bearer }` in secure storage; use `bearer` for all calls.
    Errors: `403` invalid/expired/already-used code · `400` bad body.
 
    Codes are **one-time** and expire in ~5 min.
 
 To mint a code yourself for testing (admin token):
 ```
-POST /admin/pairing?token=<admin>   ->  { "code", "pair_url" }
+POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 ```
 
 ## Endpoints (per-device bearer)
