@@ -9,6 +9,7 @@ import '../features/priority/priority_screen.dart';
 import '../features/servers/add_edit_server_screen.dart';
 import '../features/servers/servers_screen.dart';
 import '../features/terminal/terminal_screen.dart';
+import '../features/transcript/transcript_screen.dart';
 
 /// App routes.
 ///
@@ -61,6 +62,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/terminal/:pane',
         builder: (context, state) => TerminalScreen(
+          pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
+        ),
+      ),
+      GoRoute(
+        path: '/transcript/:pane',
+        builder: (context, state) => TranscriptScreen(
           pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
         ),
       ),

@@ -491,6 +491,21 @@ class _PaneCard extends ConsumerWidget {
                     const Spacer(),
                     if (focused)
                       Icon(Icons.my_location, size: 15, color: scheme.primary),
+                    // Agent panes get a shortcut into the chat/transcript view.
+                    if (isAgent) ...[
+                      const SizedBox(width: 4),
+                      InkResponse(
+                        onTap: () => context.push(
+                          '/transcript/${Uri.encodeComponent(pane.paneId)}',
+                        ),
+                        radius: 18,
+                        child: Icon(
+                          Icons.chat_bubble_outline,
+                          size: 16,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 8),
