@@ -3,6 +3,16 @@ import 'package:dio/dio.dart';
 import '../../core/connection/connection.dart';
 import 'models/snapshot.dart';
 
+/// Outcome of a `POST /approve`. The bridge always returns `200`; [applied]
+/// says whether the confirm keystroke was actually sent, and [reason] explains
+/// a no-op (stale seq, agent no longer blocked, no such agent). See D8.
+class ApproveResult {
+  const ApproveResult({required this.applied, this.reason});
+
+  final bool applied;
+  final String? reason;
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
@@ -79,6 +89,28 @@ class BridgeClient {
   Future<void> sendText(String pane, String text) async {
     try {
       await _dio.post<dynamic>('/send', data: {'pane': pane, 'text': text});
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /approve {agent, seq}` → one-tap idempotent approval for a blocked
+  /// agent (D8). [agent] is the pane id; [seq] is that agent's
+  /// `state_change_seq` from the snapshot. The confirm keystroke is chosen
+  /// server-side per agent kind, so the app sends none itself. The bridge no-ops
+  /// (`applied:false` + a [ApproveResult.reason]) when the agent is no longer
+  /// blocked at [seq]; the call is always `200`.
+  Future<ApproveResult> approve(String agent, int seq) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/approve',
+        data: {'agent': agent, 'seq': seq},
+      );
+      final body = res.data ?? const <String, dynamic>{};
+      return ApproveResult(
+        applied: body['applied'] == true,
+        reason: body['reason'] as String?,
+      );
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }

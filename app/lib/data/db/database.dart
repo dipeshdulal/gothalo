@@ -104,6 +104,40 @@ class AppDatabase extends _$AppDatabase {
   Future<void> markHandled(int rowId) =>
       (update(agentEvents)..where((t) => t.rowId.equals(rowId)))
           .write(const AgentEventsCompanion(handled: Value(true)));
+
+  /// The full alerts log across all servers, newest first. Reactive.
+  Stream<List<AgentEvent>> watchAllEvents({int limit = 300}) =>
+      (select(agentEvents)
+            ..orderBy([
+              (t) => OrderingTerm(
+                expression: t.receivedAt,
+                mode: OrderingMode.desc,
+              ),
+            ])
+            ..limit(limit))
+          .watch();
+
+  /// Number of unread (unhandled) alerts — drives the bell badge.
+  Stream<int> watchUnreadCount() {
+    final count = agentEvents.rowId.count();
+    final query = selectOnly(agentEvents)
+      ..addColumns([count])
+      ..where(agentEvents.handled.equals(false));
+    return query.map((row) => row.read(count) ?? 0).watchSingle();
+  }
+
+  Future<void> markAllHandled() =>
+      (update(agentEvents)..where((t) => t.handled.equals(false)))
+          .write(const AgentEventsCompanion(handled: Value(true)));
+
+  Future<void> clearEvents() => delete(agentEvents).go();
+
+  /// Retention: drop alerts older than [cutoffMillis] (unix millis). Called
+  /// after each insert so the log self-trims.
+  Future<void> pruneOlderThan(int cutoffMillis) =>
+      (delete(agentEvents)
+            ..where((t) => t.receivedAt.isSmallerThanValue(cutoffMillis)))
+          .go();
 }
 
 LazyDatabase _open() {

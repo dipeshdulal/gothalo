@@ -167,9 +167,129 @@ func (c *Client) SendKeys(pane string, keys ...string) error {
 // AttachCommand builds (but does not start) the `herdr agent attach <target>`
 // command used to stream a live terminal. The caller starts it under a PTY and
 // wires its stdio to the WebSocket. Kept here so the herdr binary path stays
-// owned by the client.
+// owned by the client. Only agent panes resolve here; non-agent panes stream
+// via ReadPane + Send instead (see Pane.IsAgent).
 func (c *Client) AttachCommand(target string) *exec.Cmd {
 	return exec.Command(c.bin, "agent", "attach", target)
+}
+
+// Pane is the subset of `herdr pane get` fields gothalo needs to route attach
+// (agent vs plain pane) and to echo identity back after create/split.
+type Pane struct {
+	PaneID    string `json:"pane_id"`
+	TabID     string `json:"tab_id"`
+	Workspace string `json:"workspace_id"`
+	// Agent is the hosted agent kind (e.g. "claude") when this pane runs one,
+	// empty for a plain shell / dev-server / logs pane.
+	Agent  string `json:"agent"`
+	Status string `json:"agent_status"`
+}
+
+// IsAgent reports whether an agent (claude, codex, …) is hosted in the pane.
+// Agent panes keep the high-fidelity `agent attach` PTY stream; plain panes use
+// the pane read/send bridge.
+func (p Pane) IsAgent() bool { return p.Agent != "" }
+
+type paneEnvelope struct {
+	Result struct {
+		Pane Pane `json:"pane"`
+	} `json:"result"`
+}
+
+type tabCreateEnvelope struct {
+	Result struct {
+		RootPane Pane `json:"root_pane"`
+	} `json:"result"`
+}
+
+// GetPane resolves a pane by id (`herdr pane get`). The error wraps herdr's
+// "pane not found" message so callers can map it to 404.
+func (c *Client) GetPane(paneID string) (Pane, error) {
+	out, err := c.run("pane", "get", paneID)
+	if err != nil {
+		return Pane{}, err
+	}
+	var env paneEnvelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		return Pane{}, fmt.Errorf("parse pane get: %w", err)
+	}
+	return env.Result.Pane, nil
+}
+
+// ReadPane returns the pane's current visible terminal frame with ANSI colour
+// (`herdr pane read --source visible --format ansi`). The attach bridge polls
+// this and repaints the WebSocket for non-agent panes.
+func (c *Client) ReadPane(paneID string) ([]byte, error) {
+	return c.run("pane", "read", paneID, "--source", "visible", "--format", "ansi")
+}
+
+// CreateTab opens a new tab (and its root pane) in a workspace
+// (`herdr tab create`). workspace is required; cwd and label are optional.
+// Returns the new root pane's identity. Created unfocused so the operator's
+// foreground pane on the host is not stolen.
+func (c *Client) CreateTab(workspace, cwd, label string) (Pane, error) {
+	args := []string{"tab", "create", "--no-focus"}
+	if workspace != "" {
+		args = append(args, "--workspace", workspace)
+	}
+	if cwd != "" {
+		args = append(args, "--cwd", cwd)
+	}
+	if label != "" {
+		args = append(args, "--label", label)
+	}
+	out, err := c.run(args...)
+	if err != nil {
+		return Pane{}, err
+	}
+	var env tabCreateEnvelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		return Pane{}, fmt.Errorf("parse tab create: %w", err)
+	}
+	return env.Result.RootPane, nil
+}
+
+// SplitPane splits an existing pane (`herdr pane split`), returning the new
+// pane's identity. direction is "right" or "down"; it defaults to "down" when
+// empty (Herdr requires an explicit direction). cwd is optional. Created
+// unfocused, like CreateTab.
+func (c *Client) SplitPane(pane, direction, cwd string) (Pane, error) {
+	if direction == "" {
+		direction = "down"
+	}
+	args := []string{"pane", "split", pane, "--no-focus", "--direction", direction}
+	if cwd != "" {
+		args = append(args, "--cwd", cwd)
+	}
+	out, err := c.run(args...)
+	if err != nil {
+		return Pane{}, err
+	}
+	var env paneEnvelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		return Pane{}, fmt.Errorf("parse pane split: %w", err)
+	}
+	return env.Result.Pane, nil
+}
+
+// RunInPane types a command into a pane and submits it (`herdr pane run`). The
+// whole command line is passed as a single argument (Herdr joins COMMAND...).
+func (c *Client) RunInPane(pane, command string) error {
+	_, err := c.run("pane", "run", pane, command)
+	return err
+}
+
+// ClosePane closes a pane (`herdr pane close`). Closing a tab's last pane
+// closes the tab too.
+func (c *Client) ClosePane(pane string) error {
+	_, err := c.run("pane", "close", pane)
+	return err
+}
+
+// IsNotFound reports whether a herdr error is a "… not found" resolution
+// failure (pane/tab/workspace), which callers map to HTTP 404 vs 502.
+func IsNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found")
 }
 
 // WaitResult is the settled agent state returned by Wait.

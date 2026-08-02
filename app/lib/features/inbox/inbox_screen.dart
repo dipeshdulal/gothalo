@@ -5,8 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../alerts/alerts_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../approvals/approve_action.dart';
 import 'inbox_providers.dart';
 import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
@@ -50,6 +52,21 @@ class InboxScreen extends ConsumerWidget {
           ),
           actions: [
             IconButton(
+              tooltip: 'Alerts',
+              onPressed: () => context.push('/alerts'),
+              icon: Badge(
+                isLabelVisible:
+                    (ref.watch(unreadAlertsProvider).asData?.value ?? 0) > 0,
+                label: Text('${ref.watch(unreadAlertsProvider).asData?.value ?? 0}'),
+                child: const Icon(Icons.notifications_none),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Overview',
+              onPressed: () => context.push('/overview'),
+              icon: const Icon(Icons.dashboard_outlined),
+            ),
+            IconButton(
               tooltip: 'Refresh',
               onPressed: () =>
                   ref.read(snapshotControllerProvider.notifier).refresh(),
@@ -66,7 +83,7 @@ class InboxScreen extends ConsumerWidget {
           bottom: TabBar(
             tabs: [
               Tab(text: 'Agents${_countSuffix(snapshot, (s) => s.agents.length)}'),
-              Tab(text: 'Spaces${_countSuffix(snapshot, (s) => s.byWorkspace.length)}'),
+              Tab(text: 'Spaces${_countSuffix(snapshot, (s) => s.workspaces.length)}'),
             ],
           ),
         ),
@@ -138,104 +155,115 @@ class _SpacesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (snap.agents.isEmpty) return const _EmptyState();
-    final groups = snap.byProject;
-    return ListView.builder(
+    if (snap.workspaces.isEmpty) return const _EmptyState();
+    // Representative cwd per workspace (from its first pane) → git context, so
+    // worktrees sort right under their parent project.
+    final cwdByWs = <String, String>{};
+    for (final p in snap.panes) {
+      cwdByWs.putIfAbsent(p.workspaceId, () => p.cwd);
+    }
+    ({String project, String? worktree}) git(WorkspaceInfo w) =>
+        gitContextForCwd(cwdByWs[w.workspaceId] ?? '');
+
+    final spaces = [...snap.workspaces]..sort((a, b) {
+      final ca = git(a), cb = git(b);
+      final p = ca.project.toLowerCase().compareTo(cb.project.toLowerCase());
+      if (p != 0) return p;
+      final wa = ca.worktree == null ? 0 : 1;
+      final wb = cb.worktree == null ? 0 : 1;
+      if (wa != wb) return wa - wb; // main checkout before its worktrees
+      return a.number.compareTo(b.number);
+    });
+
+    return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 24),
-      itemCount: groups.length,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: spaces.length,
+      separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
       itemBuilder: (context, i) =>
-          _ProjectSection(project: groups[i].key, agents: groups[i].value),
+          _SpaceTile(space: spaces[i], git: git(spaces[i])),
     );
   }
 }
 
-class _ProjectSection extends StatelessWidget {
-  const _ProjectSection({required this.project, required this.agents});
-
-  final String project;
-  final List<Agent> agents;
+/// One space (workspace). Worktree spaces are marked with a branch icon and
+/// indented under their parent project. Tapping opens the space's overview.
+class _SpaceTile extends StatelessWidget {
+  const _SpaceTile({required this.space, required this.git});
+  final WorkspaceInfo space;
+  final ({String project, String? worktree}) git;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final attention = agents.where((a) => a.agentStatus.needsAttention).length;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-          child: Row(
-            children: [
-              Icon(Icons.folder_outlined, size: 16, color: scheme.primary),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  project.isEmpty ? 'Ungrouped' : project,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: scheme.onSurface,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '${agents.length}',
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              if (attention > 0) ...[
-                const Spacer(),
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: scheme.error,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ],
-            ],
-          ),
+    final isWt = git.worktree != null;
+    final label = isWt
+        ? git.worktree!
+        : (space.label.isNotEmpty
+            ? space.label
+            : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
+    final blocked = space.agentStatus == AgentStatus.blocked;
+    return ListTile(
+      onTap: () => context
+          .push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
+      contentPadding: EdgeInsets.only(left: isWt ? 32 : 16, right: 16),
+      leading: CircleAvatar(
+        backgroundColor:
+            space.focused ? scheme.primary : scheme.surfaceContainerHighest,
+        child: Icon(
+          isWt ? Icons.call_split : Icons.workspaces_outline,
+          color: space.focused
+              ? scheme.onPrimary
+              : (isWt ? scheme.primary : scheme.onSurfaceVariant),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Card(
-            child: Column(
-              children: [
-                for (var i = 0; i < agents.length; i++) ...[
-                  if (i > 0) const Divider(height: 1, indent: 72),
-                  // Project is the header here; the row shows just the branch
-                  // for worktrees (nothing extra for the main checkout).
-                  _AgentTile(agent: agents[i], showProject: false),
-                ],
-              ],
+      ),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontFamily: isWt ? AppTheme.monoFamily : null,
+                color: isWt ? scheme.primary : null,
+              ),
             ),
           ),
-        ),
-      ],
+          if (blocked) ...[
+            const SizedBox(width: 8),
+            Container(
+              width: 8,
+              height: 8,
+              decoration:
+                  BoxDecoration(color: scheme.error, shape: BoxShape.circle),
+            ),
+          ],
+        ],
+      ),
+      subtitle: Text(
+        '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'}  ·  ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
+      trailing: const Icon(Icons.chevron_right),
     );
   }
 }
 
-class _AgentTile extends StatelessWidget {
-  const _AgentTile({required this.agent, this.showProject = true});
+class _AgentTile extends ConsumerWidget {
+  const _AgentTile({required this.agent});
 
   final Agent agent;
 
-  /// Show the project folder segment. Off inside a project group (the section
-  /// header already names it), on in the flat Agents tab.
-  final bool showProject;
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final isWt = agent.isWorktree;
     final dim = scheme.onSurfaceVariant;
-    final showFolder = showProject && agent.gitContext.project.isNotEmpty;
+    final showFolder = agent.gitContext.project.isNotEmpty;
 
     return InkWell(
       onTap: () =>
@@ -288,9 +316,26 @@ class _AgentTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: StatusBadge(agent.agentStatus),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const SizedBox(height: 2),
+                StatusBadge(agent.agentStatus),
+                // One-tap approve for a blocked agent (D7/D8). The bridge picks
+                // the confirm keystroke and no-ops a stale tap.
+                if (agent.agentStatus == AgentStatus.blocked) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.tonal(
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: () => approveAgent(context, ref, agent),
+                    child: const Text('Approve'),
+                  ),
+                ],
+              ],
             ),
           ],
         ),

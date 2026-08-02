@@ -1,19 +1,63 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/router.dart';
 import 'core/theme.dart';
+import 'features/push/push_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Firebase is optional at boot: without google-services.json this throws, and
+  // we simply run without push rather than crash. Push activates once Firebase
+  // is configured.
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    debugPrint('Firebase not configured — push disabled: $e');
+  }
   runApp(const ProviderScope(child: GothaloApp()));
 }
 
 /// gothalo — a self-hosted mobile remote for Herdr. Dark-first, follows the OS.
-class GothaloApp extends ConsumerWidget {
+class GothaloApp extends ConsumerStatefulWidget {
   const GothaloApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<GothaloApp> createState() => _GothaloAppState();
+}
+
+class _GothaloAppState extends ConsumerState<GothaloApp> {
+  @override
+  void initState() {
+    super.initState();
+    pendingDeepLink.addListener(_handleDeepLink);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Start push (permission, token, listeners); no-ops if Firebase is absent.
+      ref.read(pushControllerProvider);
+      _handleDeepLink(); // a cold-start deep-link may already be queued
+    });
+  }
+
+  /// Navigate to a blocked/done agent's terminal when a push notification was
+  /// tapped. `pane_id` is carried as the notification payload.
+  void _handleDeepLink() {
+    final pane = pendingDeepLink.value;
+    if (pane == null || pane.isEmpty) return;
+    pendingDeepLink.value = null;
+    ref.read(routerProvider).push('/terminal/${Uri.encodeComponent(pane)}');
+  }
+
+  @override
+  void dispose() {
+    pendingDeepLink.removeListener(_handleDeepLink);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'gothalo',
       debugShowCheckedModeBanner: false,
