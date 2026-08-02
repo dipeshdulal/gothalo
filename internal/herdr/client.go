@@ -47,11 +47,31 @@ type Agent struct {
 	PaneID    string `json:"pane_id"`
 	Title     string `json:"terminal_title_stripped"`
 	Workspace string `json:"workspace_id"`
+	// Cwd is the agent's working directory — the project root the transcript file
+	// is keyed under (see internal/transcript.Locate).
+	Cwd string `json:"cwd"`
+	// AgentSession is Herdr's handle on the agent's own session. For Claude its
+	// Value is the JSONL session id (== the transcript filename stem).
+	AgentSession AgentSession `json:"agent_session"`
 	// StateChangeSeq is a monotonically increasing counter Herdr bumps on every
 	// agent state transition. It is the idempotency token for approvals (D8): an
 	// approve only applies if the agent is still blocked at the same seq.
 	StateChangeSeq int `json:"state_change_seq"`
 }
+
+// AgentSession is Herdr's `agent_session` object: the coding agent's own session
+// identifier and where it came from. For Claude, Value is the session id used both
+// as the transcript filename and as the JSONL's `sessionId` field.
+type AgentSession struct {
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`   // e.g. "id"
+	Source string `json:"source"` // e.g. "herdr:claude"
+	Value  string `json:"value"`  // the session id
+}
+
+// SessionID returns the agent's session id (agent_session.value), or "" when the
+// pane has no resolved session.
+func (a Agent) SessionID() string { return a.AgentSession.Value }
 
 type snapshotEnvelope struct {
 	Result struct {
