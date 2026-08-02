@@ -13,6 +13,20 @@ class ApproveResult {
   final String? reason;
 }
 
+/// Identity of a pane created by `POST /pane/new` — enough to immediately
+/// `/attach` to it (and later close it).
+class NewPaneResult {
+  const NewPaneResult({
+    required this.paneId,
+    required this.tabId,
+    required this.workspaceId,
+  });
+
+  final String paneId;
+  final String tabId;
+  final String workspaceId;
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
@@ -110,6 +124,51 @@ class BridgeClient {
       return ApproveResult(
         applied: body['applied'] == true,
         reason: body['reason'] as String?,
+      );
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /pane/new` → creates a terminal and returns its identity so we can
+  /// `/attach` to it. Provide [workspaceId] to open a fresh tab in that space,
+  /// or [splitFrom] to split an existing pane ([splitFrom] wins if both given).
+  /// [command], when set, is typed and run in the new pane; a command that fails
+  /// still yields a created pane (the bridge returns 200 either way).
+  Future<NewPaneResult> createPane({
+    String? workspaceId,
+    String? splitFrom,
+    String? direction,
+    String? cwd,
+    String? label,
+    String? command,
+  }) async {
+    if ((workspaceId == null || workspaceId.isEmpty) &&
+        (splitFrom == null || splitFrom.isEmpty)) {
+      throw BridgeException('createPane needs a workspaceId or splitFrom');
+    }
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/pane/new',
+        data: {
+          if (splitFrom != null && splitFrom.isNotEmpty) 'split_from': splitFrom,
+          if (workspaceId != null && workspaceId.isNotEmpty)
+            'workspace_id': workspaceId,
+          if (direction != null && direction.isNotEmpty) 'direction': direction,
+          if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+          if (label != null && label.isNotEmpty) 'label': label,
+          if (command != null && command.isNotEmpty) 'command': command,
+        },
+      );
+      final body = res.data ?? const <String, dynamic>{};
+      final paneId = body['pane_id'] as String?;
+      if (paneId == null || paneId.isEmpty) {
+        throw BridgeException('Bridge did not return a new pane id');
+      }
+      return NewPaneResult(
+        paneId: paneId,
+        tabId: body['tab_id'] as String? ?? '',
+        workspaceId: body['workspace_id'] as String? ?? workspaceId ?? '',
       );
     } on DioException catch (e) {
       throw _asBridgeException(e);
