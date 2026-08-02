@@ -3,14 +3,13 @@
 This is the contract the app codes against. The backend was rebuilt into a
 `gothalo` CLI + bridge with **QR pairing** and **per-device bearer tokens**.
 
-## Base URL (use the new backend)
+## Base URL
 ```
-https://my-mac.tailnet.ts.net:8443
+https://my-mac.tailnet.ts.net
 ```
-Reachable over the tailnet (valid TLS). **Note the `:8443` port** — that's the new
-gothalo daemon. (The old prototype bridge on the default `:443` is being retired;
-do not target it.) The base URL is not hardcoded in the real flow — it comes from
-the pairing QR (a tailnet URL today, a relay URL later).
+The gothalo bridge, reachable over the tailnet (valid TLS) on the default HTTPS
+port. The base URL is not hardcoded in the real flow — it comes from the pairing
+QR (a tailnet URL today, a relay URL later).
 
 ## Auth model
 - **Per-device bearer** (normal): every request sends
