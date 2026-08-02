@@ -4,9 +4,10 @@
 package direct
 
 import (
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/charmbracelet/log"
 )
 
 // Transport serves HTTP on a bind address.
@@ -27,6 +28,6 @@ func (t *Transport) Serve(handler http.Handler) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("direct transport listening on %s", t.addr)
+	log.Info("direct transport listening", "addr", t.addr)
 	return srv.ListenAndServe()
 }

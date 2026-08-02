@@ -2,10 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 
 	"github.com/dipeshdulal/gothalo/internal/config"
@@ -62,16 +62,27 @@ func runDevicesList(configPath string) error {
 		return err
 	}
 	if len(res.Devices) == 0 {
-		fmt.Println("no paired devices")
+		fmt.Println(hintStyle.Render("no paired devices — run `gothalo pair` to add one"))
 		return nil
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tPAIRED\tLAST SEEN")
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		Headers("ID", "NAME", "PAIRED", "LAST SEEN").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return headerStyle.Padding(0, 1)
+			}
+			if col == 0 {
+				return idStyle.Padding(0, 1)
+			}
+			return lipgloss.NewStyle().Padding(0, 1)
+		})
 	for _, d := range res.Devices {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", d.ID, d.Name,
-			d.PairedAt.Format("2006-01-02 15:04"), humanSince(d.LastSeen))
+		t.Row(d.ID, d.Name, d.PairedAt.Format("2006-01-02 15:04"), humanSince(d.LastSeen))
 	}
-	return tw.Flush()
+	fmt.Println(t)
+	return nil
 }
 
 func runDevicesRevoke(configPath, id string) error {
@@ -86,7 +97,8 @@ func runDevicesRevoke(configPath, id string) error {
 	if err := client.do("POST", "/admin/devices/revoke", map[string]string{"id": id}, &res); err != nil {
 		return err
 	}
-	fmt.Printf("revoked %q — its bearer no longer authenticates and it will receive no further pushes\n", res.Name)
+	fmt.Println(okStyle.Render("✓ revoked "+res.Name) +
+		hintStyle.Render(" — its bearer no longer authenticates and it will receive no further pushes"))
 	return nil
 }
 

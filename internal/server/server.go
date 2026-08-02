@@ -8,10 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/config"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
@@ -164,7 +165,7 @@ func (s *Server) handleRegisterToken(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.store.SetFCMToken(id, body.Token, now)
 	}
-	log.Printf("registered push token (%d chars) for %q", len(body.Token), principal(id))
+	log.Info("registered push token", "principal", principal(id), "bytes", len(body.Token))
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -202,7 +203,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("paired device %q (id=%s)", d.Name, d.ID)
+	log.Info("paired device", "name", d.Name, "id", d.ID)
 	writeJSON(w, map[string]string{"id": d.ID, "bearer": d.Bearer, "name": d.Name})
 }
 
@@ -250,14 +251,14 @@ func (s *Server) handleAdminDevicesRevoke(w http.ResponseWriter, r *http.Request
 		http.Error(w, "no such device", http.StatusNotFound)
 		return
 	}
-	log.Printf("revoked device %q (id=%s)", name, body.ID)
+	log.Info("revoked device", "name", name, "id", body.ID)
 	writeJSON(w, map[string]any{"revoked": true, "name": name})
 }
 
 // Notify fans a transition out to every registered device. It is the callback
 // the watcher fires. Always logs; pushes only when FCM is configured.
 func (s *Server) Notify(paneID, status, title string) {
-	log.Printf("NOTIFY  agent=%s  status=%s  title=%q", paneID, status, title)
+	log.Info("notify", "agent", paneID, "status", status, "title", title)
 	if s.push == nil {
 		return
 	}
@@ -274,12 +275,12 @@ func (s *Server) Notify(paneID, status, title string) {
 	sent := 0
 	for _, t := range tokens {
 		if err := s.push.Send(t, pushTitle, body, data); err != nil {
-			log.Printf("push failed (token %s…): %v", t[:min(8, len(t))], err)
+			log.Error("push failed", "token", t[:min(8, len(t))]+"…", "err", err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("pushed to %d/%d device(s)  agent=%s  status=%s", sent, len(tokens), paneID, status)
+	log.Info("pushed", "sent", sent, "total", len(tokens), "agent", paneID, "status", status)
 }
 
 func principal(id string) string {

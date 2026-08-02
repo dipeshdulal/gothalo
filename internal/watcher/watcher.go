@@ -6,9 +6,10 @@
 package watcher
 
 import (
-	"log"
 	"sync"
 	"time"
+
+	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
@@ -32,11 +33,11 @@ func New(h *herdr.Client, notify NotifyFunc, usePoll bool) *Watcher {
 // Run blocks, watching forever. Call it in its own goroutine.
 func (w *Watcher) Run() {
 	if w.usePoll {
-		log.Printf("watcher: poll mode")
+		log.Info("watcher started", "mode", "poll")
 		w.pollLoop()
 		return
 	}
-	log.Printf("watcher: event-driven (herdr agent wait)")
+	log.Info("watcher started", "mode", "event-driven (herdr agent wait)")
 	w.waitLoop()
 }
 
@@ -49,7 +50,7 @@ func (w *Watcher) waitLoop() {
 	for {
 		agents, err := w.h.Agents()
 		if err != nil {
-			log.Printf("discover: %v", err)
+			log.Error("watcher discover failed", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -108,7 +109,7 @@ func (w *Watcher) pollLoop() {
 	for {
 		agents, err := w.h.Agents()
 		if err != nil {
-			log.Printf("watch: %v", err)
+			log.Error("watcher poll failed", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}

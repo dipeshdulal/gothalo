@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"log"
 	"os"
 
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 
 	"github.com/dipeshdulal/gothalo/internal/config"
@@ -33,6 +33,9 @@ func newServeCmd() *cobra.Command {
 }
 
 func runServe(configPath string) error {
+	log.SetReportTimestamp(true)
+	log.SetTimeFormat("15:04:05")
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -43,7 +46,8 @@ func runServe(configPath string) error {
 	if saved, err := cfg.EnsureAdminToken(); err != nil {
 		return err
 	} else if saved {
-		log.Printf("generated admin token -> %s", cfg.ConfigPath())
+		// Never log the token value; point the operator at the file.
+		log.Info("generated admin token", "config", cfg.ConfigPath())
 	}
 
 	h := herdr.New()
@@ -55,10 +59,10 @@ func runServe(configPath string) error {
 
 	var pc *push.Client
 	if p, err := push.LoadFile(cfg.Push.ServiceAccountPath); err != nil {
-		log.Printf("FCM disabled: %v (notify logs only)", err)
+		log.Warn("FCM disabled — notify will log only", "reason", err)
 	} else {
 		pc = p
-		log.Printf("FCM enabled: project=%s", p.ProjectID())
+		log.Info("FCM enabled", "project", p.ProjectID())
 	}
 
 	srv := server.New(cfg, h, pc, st, pm, web.FS())
@@ -75,7 +79,9 @@ func runServe(configPath string) error {
 		tr = direct.New(cfg.Transport.Addr)
 	}
 
-	log.Printf("gothalo serve: mode=%s addr=%s public_url=%q admin_token=%s",
-		tr.Name(), cfg.Transport.Addr, cfg.Transport.PublicURL, cfg.AdminToken)
+	log.Info("gothalo serve",
+		"mode", tr.Name(),
+		"addr", cfg.Transport.Addr,
+		"public_url", cfg.Transport.PublicURL)
 	return tr.Serve(srv.Handler())
 }

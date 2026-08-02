@@ -48,7 +48,8 @@ func runPair(configPath, name string) error {
 		fmt.Fprintln(os.Stderr, "warning: no public_url configured — the QR has no reachable URL for the phone")
 	}
 
-	fmt.Println("Scan this with the gothalo app to pair (valid ~5 min):")
+	fmt.Println(titleStyle.Render("Scan this with the gothalo app to pair") +
+		hintStyle.Render("  (valid ~5 min)"))
 	fmt.Println()
 	if err := pairing.RenderQR(pairing.ConnectPayload{V: 1, URL: res.URL, Code: res.Code}, os.Stdout); err != nil {
 		return err
