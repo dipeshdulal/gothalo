@@ -84,13 +84,24 @@ type ConnectPayload struct {
 }
 
 // RenderQR prints the QR for the payload to w, with the JSON beneath it for
-// debugging / manual entry.
+// debugging / manual entry. Half-block glyphs pack two rows per line (half the
+// height) and level L keeps the module count low — compact but still scannable
+// at close range.
 func RenderQR(p ConnectPayload, w io.Writer) error {
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	qrterminal.Generate(string(b), qrterminal.M, w)
+	qrterminal.GenerateWithConfig(string(b), qrterminal.Config{
+		Level:          qrterminal.L,
+		Writer:         w,
+		HalfBlocks:     true,
+		BlackChar:      qrterminal.BLACK_BLACK,
+		WhiteChar:      qrterminal.WHITE_WHITE,
+		BlackWhiteChar: qrterminal.BLACK_WHITE,
+		WhiteBlackChar: qrterminal.WHITE_BLACK,
+		QuietZone:      1,
+	})
 	fmt.Fprintf(w, "\n%s\n", b)
 	return nil
 }
