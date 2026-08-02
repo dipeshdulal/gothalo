@@ -108,7 +108,8 @@ runs and cancels silently). Match on `data["type"] == "dismiss"`; if absent, tre
 it as a normal push (above). It targets the **same** device set as the blocked
 push (all registered devices). Triggered when the bus shows the pane leaving
 `blocked` (`pane_agent_status_changed` with `agent_status != "blocked"`) or the
-pane closing (`pane_closed` / `pane_exited`) — see [`CONTRACT.md`](../CONTRACT.md).
+pane closing (`pane_closed` / `pane_exited`) — full contract in
+[`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md).
 
 ### Native FCM setup
 Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
