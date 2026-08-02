@@ -70,10 +70,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _hasOlder = false;
   bool _loadingOlder = false;
 
-  /// Scroll extent/offset captured before an older page is prepended, so the
-  /// viewport can be held steady once it lands (the list grows at the top).
-  double? _preMax;
-  double _preOffset = 0;
+  /// The oldest `seq` of the *first* page — the fixed anchor between "initial +
+  /// live" (below the [_centerKey]) and older pages loaded on scroll-up (above
+  /// it). Prepending above the center never moves the viewport, so the scroll
+  /// holds steady natively.
+  int _anchorSeq = 0;
+  final _centerKey = GlobalKey();
 
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
@@ -266,14 +268,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         if (h != null) {
           _oldestSeq = h.oldestLoadedSeq;
           _hasOlder = h.hasOlder;
+          _anchorSeq = h.oldestLoadedSeq; // fix the center at the first page
         }
         return false;
       case TranscriptFrameType.pageComplete:
         if (frame.oldestLoadedSeq > 0) _oldestSeq = frame.oldestLoadedSeq;
         _hasOlder = frame.hasOlder;
         _loadingOlder = false;
-        // Keep the same content under the user's finger after prepending.
-        WidgetsBinding.instance.addPostFrameCallback((_) => _restoreScroll());
         return true;
       case TranscriptFrameType.backlogComplete:
         if (_sawBacklogComplete) return false;
@@ -366,36 +367,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (pinned != _pinnedToBottom) {
       setState(() => _pinnedToBottom = pinned);
     }
-    // Near the top → page up (older history).
-    if (pos.pixels <= 300) _loadOlder();
+    // Near the real top (min extent goes negative once older pages exist) →
+    // page up. Relative to minScrollExtent so it fires only at the actual top,
+    // not every time the viewport sits near the center anchor.
+    if (pos.pixels <= pos.minScrollExtent + 400) _loadOlder();
   }
 
   /// Request the next older page over the transcript socket (the one inbound
-  /// frame `/agent-transcript` accepts), holding the scroll position steady.
+  /// frame `/agent-transcript` accepts). Older entries land *above* the center
+  /// anchor, so the viewport holds steady with no scroll math.
   void _loadOlder() {
     final channel = _channel;
     if (_loadingOlder || !_hasOlder || _oldestSeq <= 1 || channel == null) {
       return;
     }
     _loadingOlder = true;
-    _preMax = _scroll.hasClients ? _scroll.position.maxScrollExtent : null;
-    _preOffset = _scroll.hasClients ? _scroll.offset : 0;
     channel.sink.add(jsonEncode({
       'type': 'load_older',
       'before_seq': _oldestSeq,
       'limit': 150,
     }));
     if (mounted) setState(() {}); // show the top loader
-  }
-
-  /// After an older page is prepended, jump by the amount the list grew at the
-  /// top so the visible content doesn't leap.
-  void _restoreScroll() {
-    if (!_scroll.hasClients || _preMax == null) return;
-    final newMax = _scroll.position.maxScrollExtent;
-    final delta = newMax - _preMax!;
-    _preMax = null;
-    if (delta > 0) _scroll.jumpTo((_preOffset + delta).clamp(0.0, newMax));
   }
 
   /// Keep the view pinned to the newest entry unless the user scrolled up.
@@ -562,40 +554,65 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         .where((e) => e.kind != EntryKind.toolResult)
         .toList(growable: false);
 
-    // A spinner at the very top while an older page loads (paging up).
-    final header = _loadingOlder ? 1 : 0;
-    return ListView.builder(
+    // Split at the fixed anchor: the first page onward (+ live tail + pending)
+    // renders BELOW the center; older pages loaded on scroll-up render ABOVE it.
+    // Prepending above the center never shifts the viewport — no scroll math.
+    final below = <TranscriptEntry>[];
+    final above = <TranscriptEntry>[];
+    for (final e in visible) {
+      (e.seq < _anchorSeq ? above : below).add(e);
+    }
+
+    return CustomScrollView(
       controller: _scroll,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      // header (top loader) + entries + optimistic pending messages.
-      itemCount: header + visible.length + _pending.length,
-      itemBuilder: (context, i) {
-        if (header == 1 && i == 0) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+      center: _centerKey,
+      slivers: [
+        // Top spinner while paging up (furthest-up sliver).
+        if (_loadingOlder)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
               ),
             ),
-          );
-        }
-        final idx = i - header;
-        if (idx >= visible.length) {
-          return _PendingBubble(text: _pending[idx - visible.length]);
-        }
-        final entry = visible[idx];
-        return _EntryTile(
-          entry: entry,
-          result: entry.tool != null
-              ? _resultsByForId[entry.tool!.id]
-              : null,
-        );
-      },
+          ),
+        // Older pages — a before-center sliver lays out upward, so index 0 sits
+        // just above the center; feed it newest-first to keep chronological
+        // order reading top→bottom.
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => _entryTile(above[above.length - 1 - i]),
+              childCount: above.length,
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(key: _centerKey, child: const SizedBox.shrink()),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => i < below.length
+                  ? _entryTile(below[i])
+                  : _PendingBubble(text: _pending[i - below.length]),
+              childCount: below.length + _pending.length,
+            ),
+          ),
+        ),
+      ],
     );
   }
+
+  Widget _entryTile(TranscriptEntry entry) => _EntryTile(
+        entry: entry,
+        result: entry.tool != null ? _resultsByForId[entry.tool!.id] : null,
+      );
 }
 
 /// Dispatches one entry to the right bubble/card by kind.
