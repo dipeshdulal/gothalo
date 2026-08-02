@@ -61,6 +61,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
+| POST | `/herdr` | `{method, params}` | `{result}` or `{error}` | allowlisted generic proxy onto Herdr's command surface (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
 | POST | `/testpush` | — | `{ok:true,sent:true}` | fan a sample push to all devices (test your FCM handler) |
 
@@ -94,6 +95,23 @@ state_change_seq  the agent's seq at this transition (string int) -> pass to /ap
 Render a local notification from `title`/`body`; tapping it should deep-link to
 the agent identified by `agent` (== `pane_id`). Carry `state_change_seq` into any
 lock-screen/banner **Approve** action so `/approve` can no-op a stale tap (D8).
+
+### `dismiss` — auto-clear a stale "blocked" notification
+A **second, data-only** message shape the bridge sends when a `blocked` agent is
+**resolved from anywhere** (this phone, another device, the desktop Herdr app, or
+the agent just moving on). It tells every device to cancel the tray notification
+it raised for that pane, so a handled block doesn't linger on other phones.
+```
+type    "dismiss"           <- the discriminator; normal pushes have NO type key
+agent   the pane_id (e.g. "wN:p2")  <- cancel the notification keyed to this pane
+```
+There is **no** `title`/`body`/`status` (data-only, so your background handler
+runs and cancels silently). Match on `data["type"] == "dismiss"`; if absent, treat
+it as a normal push (above). It targets the **same** device set as the blocked
+push (all registered devices). Triggered when the bus shows the pane leaving
+`blocked` (`pane_agent_status_changed` with `agent_status != "blocked"`) or the
+pane closing (`pane_closed` / `pane_exited`) — full contract in
+[`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md).
 
 ### Native FCM setup
 Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
@@ -290,7 +308,13 @@ reconnect (which re-snapshots). The stream carries **both** Herdr's normalized
 events (`source:"herdr"` — `pane_agent_status_changed`, `pane_created`,
 `tab_*`, `workspace_*`, `layout_updated`, …) and gothalo's own system events
 (`source:"gothalo"` — `approve_applied`, `pane_created`/`pane_closed`,
-`device_paired`, `push_sent`, `herdr_connected`/`herdr_disconnected`/`herdr_resync`).
+`device_paired`, `push_sent`, `notification_cleared`,
+`herdr_connected`/`herdr_disconnected`/`herdr_resync`).
+
+`gothalo.notification_cleared` (payload `{pane}`) fires whenever the bridge
+dismisses a stale `blocked` push (see the `dismiss` push above). It's a
+consistency signal: a **foreground** app can clear its own UI from this event
+without waiting for the FCM `dismiss`.
 
 The bridge holds **one** Herdr socket subscription for the whole process and fans
 it out; every client is just another in-process subscriber (never one Herdr
@@ -351,8 +375,40 @@ Response `200`: `{ "closed": true, "pane_id": "w4:p7" }`. Closing a tab's last
 pane closes the tab too. Errors: `400` missing `pane_id` · `404` unknown pane ·
 `401` no/invalid token · `502` herdr failed.
 
+## POST /herdr — allowlisted generic proxy (Herdr command parity)
+One authenticated endpoint that forwards a **Herdr socket method** straight to
+Herdr and returns its result — so the app gets parity with Herdr's command
+surface (new worktree, new tab, split/close pane, close tab, plus reads) without
+a bespoke bridge endpoint per operation. New Herdr methods become available with
+no bridge change, as long as they are added to the allowlist.
+```
+POST /herdr
+{ "method": "pane.split", "params": { "target_pane_id": "w4:p1", "direction": "down" } }
+```
+- `method` is a Herdr socket method id (from `herdr api schema --json`,
+  `schemas.request`) — dotted, e.g. `tab.create`, NOT the CLI subcommand.
+- `params` is forwarded verbatim; use the shapes from the schema. Omit or `{}`
+  for reads that take no params.
+- Success `200`: `{ "result": <herdr result, verbatim> }`.
+- Failure: `{ "error": "<message>" }` with a status (see below).
+
+**Only allowlisted methods are proxied; everything else is `403`.** The
+authoritative allowlist, each method's params, and real captured examples live in
+[`docs/CONTRACT-herdr-proxy.md`](CONTRACT-herdr-proxy.md) — the contract the
+worktree/tab/pane controls are built against. Currently allowed: reads
+(`session.snapshot`, `workspace.list/get`, `worktree.list`, `tab.list/get`,
+`pane.list/get`, `agent.list/get`) and mutations (`worktree.create/open/remove`,
+`workspace.create`, `tab.create/close/focus`, `pane.split/close/focus`,
+`agent.focus`).
+
+Status codes: `200` ok · `400` malformed body / missing `method` · `401`
+no/invalid token · `403` method not on the allowlist · `404` Herdr
+target-not-found (e.g. `pane_not_found`) · `502` socket/herdr unreachable or
+other Herdr error.
+
 ## Errors
-`401` missing/invalid bearer · `403` invalid pairing code · `400` bad body ·
+`401` missing/invalid bearer · `403` invalid pairing code / method not allowlisted
+(`/herdr`) · `400` bad body ·
 `404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
 `/agent-mode/cycle`, `/agent-transcript`), or no transcript file / unsupported
 kind (`/agent-transcript`) · `405` wrong method (`/agent-mode/cycle` non-POST) ·

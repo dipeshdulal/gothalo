@@ -69,6 +69,11 @@ const (
 	TypeModeCycled = "mode_cycled"
 	// TypePushSent is emitted after the FCM fan-out; payload {agent, status, title, seq, sent, total}.
 	TypePushSent = "push_sent"
+	// TypeNotificationCleared is emitted by the notification-clearer consumer when
+	// an outstanding "blocked" push is dismissed (the pane left blocked or closed);
+	// payload {pane}. It rides alongside the data-only "dismiss" FCM so a foreground
+	// app can react without a push.
+	TypeNotificationCleared = "notification_cleared"
 	// TypeDevicePaired is emitted by POST /pair; payload {id, name}.
 	TypeDevicePaired = "device_paired"
 	// TypeHerdrConnected / _Disconnected / _Resync track the Herdr socket

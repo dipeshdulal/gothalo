@@ -168,14 +168,17 @@ class PushController extends _$PushController {
       final messaging = FirebaseMessaging.instance;
       await messaging.requestPermission();
 
-      // Foreground data messages don't display themselves — render + log them,
-      // or clear one if it's a dismiss.
+      // Foreground: the app is open and the live event stream already reflects
+      // this change, so we do NOT raise a tray notification — that would just be
+      // noise. We only record it in the in-app alerts log (bell + list), or
+      // clear a notification if it's a dismiss. The background handler
+      // ([firebaseMessagingBackgroundHandler]) still shows the tray when the app
+      // isn't in the foreground.
       FirebaseMessaging.onMessage.listen((m) async {
         if (_isDismiss(m.data)) {
           await _dismissFromData(m.data);
           return;
         }
-        await _showFromData(m.data);
         try {
           await _logToDb(ref.read(databaseProvider), m.data);
         } catch (_) {}

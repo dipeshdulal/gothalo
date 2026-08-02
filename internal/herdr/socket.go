@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -116,6 +117,94 @@ func (s *SocketConn) ReadMessage() (SocketMessage, error) {
 
 // Close closes the underlying connection.
 func (s *SocketConn) Close() error { return s.conn.Close() }
+
+// reqSeq mints a monotonically increasing suffix so concurrent Request calls
+// (the app may fire several at once) never collide on a correlation id.
+var reqSeq atomic.Uint64
+
+// requestTimeout bounds a single request/response round-trip on the dedicated
+// connection. Herdr's control ops are local and fast; this is a safety net so a
+// wedged socket surfaces as a 502 instead of hanging the HTTP handler.
+const requestTimeout = 15 * time.Second
+
+// SocketError is a structured error returned by the socket when Herdr rejects a
+// request ({"id","error":{"code","message"}}). The code (e.g. "pane_not_found")
+// lets callers map to an HTTP status; Raw preserves the original object so the
+// proxy can pass Herdr's error through verbatim.
+type SocketError struct {
+	Code    string
+	Message string
+	Raw     json.RawMessage
+}
+
+func (e *SocketError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("herdr: %s: %s", e.Code, e.Message)
+	}
+	return fmt.Sprintf("herdr: %s", e.Code)
+}
+
+// Request performs one id-correlated request/response round-trip against the
+// Herdr control socket over a dedicated short-lived connection — deliberately
+// NOT the event ingester's long-lived subscription connection, which is a
+// one-way stream after subscribe. It resolves the socket path, dials, sends
+// {id,method,params}, and returns the raw `result` for the matching id (or a
+// *SocketError when Herdr replies with an error). params may be any
+// JSON-marshalable value, including a json.RawMessage passed straight through
+// from an HTTP body. Safe for concurrent use: each call gets its own connection
+// and a unique id.
+func (c *Client) Request(method string, params any) (json.RawMessage, error) {
+	path, err := c.ServerSocketPath()
+	if err != nil {
+		return nil, err
+	}
+	conn, err := DialSocket(path)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return conn.Do(method, params)
+}
+
+// Do sends one request on this connection and reads back the response whose id
+// matches. It is used by Request on a fresh connection; any interleaved event
+// lines (there should be none without a subscription) are skipped. A read/write
+// deadline bounds the round-trip.
+func (s *SocketConn) Do(method string, params any) (json.RawMessage, error) {
+	id := fmt.Sprintf("gothalo-req-%d", reqSeq.Add(1))
+	req := socketRequest{ID: id, Method: method, Params: params}
+	line, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	if err := s.conn.SetDeadline(time.Now().Add(requestTimeout)); err != nil {
+		return nil, err
+	}
+	if _, err := s.conn.Write(append(line, '\n')); err != nil {
+		return nil, fmt.Errorf("write request: %w", err)
+	}
+	for {
+		msg, err := s.ReadMessage()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		if msg.Event != "" || msg.ID != id {
+			continue // an event or a stray id — not our reply
+		}
+		if len(msg.Error) > 0 {
+			serr := &SocketError{Raw: msg.Error}
+			var body struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(msg.Error, &body) == nil {
+				serr.Code, serr.Message = body.Code, body.Message
+			}
+			return nil, serr
+		}
+		return msg.Result, nil
+	}
+}
 
 type serverStatus struct {
 	Socket string `json:"socket"`
