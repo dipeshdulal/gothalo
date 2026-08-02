@@ -1,0 +1,33 @@
+meta {
+  name: Pairing - Issue Code
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/admin/pairing
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminToken}}
+}
+
+body:json {
+  {
+    "name": "Bruno Test Device"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.code) {
+    bru.setVar("pairingCode", res.body.code);
+  }
+}
+
+docs {
+  Admin-only: mint a one-time pairing code (also returns the connect URL that goes
+  in the QR). The post-response script stores the code in a runtime var
+  `pairingCode` for the next request.
+}

@@ -1,0 +1,32 @@
+meta {
+  name: Pairing - Pair Device
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/pair
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "code": "{{pairingCode}}",
+    "device_name": "Bruno Test Device",
+    "fcm_token": "REPLACE_WITH_FCM_TOKEN_OR_LEAVE_BLANK"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.bearer) {
+    bru.setEnvVar("bearer", res.body.bearer);
+  }
+}
+
+docs {
+  Consume a one-time code and register the device. Run "Pairing - Issue Code"
+  first (it stores pairingCode). The post-response script saves the returned
+  per-device bearer into the environment's `bearer` var, so Snapshot/Send then
+  authenticate as this device. Codes are one-time and expire in ~5 min.
+}

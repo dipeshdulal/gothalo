@@ -1,0 +1,26 @@
+meta {
+  name: Register Token
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/register-token
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{bearer}}
+}
+
+body:json {
+  {
+    "token": "REPLACE_WITH_FCM_DEVICE_TOKEN"
+  }
+}
+
+docs {
+  Update the caller's FCM push token (call on token refresh). A device bearer
+  updates that device; the admin token upserts a "web" test device.
+}

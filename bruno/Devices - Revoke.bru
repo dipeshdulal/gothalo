@@ -1,0 +1,27 @@
+meta {
+  name: Devices - Revoke
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/admin/devices/revoke
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminToken}}
+}
+
+body:json {
+  {
+    "id": "REPLACE_WITH_DEVICE_ID"
+  }
+}
+
+docs {
+  Admin-only: revoke a device by id (from Devices - List). Its bearer stops
+  authenticating and it receives no further pushes. Same as
+  `gothalo devices revoke <id>`.
+}
