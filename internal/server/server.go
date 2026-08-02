@@ -44,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/send", s.handleSend)
 	mux.HandleFunc("/approve", s.handleApprove)
+	mux.HandleFunc("/agent-state", s.handleAgentState)
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/register-token", s.handleRegisterToken)
 	mux.HandleFunc("/testpush", s.handleTestPush)

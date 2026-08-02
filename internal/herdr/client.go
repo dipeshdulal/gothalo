@@ -6,10 +6,17 @@ package herdr
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
+
+// ErrAgentNotFound is returned by Get/ReadText when the pane has no agent (or the
+// pane id is unknown). Herdr signals this with an `agent_not_found` error object
+// on a zero exit code, so callers can map it to a 404 rather than a 502.
+var ErrAgentNotFound = errors.New("agent not found")
 
 // Client talks to the local herdr CLI.
 type Client struct {
@@ -65,6 +72,76 @@ func (c *Client) Agents() ([]Agent, error) {
 		return nil, fmt.Errorf("parse snapshot: %w", err)
 	}
 	return env.Result.Snapshot.Agents, nil
+}
+
+// herdrError is the error object herdr prints (on a zero exit) when a command
+// can't resolve its target, e.g. {"error":{"code":"agent_not_found",...}}.
+type herdrError struct {
+	Error *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// asAgentError maps a herdr error payload to a Go error: ErrAgentNotFound for a
+// missing target, a generic error for anything else, or nil when there is no
+// error object. Herdr returns exit 0 even for these, so run() won't have caught
+// them — every command that can fail this way must check the body.
+func asAgentError(out []byte) error {
+	var e herdrError
+	if json.Unmarshal(out, &e) == nil && e.Error != nil {
+		if e.Error.Code == "agent_not_found" {
+			return ErrAgentNotFound
+		}
+		return fmt.Errorf("herdr: %s: %s", e.Error.Code, e.Error.Message)
+	}
+	return nil
+}
+
+type agentGetEnvelope struct {
+	Result struct {
+		Agent Agent `json:"agent"`
+	} `json:"result"`
+}
+
+// Get returns a single agent by pane id (`herdr agent get`). It returns
+// ErrAgentNotFound when the pane has no agent, so the caller can 404.
+func (c *Client) Get(pane string) (Agent, error) {
+	out, err := c.run("agent", "get", pane)
+	if aerr := asAgentError(out); aerr != nil {
+		return Agent{}, aerr
+	}
+	if err != nil {
+		return Agent{}, err
+	}
+	var env agentGetEnvelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		return Agent{}, fmt.Errorf("parse agent get: %w", err)
+	}
+	return env.Result.Agent, nil
+}
+
+// ReadText returns the plain-text terminal snapshot for a pane from the given
+// source (`herdr agent read <pane> --source <source> --format text`). Sources of
+// interest: "detection" (the parsed current-state view) and "recent-unwrapped"
+// (recent transcript, unwrapped). lines caps the snapshot when > 0. Herdr strips
+// ANSI for --format text. Returns ErrAgentNotFound when the pane has no agent.
+func (c *Client) ReadText(pane, source string, lines int) (string, error) {
+	args := []string{"agent", "read", pane, "--source", source, "--format", "text"}
+	if lines > 0 {
+		args = append(args, "--lines", strconv.Itoa(lines))
+	}
+	out, err := c.run(args...)
+	// A text read still emits a JSON error object (exit 0) when the target is gone.
+	if bytes.HasPrefix(bytes.TrimSpace(out), []byte(`{"error"`)) {
+		if aerr := asAgentError(out); aerr != nil {
+			return "", aerr
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // Send types text into a pane (`herdr pane send-text`).

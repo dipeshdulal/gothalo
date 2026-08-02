@@ -1,0 +1,31 @@
+
+╭─── Claude Code v2.1.212 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                               │
+│                Welcome back Dipesh!                │ Run /init to create a CLAUDE.md file with instructions for Claude                                                      │
+│                                                    │ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                                             │
+│                      ▝▜█████▛▘                     │ Bug fixes and reliability improvements                                                                                 │
+│                        ▘▘ ▝▝                       │ Added Claude Opus 5 (`claude-opus-5`), now the default Opus model — 1M context, fast mode at $10/$50 per Mtok          │
+│     Opus 4.8 (1M context) · Claude Max ·           │ Added `sandbox.network.strictAllowlist` setting to deny non-allowlisted hosts for sandboxed commands without prompting │
+│     dev@example.com's Organization     │ /release-notes for more                                                                                                │
+│             /…/scratchpad/blocked-demo             │                                                                                                                        │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ run: touch demo_output.txt
+
+⏺ Running 1 shell command…
+  ⎿  $ touch demo_output.txt
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   touch demo_output.txt
+   Create empty demo_output.txt file
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to blocked-demo/ from this project
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain

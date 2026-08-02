@@ -1,0 +1,19 @@
+
+
+❯ run: touch demo_output.txt
+
+⏺ Running 1 shell command…
+  ⎿  $ touch demo_output.txt
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   touch demo_output.txt
+   Create empty demo_output.txt file
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to blocked-demo/ from this project
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
