@@ -27,3 +27,6 @@ config.local.*
 .DS_Store
 .idea/
 .vscode/
+
+# local dev credentials (per-device bearer) — never commit
+.gothalo-dev.json

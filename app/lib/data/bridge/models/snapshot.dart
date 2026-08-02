@@ -43,6 +43,7 @@ sealed class Agent with _$Agent {
     @JsonKey(name: 'pane_id') @Default('') String paneId,
     @JsonKey(name: 'terminal_title_stripped') @Default('') String title,
     @JsonKey(name: 'workspace_id') @Default('') String workspaceId,
+    @JsonKey(name: 'tab_id') @Default('') String tabId,
     @Default('') String cwd,
     @Default(false) bool focused,
     @JsonKey(name: 'agent_session') AgentSession? session,
@@ -68,15 +69,8 @@ sealed class Agent with _$Agent {
   ///
   /// The bridge does not expose the real branch yet, so this is inferred from
   /// the path. When the bridge adds a branch field, prefer it over this.
-  ({String project, String? worktree}) get gitContext {
-    final parts = cwd.split('/').where((s) => s.isNotEmpty).toList();
-    if (parts.isEmpty) return (project: '', worktree: null);
-    final wt = parts.indexOf('worktrees');
-    if (wt > 0 && parts[wt - 1] == '.herdr' && wt + 2 < parts.length) {
-      return (project: parts[wt + 1], worktree: parts.sublist(wt + 2).join('/'));
-    }
-    return (project: parts.last, worktree: null);
-  }
+  ({String project, String? worktree}) get gitContext =>
+      gitContextForCwd(cwd);
 
   /// The most specific git name to show — the worktree (branch) if this is a
   /// worktree, otherwise the project directory.
@@ -94,6 +88,110 @@ sealed class AgentSession with _$AgentSession {
       _$AgentSessionFromJson(json);
 }
 
+/// Derive `{project, worktree}` from a cwd. Herdr worktrees live under
+/// `…/.herdr/worktrees/<project>/<worktree>`; a plain checkout is just its
+/// directory. Shared by agents (their cwd) and spaces (a pane's cwd).
+({String project, String? worktree}) gitContextForCwd(String cwd) {
+  final parts = cwd.split('/').where((s) => s.isNotEmpty).toList();
+  if (parts.isEmpty) return (project: '', worktree: null);
+  final wt = parts.indexOf('worktrees');
+  if (wt > 0 && parts[wt - 1] == '.herdr' && wt + 2 < parts.length) {
+    return (project: parts[wt + 1], worktree: parts.sublist(wt + 2).join('/'));
+  }
+  return (project: parts.last, worktree: null);
+}
+
+/// A single terminal pane — **every** pane in the multiplexer, not just the
+/// ones running a coding agent. Non-agent panes (shells, dev servers, logs)
+/// have `agent_status` too (often idle/unknown).
+@freezed
+sealed class Pane with _$Pane {
+  const Pane._();
+
+  const factory Pane({
+    @JsonKey(name: 'pane_id') @Default('') String paneId,
+    @JsonKey(name: 'tab_id') @Default('') String tabId,
+    @JsonKey(name: 'workspace_id') @Default('') String workspaceId,
+    @JsonKey(name: 'terminal_title_stripped') @Default('') String title,
+    @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)
+    @Default(AgentStatus.unknown)
+    AgentStatus agentStatus,
+    @Default(false) bool focused,
+    @Default('') String cwd,
+    @JsonKey(name: 'foreground_cwd') @Default('') String foregroundCwd,
+  }) = _Pane;
+
+  factory Pane.fromJson(Map<String, dynamic> json) => _$PaneFromJson(json);
+
+  /// The pane's most telling location (current foreground dir, else cwd).
+  String get where => foregroundCwd.isNotEmpty ? foregroundCwd : cwd;
+
+  /// The last one or two path segments of [where] — enough to tell shells in a
+  /// `backend`/`frontend`/root apart at a glance.
+  String get locationLabel {
+    final parts = where.split('/').where((s) => s.isNotEmpty).toList();
+    if (parts.isEmpty) return '';
+    if (parts.length == 1) return parts.last;
+    return '${parts[parts.length - 2]}/${parts.last}';
+  }
+
+  /// True when [title] is just a shell's *prompt* (`user@host:path`) rather than
+  /// the name of a running program. Idle shells set their terminal title to the
+  /// prompt; a foreground process replaces it with its command line — so this is
+  /// how we tell "sitting at a shell" from "running `./gothalo serve`".
+  bool get _looksLikeShellPrompt {
+    final t = title.trim();
+    if (t.isEmpty) return true;
+    // e.g. `alex@my-mac:~/projects/acme/backend`
+    return RegExp(r'^[^\s@]+@[^\s:]+:').hasMatch(t);
+  }
+
+  /// The foreground command running in this pane, or null if it's an idle shell
+  /// sitting at its prompt. Meaningful for non-agent panes; for agent panes the
+  /// title is the task, so callers should prefer the agent's own fields.
+  String? get command {
+    if (_looksLikeShellPrompt) return null;
+    final t = title.trim();
+    return t.isEmpty ? null : t;
+  }
+}
+
+/// A tab within a workspace (holds one or more panes).
+@freezed
+sealed class TabInfo with _$TabInfo {
+  const factory TabInfo({
+    @JsonKey(name: 'tab_id') @Default('') String tabId,
+    @JsonKey(name: 'workspace_id') @Default('') String workspaceId,
+    @Default('') String label,
+    @Default(0) int number,
+    @JsonKey(name: 'pane_count') @Default(0) int paneCount,
+    @Default(false) bool focused,
+  }) = _TabInfo;
+
+  factory TabInfo.fromJson(Map<String, dynamic> json) =>
+      _$TabInfoFromJson(json);
+}
+
+/// A workspace ("space") — the top of the Herdr hierarchy, holding tabs.
+@freezed
+sealed class WorkspaceInfo with _$WorkspaceInfo {
+  const factory WorkspaceInfo({
+    @JsonKey(name: 'workspace_id') @Default('') String workspaceId,
+    @Default('') String label,
+    @Default(0) int number,
+    @JsonKey(name: 'tab_count') @Default(0) int tabCount,
+    @JsonKey(name: 'pane_count') @Default(0) int paneCount,
+    @JsonKey(name: 'active_tab_id') @Default('') String activeTabId,
+    @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)
+    @Default(AgentStatus.unknown)
+    AgentStatus agentStatus,
+    @Default(false) bool focused,
+  }) = _WorkspaceInfo;
+
+  factory WorkspaceInfo.fromJson(Map<String, dynamic> json) =>
+      _$WorkspaceInfoFromJson(json);
+}
+
 /// The `snapshot` object inside the bridge response envelope
 /// (`{ result: { snapshot: { agents: [...] } } }`). The client unwraps the
 /// envelope and hands us just this node.
@@ -101,10 +199,20 @@ sealed class AgentSession with _$AgentSession {
 sealed class Snapshot with _$Snapshot {
   const Snapshot._();
 
-  const factory Snapshot({@Default(<Agent>[]) List<Agent> agents}) = _Snapshot;
+  const factory Snapshot({
+    @Default(<Agent>[]) List<Agent> agents,
+    @Default(<Pane>[]) List<Pane> panes,
+    @Default(<TabInfo>[]) List<TabInfo> tabs,
+    @Default(<WorkspaceInfo>[]) List<WorkspaceInfo> workspaces,
+    @JsonKey(name: 'focused_pane_id') @Default('') String focusedPaneId,
+  }) = _Snapshot;
 
   factory Snapshot.fromJson(Map<String, dynamic> json) =>
       _$SnapshotFromJson(json);
+
+  /// Pane ids that have a detected coding agent — used to show the agent's
+  /// avatar on a pane in the full-multiplexer overview.
+  Set<String> get agentPaneIds => {for (final a in agents) a.paneId};
 
   /// All agents as one flat list for the "Agents" tab, ordered attention-first
   /// (blocked → done → working → idle → unknown), then by title.

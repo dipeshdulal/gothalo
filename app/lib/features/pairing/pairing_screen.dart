@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/connection/connection_providers.dart';
+import '../push/push_service.dart';
 import 'pairing_service.dart';
 
 /// Scan a pairing QR (`{"url":…,"code":…}`), redeem it for a per-device bearer,
@@ -78,9 +79,12 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
       final deviceName = _deviceName.text.trim().isEmpty
           ? 'My phone'
           : _deviceName.text.trim();
-      // 1) Redeem the code for a bearer (network).
-      final connection =
-          await ref.read(pairingServiceProvider).pair(payload, deviceName: deviceName);
+      // 1) Redeem the code for a bearer (network), sending this device's FCM
+      // token so the bridge can push to it (empty if push isn't configured).
+      final fcmToken = await ref.read(pushControllerProvider.future) ?? '';
+      final connection = await ref
+          .read(pairingServiceProvider)
+          .pair(payload, deviceName: deviceName, fcmToken: fcmToken);
       // 2) Save it (deduped by URL) and make it active, using the live ref.
       final result = await ref.read(serversRepositoryProvider).save(connection);
       await ref.read(activeServerIdProvider.notifier).set(result.saved.id);
