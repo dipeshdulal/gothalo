@@ -39,7 +39,8 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Future<void> _openAgent(ServerSummary server, Agent agent) async {
     await ref.read(activeServerIdProvider.notifier).set(server.id);
     if (mounted) {
-      context.push('/terminal/${Uri.encodeComponent(agent.paneId)}');
+      // Agents open the chat/transcript view by default (with a terminal toggle).
+      context.push('/transcript/${Uri.encodeComponent(agent.paneId)}');
     }
   }
 

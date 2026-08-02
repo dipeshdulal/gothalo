@@ -24,7 +24,7 @@ class PriorityScreen extends ConsumerWidget {
     // Point the app at that agent's server, then open its terminal.
     await ref.read(activeServerIdProvider.notifier).set(server.id);
     if (context.mounted) {
-      context.push('/terminal/${Uri.encodeComponent(agent.paneId)}');
+      context.push('/transcript/${Uri.encodeComponent(agent.paneId)}');
     }
   }
 

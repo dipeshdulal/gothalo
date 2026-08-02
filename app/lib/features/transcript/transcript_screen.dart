@@ -40,6 +40,7 @@ class TranscriptScreen extends ConsumerStatefulWidget {
 
 class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   final ScrollController _scroll = ScrollController();
+  final TextEditingController _composer = TextEditingController();
 
   BridgeClient? _client;
   WebSocketChannel? _channel;
@@ -78,7 +79,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _sub?.cancel();
     _channel?.sink.close(ws_status.normalClosure);
     _scroll.dispose();
+    _composer.dispose();
     super.dispose();
+  }
+
+  /// Send the composer's text to the pane as input; a trailing newline submits
+  /// it. An empty send is just Enter — which accepts a blocked agent's default
+  /// prompt (one-tap "yes"). What you send reappears in the transcript via the
+  /// live tail, since the agent records it.
+  Future<void> _sendComposer() async {
+    final client = _client;
+    if (client == null) return;
+    final text = _composer.text;
+    _composer.clear();
+    try {
+      await client.sendText(widget.pane, '$text\n');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
+      );
+    }
   }
 
   /// The `wss?://…/agent-transcript?pane=&token=` URL, derived from the
@@ -347,18 +368,33 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: Stack(
+        child: Column(
           children: [
-            Positioned.fill(child: _buildBody(scheme)),
-            if (!_pinnedToBottom && _ordered.isNotEmpty)
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: FloatingActionButton.small(
-                  onPressed: _jumpToBottom,
-                  child: const Icon(Icons.arrow_downward),
-                ),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _buildBody(scheme)),
+                  if (!_pinnedToBottom && _ordered.isNotEmpty)
+                    Positioned(
+                      right: 16,
+                      bottom: 16,
+                      child: FloatingActionButton.small(
+                        onPressed: _jumpToBottom,
+                        child: const Icon(Icons.arrow_downward),
+                      ),
+                    ),
+                ],
               ),
+            ),
+            // Talk to the agent right from the chat — no need to drop to the raw
+            // terminal. Disabled once the pane is gone/unavailable.
+            _ComposerBar(
+              controller: _composer,
+              onSend: _sendComposer,
+              enabled: _conn != _Conn.closed &&
+                  _conn != _Conn.failed &&
+                  _failure == null,
+            ),
           ],
         ),
       ),
@@ -420,6 +456,62 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 }
 
 /// Dispatches one entry to the right bubble/card by kind.
+/// The bottom input bar — type a prompt (or an option number for a blocked
+/// prompt) and send it to the agent. The send button submits with a trailing
+/// newline; an empty send is a bare Enter (accepts a default prompt).
+class _ComposerBar extends StatelessWidget {
+  const _ComposerBar({
+    required this.controller,
+    required this.onSend,
+    required this.enabled,
+  });
+
+  final TextEditingController controller;
+  final Future<void> Function() onSend;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      color: scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: enabled,
+              minLines: 1,
+              maxLines: 5,
+              keyboardType: TextInputType.multiline,
+              decoration: InputDecoration(
+                hintText: enabled ? 'Message the agent…' : 'Unavailable',
+                filled: true,
+                fillColor: scheme.surface,
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(22),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          IconButton.filled(
+            tooltip: 'Send',
+            onPressed: enabled ? onSend : null,
+            icon: const Icon(Icons.send, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EntryTile extends StatelessWidget {
   const _EntryTile({required this.entry, this.result});
 

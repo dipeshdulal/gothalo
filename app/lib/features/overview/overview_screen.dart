@@ -455,8 +455,11 @@ class _PaneCard extends ConsumerWidget {
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: () =>
-              context.push('/terminal/${Uri.encodeComponent(pane.paneId)}'),
+          // Agents open the chat/transcript view (with a terminal toggle);
+          // shells and other panes open the raw terminal directly.
+          onTap: () => context.push(
+            '${isAgent ? '/transcript' : '/terminal'}/${Uri.encodeComponent(pane.paneId)}',
+          ),
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
