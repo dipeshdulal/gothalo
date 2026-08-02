@@ -64,6 +64,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _sawBacklogComplete = false; // latched: don't re-spin on reconnect
   bool _pinnedToBottom = true;
 
+  /// Pagination cursor (protocol 2): [_oldestSeq] is the oldest seq we hold —
+  /// pass it as `load_older.before_seq` to page up; [_hasOlder] gates it.
+  int _oldestSeq = 0;
+  bool _hasOlder = false;
+  bool _loadingOlder = false;
+
+  /// Scroll extent/offset captured before an older page is prepended, so the
+  /// viewport can be held steady once it lands (the list grows at the top).
+  double? _preMax;
+  double _preOffset = 0;
+
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
 
@@ -251,7 +262,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _ingest(TranscriptFrame frame) {
     switch (frame.type) {
       case TranscriptFrameType.hello:
+        final h = frame.hello;
+        if (h != null) {
+          _oldestSeq = h.oldestLoadedSeq;
+          _hasOlder = h.hasOlder;
+        }
         return false;
+      case TranscriptFrameType.pageComplete:
+        if (frame.oldestLoadedSeq > 0) _oldestSeq = frame.oldestLoadedSeq;
+        _hasOlder = frame.hasOlder;
+        _loadingOlder = false;
+        // Keep the same content under the user's finger after prepending.
+        WidgetsBinding.instance.addPostFrameCallback((_) => _restoreScroll());
+        return true;
       case TranscriptFrameType.backlogComplete:
         if (_sawBacklogComplete) return false;
         _backlogComplete = true;
@@ -343,6 +366,36 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (pinned != _pinnedToBottom) {
       setState(() => _pinnedToBottom = pinned);
     }
+    // Near the top → page up (older history).
+    if (pos.pixels <= 300) _loadOlder();
+  }
+
+  /// Request the next older page over the transcript socket (the one inbound
+  /// frame `/agent-transcript` accepts), holding the scroll position steady.
+  void _loadOlder() {
+    final channel = _channel;
+    if (_loadingOlder || !_hasOlder || _oldestSeq <= 1 || channel == null) {
+      return;
+    }
+    _loadingOlder = true;
+    _preMax = _scroll.hasClients ? _scroll.position.maxScrollExtent : null;
+    _preOffset = _scroll.hasClients ? _scroll.offset : 0;
+    channel.sink.add(jsonEncode({
+      'type': 'load_older',
+      'before_seq': _oldestSeq,
+      'limit': 150,
+    }));
+    if (mounted) setState(() {}); // show the top loader
+  }
+
+  /// After an older page is prepended, jump by the amount the list grew at the
+  /// top so the visible content doesn't leap.
+  void _restoreScroll() {
+    if (!_scroll.hasClients || _preMax == null) return;
+    final newMax = _scroll.position.maxScrollExtent;
+    final delta = newMax - _preMax!;
+    _preMax = null;
+    if (delta > 0) _scroll.jumpTo((_preOffset + delta).clamp(0.0, newMax));
   }
 
   /// Keep the view pinned to the newest entry unless the user scrolled up.
@@ -509,17 +562,31 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         .where((e) => e.kind != EntryKind.toolResult)
         .toList(growable: false);
 
+    // A spinner at the very top while an older page loads (paging up).
+    final header = _loadingOlder ? 1 : 0;
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      // Optimistic pending messages render after the real entries until the
-      // agent records them (or, for a busy agent, until it processes the queue).
-      itemCount: visible.length + _pending.length,
+      // header (top loader) + entries + optimistic pending messages.
+      itemCount: header + visible.length + _pending.length,
       itemBuilder: (context, i) {
-        if (i >= visible.length) {
-          return _PendingBubble(text: _pending[i - visible.length]);
+        if (header == 1 && i == 0) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
         }
-        final entry = visible[i];
+        final idx = i - header;
+        if (idx >= visible.length) {
+          return _PendingBubble(text: _pending[idx - visible.length]);
+        }
+        final entry = visible[idx];
         return _EntryTile(
           entry: entry,
           result: entry.tool != null
