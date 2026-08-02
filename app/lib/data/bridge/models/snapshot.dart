@@ -120,6 +120,39 @@ sealed class Snapshot with _$Snapshot {
     return list;
   }
 
+  /// Agents grouped by **project** (the repo folder from `cwd`), which merges a
+  /// project's main checkout with its worktrees under one heading — far more
+  /// meaningful than Herdr's internal `w5`/`w8` workspace ids. Groups with an
+  /// attention-needing agent float up; within a group, attention first, then
+  /// the main checkout before worktrees, then by title.
+  List<MapEntry<String, List<Agent>>> get byProject {
+    final groups = <String, List<Agent>>{};
+    for (final a in agents) {
+      groups.putIfAbsent(a.gitContext.project, () => <Agent>[]).add(a);
+    }
+    for (final list in groups.values) {
+      list.sort((x, y) {
+        final ax = x.agentStatus.needsAttention ? 0 : 1;
+        final ay = y.agentStatus.needsAttention ? 0 : 1;
+        if (ax != ay) return ax - ay;
+        final wx = x.isWorktree ? 1 : 0;
+        final wy = y.isWorktree ? 1 : 0;
+        if (wx != wy) return wx - wy;
+        return x.displayTitle.toLowerCase().compareTo(
+          y.displayTitle.toLowerCase(),
+        );
+      });
+    }
+    final entries = groups.entries.toList();
+    entries.sort((x, y) {
+      final ax = x.value.any((a) => a.agentStatus.needsAttention) ? 0 : 1;
+      final ay = y.value.any((a) => a.agentStatus.needsAttention) ? 0 : 1;
+      if (ax != ay) return ax - ay;
+      return x.key.toLowerCase().compareTo(y.key.toLowerCase());
+    });
+    return entries;
+  }
+
   /// Agents grouped by `workspace_id`, ordered so workspaces with an agent that
   /// [AgentStatus.needsAttention] float to the top, then alphabetically. Within
   /// a group, attention-needing agents come first.

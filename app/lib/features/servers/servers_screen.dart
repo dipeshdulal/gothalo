@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/connection/connection_providers.dart';
+import '../../core/theme.dart';
 
 /// The home screen: the list of saved bridges ("servers"). Add one, pick one to
 /// open its inbox, edit or remove. New servers are added manually today and via
@@ -128,10 +129,14 @@ class _ServerTile extends StatelessWidget {
         ],
       ),
       subtitle: Text(
-        Uri.tryParse(server.baseUrl)?.host ?? server.baseUrl,
+        _hostLabel(server.baseUrl),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: scheme.onSurfaceVariant),
+        style: TextStyle(
+          color: scheme.onSurfaceVariant,
+          fontFamily: AppTheme.monoFamily,
+          fontSize: 12.5,
+        ),
       ),
       trailing: PopupMenuButton<String>(
         onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
@@ -142,6 +147,13 @@ class _ServerTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// host[:port] for the tile subtitle — keeps the port (e.g. :5338) visible.
+String _hostLabel(String baseUrl) {
+  final uri = Uri.tryParse(baseUrl);
+  if (uri == null || uri.host.isEmpty) return baseUrl;
+  return uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
 }
 
 class _ActivePill extends StatelessWidget {

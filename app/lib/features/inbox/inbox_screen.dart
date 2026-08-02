@@ -34,7 +34,7 @@ class InboxScreen extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Inbox'),
+              const Text('Flock'),
               if (connection != null)
                 Text(
                   connection.name,
@@ -119,12 +119,14 @@ class _AgentsTab extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: agents.length,
       separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-      itemBuilder: (context, i) => _AgentTile(agent: agents[i], showWorkspace: true),
+      itemBuilder: (context, i) => _AgentTile(agent: agents[i]),
     );
   }
 }
 
-/// Agents grouped by workspace (space).
+/// Agents grouped by project (repo folder), merging a project's main checkout
+/// with its worktrees. Herdr's raw `w5`/`w8` workspace ids are demoted to a
+/// subtle per-row detail.
 class _SpacesTab extends StatelessWidget {
   const _SpacesTab({required this.snap});
   final Snapshot snap;
@@ -132,21 +134,21 @@ class _SpacesTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (snap.agents.isEmpty) return const _EmptyState();
-    final groups = snap.byWorkspace;
+    final groups = snap.byProject;
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 24),
       itemCount: groups.length,
       itemBuilder: (context, i) =>
-          _WorkspaceSection(workspaceId: groups[i].key, agents: groups[i].value),
+          _ProjectSection(project: groups[i].key, agents: groups[i].value),
     );
   }
 }
 
-class _WorkspaceSection extends StatelessWidget {
-  const _WorkspaceSection({required this.workspaceId, required this.agents});
+class _ProjectSection extends StatelessWidget {
+  const _ProjectSection({required this.project, required this.agents});
 
-  final String workspaceId;
+  final String project;
   final List<Agent> agents;
 
   @override
@@ -160,13 +162,17 @@ class _WorkspaceSection extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
           child: Row(
             children: [
-              Icon(Icons.workspaces_outline, size: 16, color: scheme.primary),
+              Icon(Icons.folder_outlined, size: 16, color: scheme.primary),
               const SizedBox(width: 8),
-              Text(
-                workspaceId.isEmpty ? 'Ungrouped' : workspaceId,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: scheme.onSurface,
-                  fontWeight: FontWeight.w700,
+              Flexible(
+                child: Text(
+                  project.isEmpty ? 'Ungrouped' : project,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -197,7 +203,9 @@ class _WorkspaceSection extends StatelessWidget {
               children: [
                 for (var i = 0; i < agents.length; i++) ...[
                   if (i > 0) const Divider(height: 1, indent: 72),
-                  _AgentTile(agent: agents[i]),
+                  // Project is the header here; the row shows just the branch
+                  // for worktrees (nothing extra for the main checkout).
+                  _AgentTile(agent: agents[i], showProject: false),
                 ],
               ],
             ),
@@ -209,17 +217,20 @@ class _WorkspaceSection extends StatelessWidget {
 }
 
 class _AgentTile extends StatelessWidget {
-  const _AgentTile({required this.agent, this.showWorkspace = false});
+  const _AgentTile({required this.agent, this.showProject = true});
 
   final Agent agent;
-  final bool showWorkspace;
+
+  /// Show the project folder segment. Off inside a project group (the section
+  /// header already names it), on in the flat Agents tab.
+  final bool showProject;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isWt = agent.isWorktree;
-    final gitAccent = isWt ? scheme.primary : scheme.onSurfaceVariant;
     final dim = scheme.onSurfaceVariant;
+    final showFolder = showProject && agent.gitContext.project.isNotEmpty;
 
     return InkWell(
       onTap: () =>
@@ -257,48 +268,27 @@ class _AgentTile extends StatelessWidget {
                       height: 1.25,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  // One compact secondary line: git ref + pane id (+ space on
-                  // the flat Agents tab).
-                  Row(
-                    children: [
-                      Icon(
-                        isWt ? Icons.call_split : Icons.folder_outlined,
-                        size: 13,
-                        color: gitAccent,
-                      ),
-                      const SizedBox(width: 5),
-                      Flexible(
-                        child: Text(
-                          agent.gitLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: gitAccent,
-                            fontFamily: AppTheme.monoFamily,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                      Text('  ·  ', style: TextStyle(color: dim, fontSize: 11)),
-                      Text(
-                        agent.paneId,
-                        style: TextStyle(
-                          color: dim,
-                          fontFamily: AppTheme.monoFamily,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                      if (showWorkspace) ...[
-                        Text('  ·  ', style: TextStyle(color: dim, fontSize: 11)),
-                        Text(
-                          agent.workspaceId,
-                          style: TextStyle(color: dim, fontSize: 11.5),
-                        ),
-                      ],
-                    ],
-                  ),
+                  // Project folder + branch/worktree (teal) each on their own
+                  // full-width line so long names ellipsize instead of
+                  // overflowing. Internal ids (pane, workspace) are not shown —
+                  // the pane id is still used under the hood for navigation.
+                  if (showFolder) ...[
+                    const SizedBox(height: 6),
+                    _GitLine(
+                      icon: Icons.folder_outlined,
+                      text: agent.gitContext.project,
+                      color: dim,
+                    ),
+                  ],
+                  if (isWt) ...[
+                    SizedBox(height: showFolder ? 3 : 6),
+                    _GitLine(
+                      icon: Icons.call_split,
+                      text: agent.gitContext.worktree ?? '',
+                      color: scheme.primary,
+                      bold: true,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -310,6 +300,46 @@ class _AgentTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// A full-width monospace metadata line (leading icon + text), used for the
+/// project folder and branch on an agent row. The text takes the remaining
+/// width and ellipsizes, so a long branch name never overflows the row.
+class _GitLine extends StatelessWidget {
+  const _GitLine({
+    required this.icon,
+    required this.text,
+    required this.color,
+    this.bold = false,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color color;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontFamily: AppTheme.monoFamily,
+              fontSize: 12,
+              fontWeight: bold ? FontWeight.w500 : FontWeight.w400,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -373,7 +403,7 @@ class _ErrorState extends ConsumerWidget {
                 ? 'Bridge unreachable'
                 : isAuth
                     ? 'Not authorized'
-                    : 'Couldn\'t load the inbox',
+                    : 'Couldn\'t load the flock',
             style: Theme.of(context).textTheme.titleMedium,
             textAlign: TextAlign.center,
           ),
