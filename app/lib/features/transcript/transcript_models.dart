@@ -7,12 +7,13 @@
 library;
 
 /// The kinds of frame the server sends, one JSON object per line.
-enum TranscriptFrameType { hello, entry, backlogComplete, unknown }
+enum TranscriptFrameType { hello, entry, backlogComplete, pageComplete, unknown }
 
 TranscriptFrameType _frameType(String? raw) => switch (raw) {
   'hello' => TranscriptFrameType.hello,
   'entry' => TranscriptFrameType.entry,
   'backlog_complete' => TranscriptFrameType.backlogComplete,
+  'page_complete' => TranscriptFrameType.pageComplete,
   _ => TranscriptFrameType.unknown,
 };
 
@@ -26,13 +27,15 @@ class TranscriptFrame {
     this.live = false,
     this.count = 0,
     this.hasMore = false,
+    this.oldestLoadedSeq = 0,
+    this.hasOlder = false,
   });
 
   final TranscriptFrameType type;
   final HelloFrame? hello;
   final TranscriptEntry? entry;
 
-  /// `entry.live` — false for backlog, true for the live tail.
+  /// `entry.live` — false for backlog/older pages, true for the live tail.
   final bool live;
 
   /// `backlog_complete.count`.
@@ -40,6 +43,12 @@ class TranscriptFrame {
 
   /// `hello.has_more` / `backlog_complete.has_more`.
   final bool hasMore;
+
+  /// `page_complete.oldest_loaded_seq` — the cursor for the next `load_older`.
+  final int oldestLoadedSeq;
+
+  /// `page_complete.has_older` — whether there's still more history to page up.
+  final bool hasOlder;
 
   factory TranscriptFrame.fromJson(Map<String, dynamic> json) {
     final type = _frameType(json['type'] as String?);
@@ -63,6 +72,11 @@ class TranscriptFrame {
         count: _asInt(json['count']),
         hasMore: json['has_more'] == true,
       ),
+      TranscriptFrameType.pageComplete => TranscriptFrame(
+        type: type,
+        oldestLoadedSeq: _asInt(json['oldest_loaded_seq']),
+        hasOlder: json['has_older'] == true,
+      ),
       TranscriptFrameType.unknown => TranscriptFrame(type: type),
     };
   }
@@ -78,6 +92,8 @@ class HelloFrame {
     required this.backlogCount,
     required this.total,
     required this.hasMore,
+    this.oldestLoadedSeq = 0,
+    this.hasOlder = false,
   });
 
   final int protocol;
@@ -88,6 +104,13 @@ class HelloFrame {
   final int total;
   final bool hasMore;
 
+  /// Absolute `seq` of the oldest entry in the newest page — the first
+  /// `load_older.before_seq` cursor (protocol 2).
+  final int oldestLoadedSeq;
+
+  /// Whether entries older than [oldestLoadedSeq] exist (more to page up).
+  final bool hasOlder;
+
   factory HelloFrame.fromJson(Map<String, dynamic> json) => HelloFrame(
     protocol: _asInt(json['protocol']),
     pane: json['pane'] as String? ?? '',
@@ -96,6 +119,8 @@ class HelloFrame {
     backlogCount: _asInt(json['backlog_count']),
     total: _asInt(json['total']),
     hasMore: json['has_more'] == true,
+    oldestLoadedSeq: _asInt(json['oldest_loaded_seq']),
+    hasOlder: json['has_older'] == true,
   );
 }
 

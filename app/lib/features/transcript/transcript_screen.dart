@@ -64,6 +64,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _sawBacklogComplete = false; // latched: don't re-spin on reconnect
   bool _pinnedToBottom = true;
 
+  /// Pagination cursor (protocol 2): [_oldestSeq] is the oldest seq we hold —
+  /// pass it as `load_older.before_seq` to page up; [_hasOlder] gates it.
+  int _oldestSeq = 0;
+  bool _hasOlder = false;
+  bool _loadingOlder = false;
+
+  /// The oldest `seq` of the *first* page — the fixed anchor between "initial +
+  /// live" (below the [_centerKey]) and older pages loaded on scroll-up (above
+  /// it). Prepending above the center never moves the viewport, so the scroll
+  /// holds steady natively.
+  int _anchorSeq = 0;
+  final _centerKey = GlobalKey();
+
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
 
@@ -251,7 +264,18 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _ingest(TranscriptFrame frame) {
     switch (frame.type) {
       case TranscriptFrameType.hello:
+        final h = frame.hello;
+        if (h != null) {
+          _oldestSeq = h.oldestLoadedSeq;
+          _hasOlder = h.hasOlder;
+          _anchorSeq = h.oldestLoadedSeq; // fix the center at the first page
+        }
         return false;
+      case TranscriptFrameType.pageComplete:
+        if (frame.oldestLoadedSeq > 0) _oldestSeq = frame.oldestLoadedSeq;
+        _hasOlder = frame.hasOlder;
+        _loadingOlder = false;
+        return true;
       case TranscriptFrameType.backlogComplete:
         if (_sawBacklogComplete) return false;
         _backlogComplete = true;
@@ -343,6 +367,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (pinned != _pinnedToBottom) {
       setState(() => _pinnedToBottom = pinned);
     }
+    // Near the real top (min extent goes negative once older pages exist) →
+    // page up. Relative to minScrollExtent so it fires only at the actual top,
+    // not every time the viewport sits near the center anchor.
+    if (pos.pixels <= pos.minScrollExtent + 400) _loadOlder();
+  }
+
+  /// Request the next older page over the transcript socket (the one inbound
+  /// frame `/agent-transcript` accepts). Older entries land *above* the center
+  /// anchor, so the viewport holds steady with no scroll math.
+  void _loadOlder() {
+    final channel = _channel;
+    if (_loadingOlder || !_hasOlder || _oldestSeq <= 1 || channel == null) {
+      return;
+    }
+    _loadingOlder = true;
+    channel.sink.add(jsonEncode({
+      'type': 'load_older',
+      'before_seq': _oldestSeq,
+      'limit': 150,
+    }));
+    if (mounted) setState(() {}); // show the top loader
   }
 
   /// Keep the view pinned to the newest entry unless the user scrolled up.
@@ -509,26 +554,65 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         .where((e) => e.kind != EntryKind.toolResult)
         .toList(growable: false);
 
-    return ListView.builder(
+    // Split at the fixed anchor: the first page onward (+ live tail + pending)
+    // renders BELOW the center; older pages loaded on scroll-up render ABOVE it.
+    // Prepending above the center never shifts the viewport — no scroll math.
+    final below = <TranscriptEntry>[];
+    final above = <TranscriptEntry>[];
+    for (final e in visible) {
+      (e.seq < _anchorSeq ? above : below).add(e);
+    }
+
+    return CustomScrollView(
       controller: _scroll,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      // Optimistic pending messages render after the real entries until the
-      // agent records them (or, for a busy agent, until it processes the queue).
-      itemCount: visible.length + _pending.length,
-      itemBuilder: (context, i) {
-        if (i >= visible.length) {
-          return _PendingBubble(text: _pending[i - visible.length]);
-        }
-        final entry = visible[i];
-        return _EntryTile(
-          entry: entry,
-          result: entry.tool != null
-              ? _resultsByForId[entry.tool!.id]
-              : null,
-        );
-      },
+      center: _centerKey,
+      slivers: [
+        // Top spinner while paging up (furthest-up sliver).
+        if (_loadingOlder)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          ),
+        // Older pages — a before-center sliver lays out upward, so index 0 sits
+        // just above the center; feed it newest-first to keep chronological
+        // order reading top→bottom.
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => _entryTile(above[above.length - 1 - i]),
+              childCount: above.length,
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(key: _centerKey, child: const SizedBox.shrink()),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => i < below.length
+                  ? _entryTile(below[i])
+                  : _PendingBubble(text: _pending[i - below.length]),
+              childCount: below.length + _pending.length,
+            ),
+          ),
+        ),
+      ],
     );
   }
+
+  Widget _entryTile(TranscriptEntry entry) => _EntryTile(
+        entry: entry,
+        result: entry.tool != null ? _resultsByForId[entry.tool!.id] : null,
+      );
 }
 
 /// Dispatches one entry to the right bubble/card by kind.
