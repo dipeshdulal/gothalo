@@ -93,6 +93,22 @@ Render a local notification from `title`/`body`; tapping it should deep-link to
 the agent identified by `agent` (== `pane_id`). Carry `state_change_seq` into any
 lock-screen/banner **Approve** action so `/approve` can no-op a stale tap (D8).
 
+### `dismiss` — auto-clear a stale "blocked" notification
+A **second, data-only** message shape the bridge sends when a `blocked` agent is
+**resolved from anywhere** (this phone, another device, the desktop Herdr app, or
+the agent just moving on). It tells every device to cancel the tray notification
+it raised for that pane, so a handled block doesn't linger on other phones.
+```
+type    "dismiss"           <- the discriminator; normal pushes have NO type key
+agent   the pane_id (e.g. "wN:p2")  <- cancel the notification keyed to this pane
+```
+There is **no** `title`/`body`/`status` (data-only, so your background handler
+runs and cancels silently). Match on `data["type"] == "dismiss"`; if absent, treat
+it as a normal push (above). It targets the **same** device set as the blocked
+push (all registered devices). Triggered when the bus shows the pane leaving
+`blocked` (`pane_agent_status_changed` with `agent_status != "blocked"`) or the
+pane closing (`pane_closed` / `pane_exited`) — see [`CONTRACT.md`](../CONTRACT.md).
+
 ### Native FCM setup
 Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
 `google-services.json` into `android/app/`. Get the device token via
@@ -219,7 +235,13 @@ reconnect (which re-snapshots). The stream carries **both** Herdr's normalized
 events (`source:"herdr"` — `pane_agent_status_changed`, `pane_created`,
 `tab_*`, `workspace_*`, `layout_updated`, …) and gothalo's own system events
 (`source:"gothalo"` — `approve_applied`, `pane_created`/`pane_closed`,
-`device_paired`, `push_sent`, `herdr_connected`/`herdr_disconnected`/`herdr_resync`).
+`device_paired`, `push_sent`, `notification_cleared`,
+`herdr_connected`/`herdr_disconnected`/`herdr_resync`).
+
+`gothalo.notification_cleared` (payload `{pane}`) fires whenever the bridge
+dismisses a stale `blocked` push (see the `dismiss` push above). It's a
+consistency signal: a **foreground** app can clear its own UI from this event
+without waiting for the FCM `dismiss`.
 
 The bridge holds **one** Herdr socket subscription for the whole process and fans
 it out; every client is just another in-process subscriber (never one Herdr
