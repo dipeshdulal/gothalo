@@ -10,6 +10,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/config"
 	"github.com/dipeshdulal/gothalo/internal/events"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
+	"github.com/dipeshdulal/gothalo/internal/notify"
 	"github.com/dipeshdulal/gothalo/internal/pairing"
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/server"
@@ -78,6 +79,10 @@ func runServe(configPath string) error {
 
 	w := watcher.New(h, srv.Notify, os.Getenv("WATCHER") == "poll")
 	go w.Run()
+
+	// The notification-clearer is the process-wide bus consumer that dismisses a
+	// stale "blocked" push once the pane leaves blocked or closes (from anywhere).
+	go notify.NewClearer(bus, pc, st).Run(context.Background())
 
 	var tr transport.Transport
 	switch cfg.Transport.Mode {
