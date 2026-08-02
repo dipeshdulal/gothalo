@@ -1,16 +1,33 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:web_socket_channel/status.dart' as ws_status;
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 
+import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
+import '../../data/bridge/models/snapshot.dart';
+import '../../features/approvals/approve_action.dart';
+import '../inbox/inbox_providers.dart';
 
-/// The live terminal — stubbed for now.
+/// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
+enum _Conn { connecting, connected, disconnected }
+
+/// The live terminal — a real WebSocket to the bridge's `WS /attach`.
 ///
-/// The `xterm` widget is wired up and a placeholder banner is written into the
-/// buffer, but the backend `WS /attach` stream that would feed it isn't built
-/// yet (Phase 2). Once it lands, connect a socket to [terminal] here. The
-/// accessory key row (D6) is scaffolded below so the wiring is ready.
+/// Binary frames both ways (per `docs/API.md`): the bridge streams raw PTY
+/// bytes which are decoded and written into the [Terminal] buffer, and every
+/// keystroke — from the on-screen keyboard (`terminal.onOutput`) or the D6
+/// accessory key row — is sent back as a binary frame. On an unexpected drop we
+/// reconnect with backoff and re-fetch `/snapshot` (the resilience story is
+/// reconnect, not mosh-style state sync). The subprocess dies with the socket.
 class TerminalScreen extends ConsumerStatefulWidget {
   const TerminalScreen({super.key, required this.pane});
 
@@ -24,49 +41,193 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   final terminal = Terminal(maxLines: 10000);
   bool _stickyCtrl = false;
 
+  BridgeClient? _client;
+  WebSocketChannel? _channel;
+  StreamSubscription<dynamic>? _sub;
+  ByteConversionSink? _decoder;
+  Timer? _reconnectTimer;
+  int _attempts = 0;
+  bool _disposed = false;
+  _Conn _conn = _Conn.connecting;
+
   @override
   void initState() {
     super.initState();
-    terminal.write(
-      '\r\n  gothalo terminal — pane ${widget.pane}\r\n'
-      '  \x1b[2mWS /attach is not wired yet (backend Phase 2).\x1b[0m\r\n'
-      '  \x1b[2mThis buffer + key row are ready for the stream.\x1b[0m\r\n\r\n',
-    );
-
-    // When /attach exists, keystrokes route to the bridge instead of nowhere.
-    terminal.onOutput = (data) {
-      // TODO(phase2): forward to WS /attach for this pane.
-    };
+    // Keystrokes typed into the TerminalView flow here → out to the bridge as
+    // binary. No local echo: the PTY stream is the single source of truth.
+    terminal.onOutput = _send;
   }
 
-  /// Sends a raw control sequence into the terminal's input path. With the
-  /// socket wired, [terminal.textInput] flows to `onOutput` → the bridge.
-  void _sendBytes(String data) {
+  @override
+  void dispose() {
+    _disposed = true;
+    _reconnectTimer?.cancel();
+    _sub?.cancel();
+    _channel?.sink.close(ws_status.normalClosure);
+    super.dispose();
+  }
+
+  /// The `wss?://…/attach?pane=&token=` URL derived from the connection's base
+  /// URL (`https`→`wss`, `http`→`ws`). WS clients can't reliably set an
+  /// `Authorization` header, so the bearer rides in `?token=` per the contract.
+  Uri _attachUri(Connection c) {
+    final base = Uri.parse(c.baseUrl);
+    return Uri(
+      scheme: base.scheme == 'https' ? 'wss' : 'ws',
+      host: base.host,
+      port: base.hasPort ? base.port : null,
+      path: '/attach',
+      queryParameters: {'pane': widget.pane, 'token': c.bearer},
+    );
+  }
+
+  Future<void> _connect() async {
+    final client = _client;
+    if (client == null || _disposed) return;
+
+    if (mounted) setState(() => _conn = _Conn.connecting);
+
+    // Fresh UTF-8 decoder per connection — Herdr repaints the whole screen on
+    // attach, so nothing carries over from a prior socket.
+    _decoder = const Utf8Decoder(
+      allowMalformed: true,
+    ).startChunkedConversion(_TerminalSink(terminal));
+
+    try {
+      final channel = WebSocketChannel.connect(_attachUri(client.connection));
+      _channel = channel;
+      await channel.ready; // throws if the handshake fails (bad token, no host)
+      if (_disposed) {
+        channel.sink.close(ws_status.normalClosure);
+        return;
+      }
+      _attempts = 0;
+      if (mounted) setState(() => _conn = _Conn.connected);
+
+      _sub = channel.stream.listen(
+        (message) {
+          // The contract is binary-only. Text frames would have closed the
+          // socket server-side; guard anyway so a stray frame can't crash us.
+          if (message is List<int>) {
+            _decoder?.add(message);
+          } else if (message is String) {
+            terminal.write(message);
+          }
+        },
+        onDone: _handleDrop,
+        onError: (_) => _handleDrop(),
+        cancelOnError: true,
+      );
+    } catch (_) {
+      _handleDrop();
+    }
+  }
+
+  /// Socket closed or failed to open. Reconnect with capped backoff and pull a
+  /// fresh snapshot so the rest of the app reflects reality.
+  void _handleDrop() {
+    if (_disposed) return;
+    _sub?.cancel();
+    _sub = null;
+    _channel = null;
+    if (mounted) setState(() => _conn = _Conn.disconnected);
+
+    if (_attempts == 0) {
+      terminal.write(
+        '\r\n\x1b[2m— connection lost, reconnecting… —\x1b[0m\r\n',
+      );
+    }
+    // Re-fetch snapshot on the first drop (the pane may be gone/finished).
+    ref.read(snapshotControllerProvider.notifier).refresh();
+
+    _attempts++;
+    final delay = Duration(seconds: _attempts.clamp(1, 8));
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, _connect);
+  }
+
+  /// Sends [data] to the PTY stdin as a **binary** frame. Applies sticky-Ctrl
+  /// (D6) to a single character: letter & 0x1f collapses the whole Ctrl-combo
+  /// space into one toggle.
+  void _send(String data) {
+    final channel = _channel;
+    if (channel == null || _conn != _Conn.connected) return;
+
     var out = data;
     if (_stickyCtrl && data.length == 1) {
-      // Collapse the whole Ctrl-combo space into one toggle: letter & 0x1f (D6).
       out = String.fromCharCode(data.codeUnitAt(0) & 0x1f);
       setState(() => _stickyCtrl = false);
     }
-    terminal.textInput(out);
-    terminal.write(out); // local echo until the real stream feeds the buffer
+    channel.sink.add(Uint8List.fromList(utf8.encode(out)));
   }
 
   @override
   Widget build(BuildContext context) {
-    final connected = ref.watch(bridgeClientProvider) != null;
+    // Connect once a bridge client is available (activeConnection resolves
+    // async), and reconnect if it changes underneath us.
+    final client = ref.watch(bridgeClientProvider);
+    if (client != null && !identical(client, _client)) {
+      _client = client;
+      _reconnectTimer?.cancel();
+      _sub?.cancel();
+      _sub = null;
+      _channel?.sink.close(ws_status.normalClosure);
+      _attempts = 0;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+    }
+
+    // The agent behind this pane, for the app-bar approve affordance.
+    final agents =
+        ref.watch(snapshotControllerProvider).asData?.value.agents ??
+        const <Agent>[];
+    Agent? agent;
+    for (final a in agents) {
+      if (a.paneId == widget.pane) {
+        agent = a;
+        break;
+      }
+    }
+    // Non-null (and final) only when this pane's agent is blocked — safe to
+    // capture in the button's callback.
+    final approvable =
+        agent?.agentStatus == AgentStatus.blocked ? agent : null;
+
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.pane),
+        title: Text(agent?.displayTitle ?? widget.pane),
         actions: [
+          if (approvable != null)
+            IconButton(
+              tooltip: 'Approve',
+              onPressed: () => approveAgent(context, ref, approvable),
+              icon: const Icon(Icons.check_circle_outline),
+              color: scheme.primary,
+            ),
+          IconButton(
+            tooltip: 'Overview',
+            onPressed: () => context.push('/overview'),
+            icon: const Icon(Icons.grid_view_outlined),
+          ),
           Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Icon(
-              connected ? Icons.circle : Icons.circle_outlined,
-              size: 12,
-              color: connected
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
+            padding: const EdgeInsets.only(right: 12, left: 4),
+            child: Tooltip(
+              message: switch (_conn) {
+                _Conn.connected => 'Live',
+                _Conn.connecting => 'Connecting…',
+                _Conn.disconnected => 'Reconnecting…',
+              },
+              child: Icon(
+                _conn == _Conn.connected
+                    ? Icons.circle
+                    : Icons.circle_outlined,
+                size: 12,
+                color: switch (_conn) {
+                  _Conn.connected => scheme.primary,
+                  _Conn.connecting => scheme.onSurfaceVariant,
+                  _Conn.disconnected => scheme.error,
+                },
+              ),
             ),
           ),
         ],
@@ -84,12 +245,27 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           _AccessoryKeyRow(
             stickyCtrl: _stickyCtrl,
             onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
-            onKey: _sendBytes,
+            onKey: _send,
           ),
         ],
       ),
     );
   }
+}
+
+/// Bridges the chunked UTF-8 decoder's string output straight into the terminal
+/// buffer. Chunked (not per-frame) decoding so a multi-byte sequence split
+/// across two binary frames still renders correctly.
+class _TerminalSink implements Sink<String> {
+  _TerminalSink(this.terminal);
+
+  final Terminal terminal;
+
+  @override
+  void add(String data) => terminal.write(data);
+
+  @override
+  void close() {}
 }
 
 /// D6: a toolbar above the soft keyboard that writes control bytes the on-screen
