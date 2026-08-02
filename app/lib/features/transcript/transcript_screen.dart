@@ -586,14 +586,62 @@ class _MessageBubble extends StatelessWidget {
             bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
         ),
-        child: MarkdownBody(
-          data: text,
+        child: _ExpandableMarkdown(text: text, fg: fg, isUser: isUser),
+      ),
+    );
+  }
+}
+
+/// A markdown body that collapses a long message to a preview — only the
+/// preview is parsed and laid out until you expand it, so one huge reply can't
+/// stall the scroll. Short messages render in full with no toggle.
+class _ExpandableMarkdown extends StatefulWidget {
+  const _ExpandableMarkdown({
+    required this.text,
+    required this.fg,
+    required this.isUser,
+  });
+
+  final String text;
+  final Color fg;
+  final bool isUser;
+
+  @override
+  State<_ExpandableMarkdown> createState() => _ExpandableMarkdownState();
+}
+
+class _ExpandableMarkdownState extends State<_ExpandableMarkdown> {
+  bool _expanded = false;
+  static const _previewLines = 24;
+  static const _maxChars = 1800;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = widget.fg;
+    final text = widget.text;
+    final lineCount = '\n'.allMatches(text).length + 1;
+    final canCollapse = lineCount > _previewLines || text.length > _maxChars;
+
+    var shown = text;
+    if (canCollapse && !_expanded) {
+      shown = text.split('\n').take(_previewLines).join('\n');
+      if (shown.length > _maxChars) shown = shown.substring(0, _maxChars);
+      shown = '$shown\n…';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MarkdownBody(
+          data: shown,
           selectable: true,
           fitContent: true,
           styleSheet: MarkdownStyleSheet(
             p: TextStyle(color: fg, fontSize: 14, height: 1.35),
             a: TextStyle(
-              color: isUser ? fg : scheme.primary,
+              color: widget.isUser ? fg : scheme.primary,
               decoration: TextDecoration.underline,
             ),
             code: TextStyle(
@@ -617,7 +665,22 @@ class _MessageBubble extends StatelessWidget {
             h3: TextStyle(color: fg, fontSize: 15, fontWeight: FontWeight.w700),
           ),
         ),
-      ),
+        if (canCollapse)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Text(
+                _expanded ? 'Show less' : 'Show more',
+                style: TextStyle(
+                  color: widget.isUser ? fg : scheme.primary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
