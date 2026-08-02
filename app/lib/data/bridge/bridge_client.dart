@@ -61,6 +61,7 @@ class AgentState {
     required this.blockedQuestion,
     required this.options,
     required this.parsed,
+    this.permissionMode,
   });
 
   final String paneId;
@@ -75,6 +76,11 @@ class AgentState {
   /// Selectable choices in display order — empty for a free-form prompt.
   final List<BlockedOption> options;
   final bool parsed;
+
+  /// Claude's permission mode (`default`/`acceptEdits`/`plan`/`auto`/…). Present
+  /// only for Claude panes when readable; absent for other kinds — treat the
+  /// value as an opaque label and offer a single "cycle" action.
+  final String? permissionMode;
 
   bool get isBlocked => agentStatus == 'blocked';
 
@@ -95,6 +101,7 @@ class AgentState {
               .toList()
           : const [],
       parsed: j['parsed'] != false,
+      permissionMode: j['permission_mode'] as String?,
     );
   }
 }
@@ -269,6 +276,21 @@ class BridgeClient {
   Future<void> registerToken(String fcmToken) async {
     try {
       await _dio.post<dynamic>('/register-token', data: {'token': fcmToken});
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /agent-mode/cycle {pane}` → advance a Claude pane's permission mode
+  /// by one Shift+Tab. Returns the new mode (best-effort read-back; null if it
+  /// didn't settle in time). Throws `409` for a non-Claude pane.
+  Future<String?> cycleAgentMode(String pane) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/agent-mode/cycle',
+        data: {'pane': pane},
+      );
+      return (res.data ?? const {})['permission_mode'] as String?;
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
