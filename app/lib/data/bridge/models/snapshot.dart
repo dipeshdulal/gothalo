@@ -61,6 +61,28 @@ sealed class Agent with _$Agent {
 
   /// A human label for the row when the terminal title is empty.
   String get displayTitle => title.isNotEmpty ? title : agent;
+
+  /// Best-effort git context derived from [cwd]. Herdr worktrees live under
+  /// `…/.herdr/worktrees/<project>/<worktree>`, where `<worktree>` is
+  /// effectively the branch; plain checkouts are just their directory name.
+  ///
+  /// The bridge does not expose the real branch yet, so this is inferred from
+  /// the path. When the bridge adds a branch field, prefer it over this.
+  ({String project, String? worktree}) get gitContext {
+    final parts = cwd.split('/').where((s) => s.isNotEmpty).toList();
+    if (parts.isEmpty) return (project: '', worktree: null);
+    final wt = parts.indexOf('worktrees');
+    if (wt > 0 && parts[wt - 1] == '.herdr' && wt + 2 < parts.length) {
+      return (project: parts[wt + 1], worktree: parts.sublist(wt + 2).join('/'));
+    }
+    return (project: parts.last, worktree: null);
+  }
+
+  /// The most specific git name to show — the worktree (branch) if this is a
+  /// worktree, otherwise the project directory.
+  String get gitLabel => gitContext.worktree ?? gitContext.project;
+
+  bool get isWorktree => gitContext.worktree != null;
 }
 
 /// Herdr's session handle for an agent — `{ "value": "<uuid>" }`.

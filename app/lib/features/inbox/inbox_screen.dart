@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/connection/connection_providers.dart';
+import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import 'inbox_providers.dart';
@@ -216,35 +217,99 @@ class _AgentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final subtitle = showWorkspace
-        ? '${agent.agent}  ·  ${agent.paneId}  ·  ${agent.workspaceId}'
-        : '${agent.agent}  ·  ${agent.paneId}';
-    return ListTile(
+    final isWt = agent.isWorktree;
+    final gitAccent = isWt ? scheme.primary : scheme.onSurfaceVariant;
+    final dim = scheme.onSurfaceVariant;
+
+    return InkWell(
       onTap: () =>
           context.push('/terminal/${Uri.encodeComponent(agent.paneId)}'),
-      leading: CircleAvatar(
-        backgroundColor: scheme.surfaceContainerHighest,
-        child: Text(
-          agent.agent.isEmpty ? '?' : agent.agent[0].toUpperCase(),
-          style: TextStyle(
-            color: scheme.onSurfaceVariant,
-            fontWeight: FontWeight.w700,
-          ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 20,
+              backgroundColor: scheme.surfaceContainerHighest,
+              child: Text(
+                agent.agent.isEmpty ? '?' : agent.agent[0].toUpperCase(),
+                style: TextStyle(
+                  color: dim,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // The task itself — the star of the row. Up to two lines so
+                  // long Herdr titles stay readable instead of hard-truncating.
+                  Text(
+                    agent.displayTitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      height: 1.25,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  // One compact secondary line: git ref + pane id (+ space on
+                  // the flat Agents tab).
+                  Row(
+                    children: [
+                      Icon(
+                        isWt ? Icons.call_split : Icons.folder_outlined,
+                        size: 13,
+                        color: gitAccent,
+                      ),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          agent.gitLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: gitAccent,
+                            fontFamily: AppTheme.monoFamily,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      Text('  ·  ', style: TextStyle(color: dim, fontSize: 11)),
+                      Text(
+                        agent.paneId,
+                        style: TextStyle(
+                          color: dim,
+                          fontFamily: AppTheme.monoFamily,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                      if (showWorkspace) ...[
+                        Text('  ·  ', style: TextStyle(color: dim, fontSize: 11)),
+                        Text(
+                          agent.workspaceId,
+                          style: TextStyle(color: dim, fontSize: 11.5),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: StatusBadge(agent.agentStatus),
+            ),
+          ],
         ),
       ),
-      title: Text(
-        agent.displayTitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        subtitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: scheme.onSurfaceVariant),
-      ),
-      trailing: StatusBadge(agent.agentStatus),
     );
   }
 }

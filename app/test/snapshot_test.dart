@@ -37,6 +37,41 @@ void main() {
     });
   });
 
+  group('Git context (derived from cwd)', () {
+    test('herdr worktree path -> project + worktree (branch-like) name', () {
+      const a = Agent(
+        cwd: '/Users/alex/.herdr/worktrees/acme-app/validation-reset',
+      );
+      expect(a.gitContext.project, 'acme-app');
+      expect(a.gitContext.worktree, 'validation-reset');
+      expect(a.gitLabel, 'validation-reset');
+      expect(a.isWorktree, isTrue);
+    });
+
+    test('worktree name with slashes is preserved', () {
+      const a = Agent(
+        cwd: '/Users/alex/.herdr/worktrees/proj/feat/vendor-sync',
+      );
+      expect(a.gitContext.project, 'proj');
+      expect(a.gitContext.worktree, 'feat/vendor-sync');
+    });
+
+    test('plain checkout -> project dir, no worktree', () {
+      const a = Agent(cwd: '/Users/alex/projects/acme/storefront-frontend');
+      expect(a.gitContext.project, 'storefront-frontend');
+      expect(a.gitContext.worktree, isNull);
+      expect(a.gitLabel, 'storefront-frontend');
+      expect(a.isWorktree, isFalse);
+    });
+
+    test('empty cwd is safe', () {
+      const a = Agent(cwd: '');
+      expect(a.gitContext.project, '');
+      expect(a.gitContext.worktree, isNull);
+      expect(a.isWorktree, isFalse);
+    });
+  });
+
   group('Grouping', () {
     test('groups by workspace, floating attention-needing workspaces up', () {
       final snap = Snapshot(agents: [
