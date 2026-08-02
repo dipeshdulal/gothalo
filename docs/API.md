@@ -54,7 +54,9 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/snapshot` | — | raw Herdr snapshot JSON | live agent state (shape below) |
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
-| GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal stream (below) |
+| GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
+| POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
+| POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
 | POST | `/testpush` | — | `{ok:true,sent:true}` | fan a sample push to all devices (test your FCM handler) |
 
@@ -115,21 +117,77 @@ small server-side map, defaulting to **Enter** for unknown kinds — so the guar
 and the key selection both live in the bridge and every approval surface inherits
 them. `400` if the body lacks `agent`.
 
-## WS /attach — live terminal
+## WS /attach — live terminal (any pane)
 `GET /attach?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**. Auth is
 via `?token=` (WS clients can't always set an `Authorization` header); the same
-bearer/admin token works. The bridge runs `herdr agent attach <pane>` under a PTY
-and bridges it to the socket:
-- **pty stdout → WS**: server sends **binary** frames — raw terminal bytes; feed
+bearer/admin token works. **It now attaches to ANY pane** — agent panes, plain
+shells, dev-servers, logs — not just agent ones. The **WS frame contract is
+unchanged**: binary frames of raw terminal bytes in both directions.
+- **terminal → WS**: server sends **binary** frames — raw terminal bytes; feed
   them straight into your terminal emulator (`xterm.dart`).
-- **WS → pty stdin**: send **binary** frames — raw keystrokes and control bytes
+- **WS → terminal**: send **binary** frames — raw keystrokes and control bytes
   (the accessory key row writes Esc `0x1b`, Ctrl-C `0x03`, arrows `\e[A`… here).
 
-Frames MUST be binary; a text frame closes the connection (`1003`). The attach
-subprocess is killed when the socket closes (either side). Reconnect + re-fetch
-`/snapshot` is the resilience story (no mosh-style state sync). Resize is not yet
-wired — the PTY starts at 80×24 and Herdr repaints on attach.
+Two backends behind the one contract, picked automatically by pane kind — the
+client can't tell them apart:
+- **Agent panes**: unchanged — `herdr agent attach <pane>` under a PTY, copied
+  byte-for-byte both ways (identical to before).
+- **Plain panes**: the bridge polls `herdr pane read` (~5×/s) and repaints the
+  socket (cursor-home + clear-screen + frame), and forwards inbound bytes to
+  `herdr pane send-text`, which delivers raw bytes — Enter, arrows, Ctrl-C —
+  straight to the pane's PTY. This is a full-frame repaint stream, so a plain
+  pane refreshes on a short interval rather than character-by-character.
+
+Frames MUST be binary; a text frame closes the connection (`1003`). The backend
+(PTY process or poller) is stopped when the socket closes (either side).
+Reconnect + re-fetch `/snapshot` is the resilience story (no mosh-style state
+sync). Resize is not yet wired — the PTY starts at 80×24 and Herdr repaints on
+attach. Errors before the upgrade: `404` if `pane` doesn't exist, `401` no/invalid
+token, `400` missing `pane`.
+
+## POST /pane/new — create a terminal from mobile
+Creates a pane and returns its identity so the app can immediately `/attach` to
+it. Two modes, chosen by the body:
+
+**Split an existing pane** (adds a pane to that pane's tab):
+```
+POST /pane/new
+{ "split_from": "w4:p1", "direction": "down", "cwd": "/opt/app", "command": "npm run dev" }
+```
+- `split_from` (**required for this mode**): pane id to split.
+- `direction` (optional): `"right"` | `"down"` — defaults to `"down"`.
+
+**New tab in a workspace** (opens the tab's root pane):
+```
+POST /pane/new
+{ "workspace_id": "w4", "cwd": "/opt/app", "label": "logs", "command": "tail -f log" }
+```
+- `workspace_id` (**required for this mode**): workspace to add the tab to.
+- `label` (optional): the new tab's label.
+
+Common optional fields: `cwd` (working directory for the new shell), `command`
+(a command line typed and run in the new pane once created). `split_from` wins if
+both it and `workspace_id` are present.
+
+Response `200`:
+```json
+{ "pane_id": "w4:p7", "tab_id": "w4:t5", "workspace_id": "w4" }
+```
+`pane_id` is what you pass to `/attach`, `/send`, and `/pane/close`. Errors:
+`400` neither `split_from` nor `workspace_id` given (or bad JSON) · `404` unknown
+pane/workspace · `401` no/invalid token · `502` herdr failed. Note: if `command`
+fails to run the pane is still created and returned `200` (it's logged
+server-side) — the app can attach regardless.
+
+## POST /pane/close — close a pane
+```
+POST /pane/close
+{ "pane_id": "w4:p7" }
+```
+Response `200`: `{ "closed": true, "pane_id": "w4:p7" }`. Closing a tab's last
+pane closes the tab too. Errors: `400` missing `pane_id` · `404` unknown pane ·
+`401` no/invalid token · `502` herdr failed.
 
 ## Errors
 `401` missing/invalid bearer · `403` invalid pairing code · `400` bad body ·
-`502` herdr command failed.
+`404` unknown pane/tab/workspace · `502` herdr command failed.
