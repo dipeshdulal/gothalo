@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../core/connection/connection.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -9,29 +14,197 @@ import '../../data/db/db_providers.dart';
 
 part 'inbox_providers.g.dart';
 
-/// The live inbox, fetched from `/snapshot`.
+/// The live Herdr state for the active server — the app's single source of
+/// truth, driven by the bridge's `WS /events` push stream.
 ///
-/// `build()` runs the first fetch and re-runs automatically if the active
-/// connection changes (via [bridgeClientProvider]). [refresh] backs
-/// pull-to-refresh. dio does the fetching here; persistence (drift) is a
-/// separate concern handled by [inboxHistory] and the FCM path.
+/// Design: we treat `/events` purely as a **change signal**, not a data source.
+/// The bridge sends a full **snapshot** frame on connect (the seed); every
+/// subsequent frame just means "something changed" → we pull the authoritative,
+/// already-typed state from `/snapshot` (coalescing bursts with a short
+/// debounce). We deliberately **do not parse individual event types or
+/// payloads** — so new or renamed Herdr events need no app changes, and there's
+/// no hand-maintained delta-merge to drift out of sync. A dropped socket or a
+/// `seq` gap reconnects and reseeds. If `/events` is unavailable (older bridge,
+/// transient), it falls back to a one-shot `/snapshot` and retries the stream in
+/// the background.
+///
+/// Every surface reads this one provider, so they're all live off a single
+/// connection — no per-action refetch, no polling.
 @riverpod
 class SnapshotController extends _$SnapshotController {
-  @override
-  Future<Snapshot> build() => _fetch();
+  WebSocketChannel? _ch;
+  StreamSubscription<dynamic>? _sub;
+  Timer? _reconnectTimer;
+  Timer? _resnapTimer;
+  int _attempts = 0;
+  int _lastSeq = -1;
+  bool _disposed = false;
+  Connection? _conn;
 
-  Future<Snapshot> _fetch() {
+  @override
+  Future<Snapshot> build() async {
+    ref.onDispose(_teardown);
     final client = ref.watch(bridgeClientProvider);
     if (client == null) {
       throw BridgeException('No bridge connection configured yet.');
     }
-    return client.getSnapshot();
+    _conn = client.connection;
+    try {
+      return await _connectAndSeed();
+    } catch (_) {
+      // `/events` unavailable (older bridge, transient) → show a one-shot
+      // snapshot and keep retrying the stream in the background.
+      _scheduleReconnect();
+      return client.getSnapshot();
+    }
   }
 
-  /// Pull-to-refresh: re-fetch without tearing the current list down to a
-  /// spinner (the RefreshIndicator already shows progress).
+  Uri _eventsUri(Connection c) {
+    final base = Uri.parse(c.baseUrl);
+    return Uri(
+      scheme: base.scheme == 'https' ? 'wss' : 'ws',
+      host: base.host,
+      port: base.hasPort ? base.port : null,
+      path: '/events',
+      queryParameters: {'token': c.bearer},
+    );
+  }
+
+  /// Open the stream, wait for the snapshot frame, wire the ongoing listener,
+  /// and return the seed snapshot.
+  Future<Snapshot> _connectAndSeed() async {
+    final ch = WebSocketChannel.connect(_eventsUri(_conn!));
+    _ch = ch;
+    await ch.ready;
+    final seed = Completer<Snapshot>();
+    _sub = ch.stream.listen(
+      (message) => _onFrame(message, seed),
+      onDone: _handleDrop,
+      onError: (_) => _handleDrop(),
+      cancelOnError: true,
+    );
+    return seed.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () =>
+          throw BridgeException('Timed out waiting for the /events snapshot'),
+    );
+  }
+
+  void _onFrame(dynamic message, Completer<Snapshot> seed) {
+    if (message is! String) return;
+    final Map<String, dynamic> frame;
+    try {
+      final decoded = jsonDecode(message);
+      if (decoded is! Map<String, dynamic>) return;
+      frame = decoded;
+    } catch (_) {
+      return;
+    }
+
+    final seq = (frame['seq'] as num?)?.toInt();
+
+    // A frame carrying a full snapshot is a (re)seed. We key off the presence of
+    // the `snapshot` field rather than a type string, so nothing here depends on
+    // the event vocabulary.
+    if (frame['snapshot'] != null) {
+      final snap = _parseSnapshot(frame['snapshot']);
+      if (snap == null) return;
+      _lastSeq = seq ?? _lastSeq;
+      _attempts = 0;
+      if (!seed.isCompleted) {
+        seed.complete(snap);
+      } else {
+        state = AsyncData(snap);
+      }
+      return;
+    }
+
+    // Any other frame is just "something changed". A `seq` gap means we missed
+    // frames → reconnect + reseed; otherwise pull the authoritative state.
+    if (seq != null) {
+      if (_lastSeq >= 0 && seq > _lastSeq + 1) {
+        _scheduleReconnect();
+        return;
+      }
+      _lastSeq = seq;
+    }
+    _scheduleResnapshot();
+  }
+
+  /// Accept the same envelope shapes as [BridgeClient.getSnapshot].
+  Snapshot? _parseSnapshot(dynamic node) {
+    if (node is! Map) return null;
+    final result = node['result'];
+    final snapNode = (result is Map ? result['snapshot'] : null) ??
+        node['snapshot'] ??
+        node;
+    if (snapNode is! Map) return null;
+    try {
+      return Snapshot.fromJson(Map<String, dynamic>.from(snapNode));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Debounced authoritative refetch — coalesces a burst of change signals into
+  /// one `GET /snapshot`.
+  void _scheduleResnapshot() {
+    _resnapTimer?.cancel();
+    _resnapTimer = Timer(const Duration(milliseconds: 250), () async {
+      final client = ref.read(bridgeClientProvider);
+      if (client == null || _disposed) return;
+      try {
+        final snap = await client.getSnapshot();
+        if (!_disposed) state = AsyncData(snap);
+      } catch (_) {
+        // Stream stays authoritative; a genuine drop reconnects separately.
+      }
+    });
+  }
+
+  void _handleDrop() {
+    if (_disposed) return;
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    _sub?.cancel();
+    _sub = null;
+    _ch?.sink.close();
+    _ch = null;
+    if (_disposed) return;
+    _attempts++;
+    final delay = Duration(seconds: _attempts.clamp(1, 8));
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, _reconnectRun);
+  }
+
+  Future<void> _reconnectRun() async {
+    if (_disposed || _conn == null) return;
+    try {
+      state = AsyncData(await _connectAndSeed());
+    } catch (_) {
+      _scheduleReconnect(); // keep trying with backoff
+    }
+  }
+
+  /// Manual pull-to-refresh — an immediate authoritative refetch.
   Future<void> refresh() async {
-    state = await AsyncValue.guard(_fetch);
+    final client = ref.read(bridgeClientProvider);
+    if (client == null) return;
+    try {
+      state = AsyncData(await client.getSnapshot());
+    } catch (_) {
+      // Leave the last good state in place.
+    }
+  }
+
+  void _teardown() {
+    _disposed = true;
+    _reconnectTimer?.cancel();
+    _resnapTimer?.cancel();
+    _sub?.cancel();
+    _ch?.sink.close();
   }
 }
 
