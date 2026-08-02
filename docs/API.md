@@ -16,10 +16,10 @@ the pairing QR (a tailnet URL today, a relay URL later).
 - **Per-device bearer** (normal): every request sends
   `Authorization: Bearer <bearer>`, where `<bearer>` is returned by `/pair`.
 - **Dev shortcut** (until the pairing UI exists): you may use the **admin token**
-  as the bearer for manual testing:
-  `97817beb192b96ef0f2ca27885018ffb24f72b450a9ae19c`
-  It also unlocks the admin endpoints below (so you can mint your own pairing
-  codes for testing). Treat it as dev-only.
+  as the bearer for manual testing. Get its value from the operator, or from
+  `~/.gothalo/config.json` (`admin_token`) / the `gothalo serve` startup log —
+  it is not committed. It also unlocks the admin endpoints below (so you can mint
+  your own pairing codes for testing). Treat it as dev-only.
 
 ## Pairing flow (the real onboarding)
 1. Operator runs `gothalo pair` on the host; it prints a QR encoding this JSON
