@@ -1,9 +1,12 @@
-// Minimal FCM v1 sender using only the Go stdlib (no firebase-admin dependency).
+// Package push is a minimal FCM v1 sender using only the Go stdlib (no
+// firebase-admin dependency).
 //
-// Flow: read the service-account JSON -> build & RS256-sign a JWT ->
-// exchange it for an OAuth access token -> POST to the FCM messages:send API.
-// Access tokens are cached until ~1 min before expiry.
-package main
+// Flow: read the service-account JSON -> build & RS256-sign a JWT -> exchange
+// it for an OAuth access token -> POST to the FCM messages:send API. Access
+// tokens are cached until ~1 min before expiry. Messages are data-only with
+// high urgency so the receiver's service worker renders them reliably on a
+// locked device.
+package push
 
 import (
 	"bytes"
@@ -19,11 +22,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 )
 
-const fcmScope = "https://www.googleapis.com/auth/firebase.messaging"
+const scope = "https://www.googleapis.com/auth/firebase.messaging"
 
 type serviceAccount struct {
 	ClientEmail string `json:"client_email"`
@@ -32,7 +36,8 @@ type serviceAccount struct {
 	ProjectID   string `json:"project_id"`
 }
 
-type fcmClient struct {
+// Client sends FCM messages for one Firebase project.
+type Client struct {
 	sa  serviceAccount
 	key *rsa.PrivateKey
 
@@ -43,9 +48,17 @@ type fcmClient struct {
 
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// loadServiceAccount parses the downloaded Firebase service-account JSON and its
-// RSA private key. Returns an error (not a nil client) so callers can log-and-disable.
-func loadServiceAccount(jsonBytes []byte) (*fcmClient, error) {
+// LoadFile reads a Firebase service-account JSON file and returns a Client.
+func LoadFile(path string) (*Client, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return Load(b)
+}
+
+// Load parses service-account JSON (and its RSA key) into a Client.
+func Load(jsonBytes []byte) (*Client, error) {
 	var sa serviceAccount
 	if err := json.Unmarshal(jsonBytes, &sa); err != nil {
 		return nil, fmt.Errorf("parse service account: %w", err)
@@ -68,11 +81,15 @@ func loadServiceAccount(jsonBytes []byte) (*fcmClient, error) {
 	if !ok {
 		return nil, fmt.Errorf("private key is not RSA")
 	}
-	return &fcmClient{sa: sa, key: key}, nil
+	return &Client{sa: sa, key: key}, nil
 }
 
-// accessToken returns a cached OAuth token or mints a fresh one via the JWT-bearer grant.
-func (c *fcmClient) accessToken() (string, error) {
+// ProjectID returns the Firebase project id the client sends to.
+func (c *Client) ProjectID() string { return c.sa.ProjectID }
+
+// accessToken returns a cached OAuth token or mints a fresh one via the
+// JWT-bearer grant.
+func (c *Client) accessToken() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExp.Add(-60*time.Second)) {
@@ -83,7 +100,7 @@ func (c *fcmClient) accessToken() (string, error) {
 	header := b64url([]byte(`{"alg":"RS256","typ":"JWT"}`))
 	claims, _ := json.Marshal(map[string]any{
 		"iss":   c.sa.ClientEmail,
-		"scope": fcmScope,
+		"scope": scope,
 		"aud":   c.sa.TokenURI,
 		"iat":   now.Unix(),
 		"exp":   now.Add(time.Hour).Unix(),
@@ -120,17 +137,14 @@ func (c *fcmClient) accessToken() (string, error) {
 	return c.token, nil
 }
 
-// send delivers a notification to a single device/web token.
-func (c *fcmClient) send(deviceToken, title, body string, data map[string]string) error {
+// Send delivers a notification to a single device/web token as a data-only,
+// high-urgency message. title/body ride in data{} so the client's service
+// worker can render the notification itself (reliable on locked Android).
+func (c *Client) Send(deviceToken, title, body string, data map[string]string) error {
 	at, err := c.accessToken()
 	if err != nil {
 		return err
 	}
-	// Data-only message (no "notification" key): this guarantees the service
-	// worker's onBackgroundMessage fires and renders the notification itself,
-	// which is what makes it appear on a locked Android screen. title/body ride
-	// in data{}. Urgency:high tells the push service to deliver immediately
-	// rather than batching while the device is idle (Doze).
 	full := map[string]string{"title": title, "body": body}
 	for k, v := range data {
 		full[k] = v

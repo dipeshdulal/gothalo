@@ -1,0 +1,20 @@
+meta {
+  name: Test Push
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/testpush
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{bearer}}
+}
+
+docs {
+  Fan a sample data-only push out to every registered device. Handy to test the
+  app's FCM handler. Data keys: title, body, agent (pane_id), status.
+}

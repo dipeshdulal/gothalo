@@ -1,0 +1,139 @@
+// Package config loads gothalo's configuration from ~/.gothalo (overridable by a
+// config file and environment variables). Kept stdlib-only (JSON) to avoid deps.
+package config
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// Config is the resolved runtime configuration.
+type Config struct {
+	// DataDir holds per-install state: devices.json, the service-account key,
+	// the config file itself. Defaults to ~/.gothalo (or $GOTHALO_DIR).
+	DataDir string `json:"data_dir"`
+
+	// AdminToken authenticates the operator: the `pair`/`devices` CLI talking to
+	// the local daemon, curl testing, and the web test page. Paired mobile
+	// devices use their own per-device bearers instead. Generated on first serve
+	// if empty.
+	AdminToken string `json:"admin_token"`
+
+	Transport Transport `json:"transport"`
+	Push      Push      `json:"push"`
+}
+
+// Transport selects how phones reach the bridge. "direct" listens locally
+// (tailnet/LAN/localhost); "relay" (later) dials out to a hosted broker.
+type Transport struct {
+	Mode string `json:"mode"` // "direct" | "relay"
+	Addr string `json:"addr"` // direct bind address, e.g. 127.0.0.1:8787
+	// PublicURL is the externally reachable base URL a phone uses (e.g. the
+	// tailnet HTTPS URL from `tailscale serve`). It is embedded in the pairing
+	// QR. Empty means pairing can't hand out a reachable URL.
+	PublicURL string `json:"public_url"`
+}
+
+// Push holds Firebase Cloud Messaging settings.
+type Push struct {
+	ServiceAccountPath string `json:"service_account_path"`
+}
+
+// DevicesPath is where the paired-device registry lives.
+func (c *Config) DevicesPath() string { return filepath.Join(c.DataDir, "devices.json") }
+
+// Load resolves configuration. If path is empty it looks for
+// <DataDir>/config.json. Missing config file is fine (defaults apply).
+// Environment variables override file values.
+func Load(path string) (*Config, error) {
+	dir := os.Getenv("GOTHALO_DIR")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve home dir: %w", err)
+		}
+		dir = filepath.Join(home, ".gothalo")
+	}
+
+	cfg := &Config{
+		DataDir:   dir,
+		Transport: Transport{Mode: "direct", Addr: "127.0.0.1:8787"},
+		Push:      Push{ServiceAccountPath: filepath.Join(dir, "serviceAccount.json")},
+	}
+
+	if path == "" {
+		path = filepath.Join(dir, "config.json")
+	}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(b, cfg); err != nil {
+			return nil, fmt.Errorf("parse config %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	// DataDir may have been set by the file; keep the env default authoritative
+	// only when the file left it empty.
+	if cfg.DataDir == "" {
+		cfg.DataDir = dir
+	}
+
+	// Environment overrides.
+	if v := os.Getenv("GOTHALO_ADDR"); v != "" {
+		cfg.Transport.Addr = v
+	}
+	if v := os.Getenv("GOTHALO_MODE"); v != "" {
+		cfg.Transport.Mode = v
+	}
+	if v := os.Getenv("GOTHALO_SERVICE_ACCOUNT"); v != "" {
+		cfg.Push.ServiceAccountPath = v
+	}
+	if v := os.Getenv("GOTHALO_ADMIN_TOKEN"); v != "" {
+		cfg.AdminToken = v
+	}
+	if v := os.Getenv("GOTHALO_PUBLIC_URL"); v != "" {
+		cfg.Transport.PublicURL = v
+	}
+
+	return cfg, nil
+}
+
+// EnsureDataDir creates the data directory (0700) if it does not exist.
+func (c *Config) EnsureDataDir() error {
+	return os.MkdirAll(c.DataDir, 0o700)
+}
+
+// ConfigPath is where the JSON config lives inside DataDir.
+func (c *Config) ConfigPath() string { return filepath.Join(c.DataDir, "config.json") }
+
+// EnsureAdminToken generates and persists an admin token if none is set, so the
+// serve daemon and the pair/devices CLI share one. Returns whether it saved.
+func (c *Config) EnsureAdminToken() (bool, error) {
+	if c.AdminToken != "" {
+		return false, nil
+	}
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return false, err
+	}
+	c.AdminToken = hex.EncodeToString(b)
+	if err := c.Save(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Save writes the config to <DataDir>/config.json (0600).
+func (c *Config) Save() error {
+	if err := c.EnsureDataDir(); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.ConfigPath(), b, 0o600)
+}

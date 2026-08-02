@@ -1,0 +1,26 @@
+meta {
+  name: Send
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/send
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{bearer}}
+}
+
+body:json {
+  {
+    "pane": "wN:p2",
+    "text": "echo hi\n"
+  }
+}
+
+docs {
+  Types text into a pane (herdr pane send-text). pane is a pane_id from /snapshot.
+}

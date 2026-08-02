@@ -1,0 +1,20 @@
+meta {
+  name: Snapshot
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/snapshot
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{bearer}}
+}
+
+docs {
+  Live Herdr agent/pane/workspace state. Auth with a per-device bearer (from
+  Pair Device) or the admin token. Agents are at result.snapshot.agents[].
+}
