@@ -55,6 +55,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below) |
+| GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
@@ -168,6 +169,35 @@ Parsing never fails the request: an unrecognised layout degrades to `parsed:fals
 rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` no
 agent in that pane · `502` herdr command failed.
 
+## WS /agent-transcript — streamed structured chat (agent panes)
+`GET /agent-transcript?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**.
+This is the *chat view* data source: instead of scraping the terminal (like
+`/agent-state`) or streaming raw PTY bytes (like `/attach`), the bridge reads the
+agent's **own transcript file** (Claude Code writes JSONL at
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) and streams it **normalized**
+into a kind-agnostic chat schema — messages, thinking, tool calls (command + diff),
+and tool results.
+
+Read-only, server→client. Frames are **text JSON**, one entry per frame (contrast
+`/attach`'s binary raw bytes). On connect it sends a `hello`, replays the
+**backlog** (`entry` frames, `live:false`, oldest→newest, capped at 2000 newest —
+`has_more` flags older elided), a `backlog_complete` marker, then **tails** the
+file and pushes each new normalized `entry` (`live:true`) as the agent appends it
+(250 ms poll). Correlate a tool call with its result via `tool.id == result.for_id`;
+order on `seq` (a monotonic counter shared by backlog and tail).
+
+The transcript file is resolved from the pane's `cwd` + `agent_session.value`
+(Claude's session id == the filename), with a newest-matching-`cwd` fallback. This
+is READ-ONLY — prompts/approvals still go through `POST /send` / `POST /approve`.
+`claude` is implemented; `codex`/`opencode` are recognized but not yet wired (→
+`404`). Errors before the upgrade: `400` missing `pane` · `401` bad token · `404`
+no agent / no transcript / unsupported kind · `500` read failed · `502` herdr
+failed. Close code `1000` on normal teardown.
+
+**The full wire protocol, the normalized entry schema (every field), captured
+examples of each kind, the resolution rule, and all limits live in
+[`CONTRACT.md`](../CONTRACT.md).**
+
 ## WS /attach — live terminal (any pane)
 `GET /attach?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**. Auth is
 via `?token=` (WS clients can't always set an `Authorization` header); the same
@@ -241,4 +271,7 @@ pane closes the tab too. Errors: `400` missing `pane_id` · `404` unknown pane �
 
 ## Errors
 `401` missing/invalid bearer · `403` invalid pairing code · `400` bad body ·
-`404` unknown pane/tab/workspace, or no agent in that pane (`/agent-state`) · `502` herdr command failed.
+`404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
+`/agent-transcript`), or no transcript file / unsupported kind
+(`/agent-transcript`) · `500` transcript read failed (`/agent-transcript`) · `502`
+herdr command failed.
