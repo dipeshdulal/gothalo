@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/send", s.handleSend)
+	mux.HandleFunc("/approve", s.handleApprove)
+	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/register-token", s.handleRegisterToken)
 	mux.HandleFunc("/testpush", s.handleTestPush)
 	mux.HandleFunc("/pair", s.handlePair)
@@ -174,7 +177,7 @@ func (s *Server) handleTestPush(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
 	}
-	s.Notify("test-agent", "blocked", "gothalo test push — if you see this, FCM works")
+	s.Notify("test-agent", "blocked", "gothalo test push — if you see this, FCM works", 0)
 	writeJSON(w, map[string]bool{"ok": true, "sent": true})
 }
 
@@ -253,8 +256,8 @@ func (s *Server) handleAdminDevicesRevoke(w http.ResponseWriter, r *http.Request
 
 // Notify fans a transition out to every registered device. It is the callback
 // the watcher fires. Always logs; pushes only when FCM is configured.
-func (s *Server) Notify(paneID, status, title string) {
-	log.Info("notify", "agent", paneID, "status", status, "title", title)
+func (s *Server) Notify(paneID, status, title string, seq int) {
+	log.Info("notify", "agent", paneID, "status", status, "title", title, "seq", seq)
 	if s.push == nil {
 		return
 	}
@@ -267,7 +270,13 @@ func (s *Server) Notify(paneID, status, title string) {
 	if body == "" {
 		body = paneID
 	}
-	data := map[string]string{"agent": paneID, "status": status}
+	// state_change_seq rides along so a lock-screen approve can echo it back to
+	// POST /approve, which no-ops if the agent has since moved past this seq (D8).
+	data := map[string]string{
+		"agent":            paneID,
+		"status":           status,
+		"state_change_seq": strconv.Itoa(seq),
+	}
 	sent := 0
 	for _, t := range tokens {
 		if err := s.push.Send(t, pushTitle, body, data); err != nil {
