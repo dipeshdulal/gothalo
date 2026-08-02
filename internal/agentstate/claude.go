@@ -20,6 +20,11 @@ func (claudeParser) Kind() string { return "claude" }
 func (p claudeParser) Parse(in Input) State {
 	st := State{Parsed: true}
 
+	// The permission mode is read from the live detection footer bar (see mode.go).
+	// Set once here so every return path below carries it; it's "" (omitted) when
+	// the bar isn't on screen, so this never fails the parse.
+	st.PermissionMode = claudePermissionMode(in.Detection)
+
 	// Transcript is a cheap few lines of recent readable content, useful in every
 	// state. Recent-unwrapped carries more history than the detection screen.
 	st.Transcript = lastN(claudeReadable(in.Recent), 12)

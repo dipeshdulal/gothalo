@@ -170,6 +170,20 @@ func (c *Client) Send(pane, text string) error {
 	return err
 }
 
+// shiftTab is the terminal control sequence for Shift+Tab (CSI Z, aka "backtab").
+// Claude Code's TUI binds it to cycle the permission mode.
+const shiftTab = "\x1b[Z"
+
+// CyclePermissionMode advances a Claude pane's Shift+Tab permission mode by one
+// (default -> acceptEdits -> plan -> …) by sending the CSI Z sequence over the
+// existing send-text path. It deliberately does NOT use SendKeys: herdr's
+// "shift+tab" key name is accepted but does not emit CSI Z, so the TUI never
+// cycles — verified live. A non-Claude TUI simply ignores the bytes, so the
+// kind guard lives in the handler, not here.
+func (c *Client) CyclePermissionMode(pane string) error {
+	return c.Send(pane, shiftTab)
+}
+
 // SendKeys sends one or more logical keys to a pane (`herdr pane send-keys`),
 // e.g. "enter" to confirm a blocked prompt. This is the keystroke analog of
 // Send's `pane send-text`: it writes to the pane's terminal, which is where the

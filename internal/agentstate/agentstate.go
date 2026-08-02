@@ -29,6 +29,13 @@ type State struct {
 	// Detail is a short plain-text body (current activity or last assistant
 	// message), already stripped of ANSI and box-drawing, wrapped-safe for a phone.
 	Detail string `json:"detail"`
+	// PermissionMode is the agent's current Shift+Tab permission mode, when the
+	// kind exposes one (Claude only today): "default" | "acceptEdits" | "plan" |
+	// "auto" | "bypassPermissions", or a raw lowercased label for a mode this
+	// build names differently. It is OMITTED for kinds without the concept and
+	// when the mode can't be read — never a hard error. Pairs with POST
+	// /agent-mode/cycle, which advances it by one. See docs/CONTRACT-agent-mode.md.
+	PermissionMode string `json:"permission_mode,omitempty"`
 	// Blocked is present only when AgentStatus == "blocked": the prompt and the
 	// selectable choices the agent is waiting on (pairs with POST /approve).
 	Blocked *Blocked `json:"blocked,omitempty"`
