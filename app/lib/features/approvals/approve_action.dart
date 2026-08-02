@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
-import '../state_refresh.dart';
 
 /// One-tap approval for a blocked agent (D7/D8), shared by every surface that
 /// exposes it — the inbox row, the overview card, and the terminal app bar.
@@ -51,10 +50,8 @@ Future<void> approveAgent(
           ),
         ),
       );
-      // The agent has moved on — pull fresh state everywhere (inbox, overview,
-      // dashboard, priority) so it stops showing as blocked, allowing for the
-      // beat Herdr takes to actually transition after the confirm keystroke.
-      await refreshHerdrState(ref);
+      // No manual refresh: the live event stream (WS /events → snapshotController)
+      // reflects the agent leaving `blocked` on its own.
     } else {
       messenger.showSnackBar(
         SnackBar(
