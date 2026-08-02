@@ -10,6 +10,15 @@
 //
 // This file is a stub so the transport seam is real now; the broker itself
 // (cmd/gothalo-relay) and this client are a later milestone.
+//
+// Security note (end-to-end encryption): in direct mode we rely on the two
+// key-exchange layers we already get for free — WireGuard (Curve25519 ECDH) on
+// the tailnet and TLS 1.3 (ECDHE) from `tailscale serve` — so no app-level
+// crypto is warranted. A hosted relay is the ONLY place it matters: if the relay
+// terminates TLS it can read plaintext. When we build it, keep traffic
+// end-to-end by either passing TLS through (relay never terminates it) or
+// wrapping the tunnel in a vetted protocol (Noise / libsodium box). Do NOT
+// hand-roll a Diffie-Hellman exchange.
 package relay
 
 import (

@@ -5,11 +5,11 @@ This is the contract the app codes against. The backend was rebuilt into a
 
 ## Base URL
 ```
-https://my-mac.tailnet.ts.net
+https://my-mac.tailnet.ts.net:5338
 ```
-The gothalo bridge, reachable over the tailnet (valid TLS) on the default HTTPS
-port. The base URL is not hardcoded in the real flow — it comes from the pairing
-QR (a tailnet URL today, a relay URL later).
+The gothalo bridge, reachable over the tailnet (valid TLS) on port **5338**. The
+base URL is not hardcoded in the real flow — the app derives it from the pairing
+QR's origin (a tailnet URL today, a relay URL later).
 
 ## Auth model
 - **Per-device bearer** (normal): every request sends
@@ -21,29 +21,31 @@ QR (a tailnet URL today, a relay URL later).
   your own pairing codes for testing). Treat it as dev-only.
 
 ## Pairing flow (the real onboarding)
-1. Operator runs `gothalo pair` on the host; it prints a QR encoding this JSON
-   (the **ConnectPayload**):
-   ```json
-   { "v": 1, "url": "https://my-mac.tailnet.ts.net:8443", "code": "<8-hex one-time code>" }
+1. Operator runs `gothalo pair` on the host; it prints a QR encoding a **deep-link
+   URL**:
    ```
-2. App scans the QR, parses the JSON, then:
+   https://my-mac.tailnet.ts.net:5338/pair?code=<8-hex one-time code>
    ```
-   POST <url>/pair
+2. App scans the QR and parses the URL: the **origin** (`scheme://host:port`) is the
+   bridge base URL, and `code` is the query param. Then:
+   ```
+   POST <base>/pair
    Content-Type: application/json
    { "code": "<code>", "device_name": "Dipesh S22", "fcm_token": "<this device's FCM token>" }
    ```
+   The device names itself via `device_name` (defaults to "device" if omitted).
 3. Response `200`:
    ```json
    { "id": "92787cfa", "bearer": "<64-hex per-device bearer>", "name": "Dipesh S22" }
    ```
-   Store `{ baseUrl: url, bearer }` in secure storage; use `bearer` for all calls.
+   Store `{ baseUrl: <origin>, bearer }` in secure storage; use `bearer` for all calls.
    Errors: `403` invalid/expired/already-used code · `400` bad body.
 
    Codes are **one-time** and expire in ~5 min.
 
 To mint a code yourself for testing (admin token):
 ```
-POST /admin/pairing?token=<admin>   { "name": "Test Phone" }   ->  { "code", "url" }
+POST /admin/pairing?token=<admin>   ->  { "code", "pair_url" }
 ```
 
 ## Endpoints (per-device bearer)

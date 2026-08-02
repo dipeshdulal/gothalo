@@ -11,23 +11,19 @@ import (
 )
 
 func newPairCmd() *cobra.Command {
-	var (
-		configPath string
-		name       string
-	)
+	var configPath string
 	cmd := &cobra.Command{
 		Use:   "pair",
 		Short: "Print a QR code to pair a mobile device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPair(configPath, name)
+			return runPair(configPath)
 		},
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "path to config file (default ~/.gothalo/config.json)")
-	cmd.Flags().StringVarP(&name, "name", "n", "", "label for the device being paired")
 	return cmd
 }
 
-func runPair(configPath, name string) error {
+func runPair(configPath string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -38,21 +34,18 @@ func runPair(configPath, name string) error {
 
 	client := newDaemonClient(cfg.Transport.Addr, cfg.AdminToken)
 	var res struct {
-		Code string `json:"code"`
-		URL  string `json:"url"`
+		Code    string `json:"code"`
+		PairURL string `json:"pair_url"`
 	}
-	if err := client.do("POST", "/admin/pairing", map[string]string{"name": name}, &res); err != nil {
+	if err := client.do("POST", "/admin/pairing", nil, &res); err != nil {
 		return err
 	}
-	if res.URL == "" {
+	if res.PairURL == "" || cfg.Transport.PublicURL == "" {
 		fmt.Fprintln(os.Stderr, "warning: no public_url configured — the QR has no reachable URL for the phone")
 	}
 
 	fmt.Println(titleStyle.Render("Scan this with the gothalo app to pair") +
 		hintStyle.Render("  (valid ~5 min)"))
 	fmt.Println()
-	if err := pairing.RenderQR(pairing.ConnectPayload{V: 1, URL: res.URL, Code: res.Code}, os.Stdout); err != nil {
-		return err
-	}
-	return nil
+	return pairing.RenderQR(res.PairURL, os.Stdout)
 }

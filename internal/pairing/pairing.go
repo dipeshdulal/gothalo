@@ -1,15 +1,18 @@
-// Package pairing issues short-lived, one-time pairing codes and renders the
-// QR a phone scans to connect. The QR carries a transport-agnostic connect
-// payload so the app never hardcodes Tailscale: today a direct URL, later a
-// relay URL + bridge id.
+// Package pairing issues short-lived, one-time pairing codes and renders the QR
+// a phone scans to connect. The QR encodes a **deep-link URL**
+// (<base>/pair?code=<code>) rather than a JSON blob: it's the idiomatic mobile
+// shape (the app can register it as a deep link), it's human-openable, and the
+// app derives the bridge base URL from the URL's origin — so nothing about the
+// transport (tailnet URL now, relay URL later) is hardcoded.
 package pairing
 
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,31 +22,17 @@ import (
 // DefaultTTL is how long a pairing code stays valid.
 const DefaultTTL = 5 * time.Minute
 
-// ConnectPayload is what the QR encodes. The app scans it, then calls
-// POST <URL>/pair {code, device_name, fcm_token} to receive a per-device bearer.
-type ConnectPayload struct {
-	V    int    `json:"v"`    // payload version
-	URL  string `json:"url"`  // bridge base URL (direct mode)
-	Code string `json:"code"` // one-time pairing code
-	// BridgeID string `json:"bridge_id,omitempty"` // reserved for relay mode
-}
-
-type pending struct {
-	name    string
-	expires time.Time
-}
-
 // Manager tracks outstanding pairing codes in memory (they are cheap and
 // short-lived, so they need not survive a restart).
 type Manager struct {
 	mu    sync.Mutex
-	codes map[string]pending
+	codes map[string]time.Time // code -> expiry
 	ttl   time.Duration
 }
 
 // NewManager returns a pairing manager with DefaultTTL.
 func NewManager() *Manager {
-	return &Manager{codes: map[string]pending{}, ttl: DefaultTTL}
+	return &Manager{codes: map[string]time.Time{}, ttl: DefaultTTL}
 }
 
 func newCode() (string, error) {
@@ -54,49 +43,51 @@ func newCode() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// Issue creates a new one-time code labelled name, valid until now+ttl.
-func (m *Manager) Issue(name string, now time.Time) (string, error) {
+// Issue creates a new one-time code valid until now+ttl.
+func (m *Manager) Issue(now time.Time) (string, error) {
 	code, err := newCode()
 	if err != nil {
 		return "", err
 	}
 	m.mu.Lock()
 	m.pruneLocked(now)
-	m.codes[code] = pending{name: name, expires: now.Add(m.ttl)}
+	m.codes[code] = now.Add(m.ttl)
 	m.mu.Unlock()
 	return code, nil
 }
 
-// Consume validates and removes a code (one-time). Returns the device name it
-// was issued for and true if the code was valid and unexpired.
-func (m *Manager) Consume(code string, now time.Time) (string, bool) {
+// Consume validates and removes a code (one-time). Returns true if the code was
+// valid and unexpired.
+func (m *Manager) Consume(code string, now time.Time) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pruneLocked(now)
-	p, ok := m.codes[code]
-	if !ok || now.After(p.expires) {
-		return "", false
+	expiry, ok := m.codes[code]
+	if !ok || now.After(expiry) {
+		return false
 	}
 	delete(m.codes, code)
-	return p.name, true
+	return true
 }
 
 func (m *Manager) pruneLocked(now time.Time) {
-	for c, p := range m.codes {
-		if now.After(p.expires) {
+	for c, expiry := range m.codes {
+		if now.After(expiry) {
 			delete(m.codes, c)
 		}
 	}
 }
 
-// RenderQR prints the QR for payload to w (e.g. os.Stdout), plus the raw payload
-// beneath it for debugging / manual entry.
-func RenderQR(payload ConnectPayload, w io.Writer) error {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	qrterminal.Generate(string(b), qrterminal.M, w)
-	fmt.Fprintf(w, "\n%s\n", b)
+// URL builds the deep-link a phone scans: <base>/pair?code=<code>. The app POSTs
+// to <base>/pair and uses <base> as the bridge URL thereafter.
+func URL(base, code string) string {
+	return strings.TrimRight(base, "/") + "/pair?code=" + url.QueryEscape(code)
+}
+
+// RenderQR prints the QR for the pairing URL to w, with the URL beneath it for
+// debugging / manual entry.
+func RenderQR(pairURL string, w io.Writer) error {
+	qrterminal.Generate(pairURL, qrterminal.M, w)
+	fmt.Fprintf(w, "\n%s\n", pairURL)
 	return nil
 }

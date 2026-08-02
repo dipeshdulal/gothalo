@@ -190,13 +190,13 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want {code,device_name,fcm_token}", http.StatusBadRequest)
 		return
 	}
-	name, ok := s.pairing.Consume(body.Code, time.Now())
-	if !ok {
+	if !s.pairing.Consume(body.Code, time.Now()) {
 		http.Error(w, "invalid or expired pairing code", http.StatusForbidden)
 		return
 	}
-	if body.DeviceName != "" {
-		name = body.DeviceName
+	name := body.DeviceName
+	if name == "" {
+		name = "device"
 	}
 	d, err := s.store.Add(name, body.FCMToken, time.Now())
 	if err != nil {
@@ -207,22 +207,21 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"id": d.ID, "bearer": d.Bearer, "name": d.Name})
 }
 
-// POST /admin/pairing {"name"} -> mint a one-time code + return the connect URL.
-// Called by the local `gothalo pair` CLI (admin-authed) to build the QR.
+// POST /admin/pairing -> mint a one-time code + return the deep-link URL the QR
+// encodes. Called by the local `gothalo pair` CLI (admin-authed).
 func (s *Server) handleAdminPairing(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	var body struct {
-		Name string `json:"name"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body) // name optional
-	code, err := s.pairing.Issue(body.Name, time.Now())
+	code, err := s.pairing.Issue(time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"code": code, "url": s.cfg.Transport.PublicURL})
+	writeJSON(w, map[string]string{
+		"code":     code,
+		"pair_url": pairing.URL(s.cfg.Transport.PublicURL, code),
+	})
 }
 
 // GET /admin/devices -> list paired devices (admin-authed). Used by
