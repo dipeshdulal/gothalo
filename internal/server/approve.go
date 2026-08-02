@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/log"
+
+	"github.com/dipeshdulal/gothalo/internal/events"
 )
 
 // confirmKeys maps a Herdr agent kind to the logical key that accepts its
@@ -56,6 +58,16 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// finish publishes the outcome as gothalo.approve_applied and responds. Every
+	// approval surface (banner, Live Activity, in-app) goes through /approve, so
+	// emitting here means the bus always reflects what an approval actually did.
+	finish := func(applied bool, reason string) {
+		s.publish(events.TypeApproveApplied, map[string]any{
+			"pane": body.Agent, "seq": body.Seq, "applied": applied, "reason": reason,
+		})
+		respondApprove(w, applied, reason)
+	}
+
 	agents, err := s.herdr.Agents()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -69,11 +81,11 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		}
 		found = true
 		if a.Status != "blocked" {
-			respondApprove(w, false, "agent is "+a.Status+", not blocked")
+			finish(false, "agent is "+a.Status+", not blocked")
 			return
 		}
 		if a.StateChangeSeq != body.Seq {
-			respondApprove(w, false, "stale seq: approve carried "+strconv.Itoa(body.Seq)+
+			finish(false, "stale seq: approve carried "+strconv.Itoa(body.Seq)+
 				", agent now at "+strconv.Itoa(a.StateChangeSeq))
 			return
 		}
@@ -83,11 +95,11 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Info("approved agent", "agent", body.Agent, "kind", a.Kind, "key", key, "seq", body.Seq)
-		respondApprove(w, true, "")
+		finish(true, "")
 		return
 	}
 	if !found {
-		respondApprove(w, false, "no such agent")
+		finish(false, "no such agent")
 	}
 }
 
