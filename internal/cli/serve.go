@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"os"
 
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 
 	"github.com/dipeshdulal/gothalo/internal/config"
+	"github.com/dipeshdulal/gothalo/internal/events"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/pairing"
 	"github.com/dipeshdulal/gothalo/internal/push"
@@ -65,7 +67,14 @@ func runServe(configPath string) error {
 		log.Info("FCM enabled", "project", p.ProjectID())
 	}
 
-	srv := server.New(cfg, h, pc, st, pm, web.FS())
+	// The unified event bus and the single process-wide Herdr ingester. Every WS
+	// /events client is a bus subscriber; the ingester holds the one Herdr socket
+	// subscription and fans it out (never one Herdr connection per client).
+	bus := events.New()
+	ing := herdr.NewIngester(h, bus)
+	go ing.Run(context.Background())
+
+	srv := server.New(cfg, h, pc, st, pm, web.FS(), bus)
 
 	w := watcher.New(h, srv.Notify, os.Getenv("WATCHER") == "poll")
 	go w.Run()
