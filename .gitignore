@@ -1,5 +1,6 @@
 # Go
 /bridge/gothalo-bridge
+/bridge/bridge
 /bridge/*.exe
 *.test
 *.out
@@ -9,6 +10,8 @@
 .env
 *-service-account*.json
 firebase-*.json
+/bridge/serviceAccount.json
+/bridge/fcm_token.txt
 config.local.*
 
 # Flutter (app/ — added in Phase 3)
