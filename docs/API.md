@@ -54,7 +54,8 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/snapshot` | — | raw Herdr snapshot JSON | live agent state (shape below) |
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
-| GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below) |
+| GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
+| POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
 | GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
@@ -155,6 +156,7 @@ agent kind):
   "pane_id": "wQ:p2",
   "agent_kind": "claude",               // herdr agent kind
   "agent_status": "idle|working|blocked|done|unknown",
+  "permission_mode": "auto",            // Claude ONLY: Shift+Tab mode; OMITTED for other kinds / when unknown
   "headline": "…",                      // one line: what it's doing / last step (the question when blocked)
   "detail": "…",                        // short plain-text body, ANSI/box-drawing already stripped
   "blocked": {                          // present ONLY when agent_status == "blocked"
@@ -183,10 +185,49 @@ Field notes for the app:
   opencode are next behind the same contract.)
 - `agent_status` is authoritative (straight from herdr). Pair it with the same
   `state_change_seq` from `/snapshot` for `/approve`.
+- **`permission_mode`** is **Claude-specific** and **optional**: present only for
+  `agent_kind == "claude"` and only when the mode could be read; it is **omitted**
+  for every other kind and when unknown, so the field's absence is normal — never
+  treat it as an error. Values: `"default"` · `"acceptEdits"` · `"plan"` ·
+  `"auto"` · `"bypassPermissions"` (a build that names a mode differently passes
+  its raw lowercased label through). It pairs with `POST /agent-mode/cycle`: cycle,
+  then re-fetch `/agent-state` to show the new mode. See
+  [`CONTRACT-agent-mode.md`](./CONTRACT-agent-mode.md).
 
 Parsing never fails the request: an unrecognised layout degrades to `parsed:false`
 rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` no
 agent in that pane · `502` herdr command failed.
+
+## POST /agent-mode/cycle — change a Claude agent's permission mode
+The mobile remote for Claude's **Shift+Tab** key: it advances a Claude pane's
+permission mode by one step around its ring
+(`default → acceptEdits → plan → auto → …`, the exact set/order is whatever the
+running Claude build cycles through). This is **Claude-specific** — the concept
+only exists for Claude's TUI — so a non-Claude pane is rejected, never silently
+keystroked.
+```
+POST /agent-mode/cycle
+Authorization: Bearer <bearer>          // same auth as everything; ?token= also works
+{ "pane": "wN:p2" }
+```
+Response `200`:
+```json
+{ "ok": true, "cycled": true, "permission_mode": "plan" }   // new mode, best-effort read-back
+{ "ok": true, "cycled": true }                              // sent, but read-back didn't settle in time
+```
+`permission_mode` is a **convenience**: after sending the keystroke the bridge
+polls the live mode for ~1 s and echoes the new value **if** it observed the
+change. It may be absent even on success (the TUI hadn't redrawn yet). **The
+authoritative flow is: cycle → re-fetch `GET /agent-state`** and read
+`permission_mode` there. Setting a *specific* target mode is not a primitive —
+cycle and read back until it matches.
+
+Errors: `400` missing `pane` (or bad JSON) · `401` no/invalid bearer · `404` no
+agent in that pane · `405` non-POST · **`409` "mode switching not supported for
+this agent kind: <kind>"** (a non-Claude pane) · `502` herdr command failed. A
+`409` is the documented, expected response for codex/opencode/etc — the app should
+just hide the mode control for those kinds (their `/agent-state` omits
+`permission_mode` too).
 
 ## WS /agent-transcript — streamed structured chat (agent panes)
 `GET /agent-transcript?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**.
@@ -369,6 +410,8 @@ other Herdr error.
 `401` missing/invalid bearer · `403` invalid pairing code / method not allowlisted
 (`/herdr`) · `400` bad body ·
 `404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
-`/agent-transcript`), or no transcript file / unsupported kind
-(`/agent-transcript`) · `500` transcript read failed (`/agent-transcript`) · `502`
+`/agent-mode/cycle`, `/agent-transcript`), or no transcript file / unsupported
+kind (`/agent-transcript`) · `405` wrong method (`/agent-mode/cycle` non-POST) ·
+`409` mode switching not supported for the agent kind (`/agent-mode/cycle` on a
+non-Claude pane) · `500` transcript read failed (`/agent-transcript`) · `502`
 herdr command failed.

@@ -47,14 +47,17 @@ read`) and parses; it stores nothing.
 
 ## Response `200` — schema
 
-Kind-agnostic: **the same shape for every agent kind.** No Claude-specific fields
-leak into the contract.
+Kind-agnostic: **the same shape for every agent kind.** The one kind-specific
+field, `permission_mode`, uses a generic name and is **optional** — it is simply
+absent for kinds that don't have the concept, so the core contract is unchanged
+for them (a Claude-specific *value*, never a Claude-only *shape*).
 
 | Field | Type | Notes |
 |---|---|---|
 | `pane_id` | string | Echoes the requested pane. |
 | `agent_kind` | string | Herdr agent kind (`claude`, later `codex`, `opencode`, …). |
 | `agent_status` | string | Authoritative status from Herdr: `idle` \| `working` \| `blocked` \| `done` \| `unknown`. |
+| `permission_mode` | string \| absent | **Claude-only, optional.** The current Shift+Tab permission mode: `default` \| `acceptEdits` \| `plan` \| `auto` \| `bypassPermissions` (or a raw lowercased label a build names differently). **Omitted** for kinds without the concept and when unknown — absence is normal, not an error. Change it with `POST /agent-mode/cycle`, then re-fetch. Full contract: [`CONTRACT-agent-mode.md`](./CONTRACT-agent-mode.md). |
 | `headline` | string | One line: what it's doing / its last step. **The question when blocked.** Always safe to render alone. |
 | `detail` | string | Short plain-text body (current activity or last assistant message). ANSI/box-drawing already stripped. May contain `\n`. |
 | `blocked` | object \| absent | **Present only when `agent_status == "blocked"`.** See below. |
@@ -81,6 +84,7 @@ leak into the contract.
   "pane_id": "w5:p18",
   "agent_kind": "claude",
   "agent_status": "idle",
+  "permission_mode": "auto",
   "headline": "Both PRs are open against develop:",
   "detail": "Both PRs are open against develop:\n\n- #1570 — fix/consolidated-arrangement-earliest — consolidated refresh window uses the earliest per-SKU\narrangement (MIN not MAX), + the cancel-deadline email fix.\nhttps://github.com/example/acme-app/pull/1570\n- #1571 — feat/order-detail-per-sku-shipping — per-SKU shipping-detail collapsible panel, gated to\nmulti-warehouse units.\nhttps://github.com/example/acme-app/pull/1571\n\nBoth are file-disjoint and independent (no stacking), so they can be reviewed and merged in any order.\nNeither commit carries any Claude attribution.\n\nOne thing I did not do: the earlier temp branch feat/per-sku-shipping-detail still exists locally at\ndevelop's HEAD with no commits — harmless, but I can delete it if you want it cleaned up.",
   "transcript": [
@@ -100,6 +104,7 @@ leak into the contract.
   "pane_id": "wN:pB",
   "agent_kind": "claude",
   "agent_status": "working",
+  "permission_mode": "default",
   "headline": "Pushed to feat/alerts-liveness…",
   "detail": "Pushed to feat/alerts-liveness…",
   "transcript": [

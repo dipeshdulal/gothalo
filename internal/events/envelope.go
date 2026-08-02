@@ -63,6 +63,10 @@ const (
 	TypeGothaloPaneCreated = "pane_created"
 	// TypeGothaloPaneClosed is emitted by POST /pane/close; payload {pane_id}.
 	TypeGothaloPaneClosed = "pane_closed"
+	// TypeModeCycled is emitted by POST /agent-mode/cycle after a Claude pane's
+	// permission mode is advanced; payload {pane, permission_mode?} (the new mode is
+	// present only when it could be read back — see the /agent-mode/cycle contract).
+	TypeModeCycled = "mode_cycled"
 	// TypePushSent is emitted after the FCM fan-out; payload {agent, status, title, seq, sent, total}.
 	TypePushSent = "push_sent"
 	// TypeNotificationCleared is emitted by the notification-clearer consumer when
