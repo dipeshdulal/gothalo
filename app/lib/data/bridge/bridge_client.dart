@@ -27,6 +27,78 @@ class NewPaneResult {
   final String workspaceId;
 }
 
+/// One selectable choice on a blocked agent's prompt (from `/agent-state`).
+class BlockedOption {
+  const BlockedOption({
+    required this.index,
+    required this.label,
+    required this.selected,
+  });
+
+  /// The number to type to pick it (1-based); 0 if unnumbered.
+  final int index;
+  final String label;
+
+  /// The highlighted default — the one a bare Enter (`/approve`) accepts.
+  final bool selected;
+
+  factory BlockedOption.fromJson(Map<String, dynamic> j) => BlockedOption(
+        index: (j['index'] as num?)?.toInt() ?? 0,
+        label: (j['label'] as String?) ?? '',
+        selected: j['selected'] == true,
+      );
+}
+
+/// The parsed agent card from `GET /agent-state` — what the agent is doing and,
+/// when blocked, the exact question + options it's waiting on.
+class AgentState {
+  const AgentState({
+    required this.paneId,
+    required this.agentKind,
+    required this.agentStatus,
+    required this.headline,
+    required this.detail,
+    required this.blockedQuestion,
+    required this.options,
+    required this.parsed,
+  });
+
+  final String paneId;
+  final String agentKind;
+  final String agentStatus;
+  final String headline;
+  final String detail;
+
+  /// The prompt the agent is waiting on — present only when blocked.
+  final String? blockedQuestion;
+
+  /// Selectable choices in display order — empty for a free-form prompt.
+  final List<BlockedOption> options;
+  final bool parsed;
+
+  bool get isBlocked => agentStatus == 'blocked';
+
+  factory AgentState.fromJson(Map<String, dynamic> j) {
+    final blocked = j['blocked'];
+    final opts = (blocked is Map ? blocked['options'] : null);
+    return AgentState(
+      paneId: (j['pane_id'] as String?) ?? '',
+      agentKind: (j['agent_kind'] as String?) ?? '',
+      agentStatus: (j['agent_status'] as String?) ?? 'unknown',
+      headline: (j['headline'] as String?) ?? '',
+      detail: (j['detail'] as String?) ?? '',
+      blockedQuestion: blocked is Map ? blocked['question'] as String? : null,
+      options: opts is List
+          ? opts
+              .whereType<Map>()
+              .map((o) => BlockedOption.fromJson(Map<String, dynamic>.from(o)))
+              .toList()
+          : const [],
+      parsed: j['parsed'] != false,
+    );
+  }
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
@@ -170,6 +242,23 @@ class BridgeClient {
         tabId: body['tab_id'] as String? ?? '',
         workspaceId: body['workspace_id'] as String? ?? workspaceId ?? '',
       );
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /agent-state?pane=<id>` → the parsed agent card (status, headline, and
+  /// when blocked the question + options). Agent panes only; a non-agent or
+  /// unsupported pane throws.
+  Future<AgentState> getAgentState(String pane) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/agent-state',
+        queryParameters: {'pane': pane},
+      );
+      final body = res.data;
+      if (body == null) throw BridgeException('Empty agent-state response');
+      return AgentState.fromJson(body);
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }

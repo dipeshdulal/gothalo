@@ -47,7 +47,7 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
     final pane = pendingDeepLink.value;
     if (pane == null || pane.isEmpty) return;
     pendingDeepLink.value = null;
-    ref.read(routerProvider).push('/terminal/${Uri.encodeComponent(pane)}');
+    ref.read(routerProvider).push('/transcript/${Uri.encodeComponent(pane)}');
   }
 
   @override

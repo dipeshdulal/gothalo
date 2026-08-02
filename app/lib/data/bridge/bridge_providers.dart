@@ -10,6 +10,9 @@ part 'bridge_providers.g.dart';
 /// null while there is no connection configured.
 @riverpod
 BridgeClient? bridgeClient(Ref ref) {
+  // Stable for the session so a transient un-watch doesn't recreate the client
+  // (which would churn the snapshot store's `/events` socket).
+  ref.keepAlive();
   final connection = ref.watch(activeConnectionProvider).asData?.value;
   if (connection == null) return null;
   return BridgeClient(connection);

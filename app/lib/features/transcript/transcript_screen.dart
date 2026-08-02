@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
@@ -40,6 +41,7 @@ class TranscriptScreen extends ConsumerStatefulWidget {
 
 class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   final ScrollController _scroll = ScrollController();
+  final TextEditingController _composer = TextEditingController();
 
   BridgeClient? _client;
   WebSocketChannel? _channel;
@@ -65,6 +67,18 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
 
+  /// The blocked prompt (question + options), polled from `/agent-state`, shown
+  /// as an approval bar while the agent is blocked; null/not-blocked otherwise.
+  /// Polling (not the snapshot flag) is the source of truth so the bar clears
+  /// the instant the agent unblocks and refreshes for each new prompt.
+  AgentState? _agentState;
+  Timer? _agentStateTimer;
+
+  /// Messages sent from the composer but not yet echoed back in the transcript
+  /// (a busy agent queues them). Shown optimistically so a send is never
+  /// invisible; each is dropped when its matching user message arrives.
+  final List<String> _pending = [];
+
   @override
   void initState() {
     super.initState();
@@ -77,8 +91,75 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close(ws_status.normalClosure);
+    _agentStateTimer?.cancel();
     _scroll.dispose();
+    _composer.dispose();
     super.dispose();
+  }
+
+  /// Send the composer's text to the pane as input. The submit key is a carriage
+  /// return (`\r`) — that's what a terminal sends for Enter; a line feed (`\n`)
+  /// only inserts a newline in the agent's input box without submitting. An
+  /// empty send is a bare Enter, which accepts a blocked agent's default prompt
+  /// (one-tap "yes"). What you send reappears in the transcript via the live
+  /// tail once the agent records it.
+  Future<void> _sendComposer() async {
+    final client = _client;
+    if (client == null) return;
+    final text = _composer.text;
+    _composer.clear();
+    final trimmed = text.trim();
+    // Show it right away (a busy agent won't echo it until it drains the queue).
+    if (trimmed.isNotEmpty) {
+      setState(() {
+        _pending.add(trimmed);
+        _pinnedToBottom = true;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    }
+    try {
+      await client.sendText(widget.pane, '$text\r');
+    } catch (e) {
+      if (!mounted) return;
+      // The send failed — drop the optimistic echo and say why.
+      setState(() => _pending.remove(trimmed));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
+      );
+    }
+  }
+
+  /// Poll the parsed agent card so the approval bar always reflects the live
+  /// blocked state (clears on unblock, refreshes for a new prompt) — independent
+  /// of the snapshot, which can lag.
+  void _startAgentStatePolling() {
+    _agentStateTimer?.cancel();
+    _pollAgentState();
+    _agentStateTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _pollAgentState(),
+    );
+  }
+
+  Future<void> _pollAgentState() async {
+    final client = _client;
+    if (client == null || _disposed) return;
+    try {
+      final s = await client.getAgentState(widget.pane);
+      if (mounted) setState(() => _agentState = s);
+    } catch (_) {
+      // Non-agent / gone / transient — no bar.
+      if (mounted && _agentState != null) setState(() => _agentState = null);
+    }
+  }
+
+  /// Act on a tapped option: the highlighted default is a bare Enter (accepts
+  /// the default); any other choice types its number. Sent as raw input (`\r`)
+  /// so it works even if the snapshot's seq is stale. Optimistically hide the
+  /// bar; the next poll confirms.
+  void _handleOption(BlockedOption opt) {
+    _client?.sendText(widget.pane, opt.selected ? '\r' : '${opt.index}\r');
+    setState(() => _agentState = null);
   }
 
   /// The `wss?://…/agent-transcript?pane=&token=` URL, derived from the
@@ -185,6 +266,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         }
         if (_bySeq.containsKey(entry.seq)) return false; // de-dupe on seq
         _bySeq[entry.seq] = entry;
+        // A real user message landed → drop its matching optimistic echo.
+        if (entry.role == EntryRole.user && entry.kind == EntryKind.message) {
+          _pending.remove((entry.text ?? '').trim());
+        }
         return true;
       case TranscriptFrameType.unknown:
         return false;
@@ -293,6 +378,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _channel?.sink.close(ws_status.normalClosure);
       _attempts = 0;
       WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+      _startAgentStatePolling();
     }
 
     final agents =
@@ -347,18 +433,39 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: Stack(
+        child: Column(
           children: [
-            Positioned.fill(child: _buildBody(scheme)),
-            if (!_pinnedToBottom && _ordered.isNotEmpty)
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: FloatingActionButton.small(
-                  onPressed: _jumpToBottom,
-                  child: const Icon(Icons.arrow_downward),
-                ),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _buildBody(scheme)),
+                  if (!_pinnedToBottom && _ordered.isNotEmpty)
+                    Positioned(
+                      right: 16,
+                      bottom: 16,
+                      child: FloatingActionButton.small(
+                        onPressed: _jumpToBottom,
+                        child: const Icon(Icons.arrow_downward),
+                      ),
+                    ),
+                ],
               ),
+            ),
+            // Blocked → show the pending question + options as tappable buttons.
+            if (_agentState?.isBlocked == true)
+              _ApprovalBar(
+                state: _agentState!,
+                onOption: _handleOption,
+              ),
+            // Talk to the agent right from the chat — no need to drop to the raw
+            // terminal. Disabled once the pane is gone/unavailable.
+            _ComposerBar(
+              controller: _composer,
+              onSend: _sendComposer,
+              enabled: _conn != _Conn.closed &&
+                  _conn != _Conn.failed &&
+                  _failure == null,
+            ),
           ],
         ),
       ),
@@ -405,8 +512,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      itemCount: visible.length,
+      // Optimistic pending messages render after the real entries until the
+      // agent records them (or, for a busy agent, until it processes the queue).
+      itemCount: visible.length + _pending.length,
       itemBuilder: (context, i) {
+        if (i >= visible.length) {
+          return _PendingBubble(text: _pending[i - visible.length]);
+        }
         final entry = visible[i];
         return _EntryTile(
           entry: entry,
@@ -420,6 +532,144 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 }
 
 /// Dispatches one entry to the right bubble/card by kind.
+/// Shown above the composer while the agent is blocked: the pending question and
+/// its options as tappable buttons (the default is highlighted). Tapping the
+/// default approves via `/approve`; any other option types its number.
+class _ApprovalBar extends StatelessWidget {
+  const _ApprovalBar({required this.state, required this.onOption});
+
+  final AgentState state;
+  final void Function(BlockedOption) onOption;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final maxW = MediaQuery.sizeOf(context).width * 0.82;
+    final question = (state.blockedQuestion?.isNotEmpty ?? false)
+        ? state.blockedQuestion!
+        : (state.headline.isNotEmpty ? state.headline : 'Waiting for you');
+
+    return Container(
+      width: double.infinity,
+      color: scheme.errorContainer.withValues(alpha: 0.32),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2, right: 8),
+                child: Icon(Icons.pan_tool_outlined,
+                    size: 15, color: scheme.error),
+              ),
+              Expanded(
+                child: Text(
+                  question,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (state.options.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final o in state.options)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxW),
+                    child: o.selected
+                        ? FilledButton(
+                            onPressed: () => onOption(o),
+                            child: Text(o.label,
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          )
+                        : OutlinedButton(
+                            onPressed: () => onOption(o),
+                            child: Text(o.label,
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          ),
+                  ),
+              ],
+            ),
+          ] else
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Type your answer below.',
+                style:
+                    TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The bottom input bar — type a prompt (or an option number for a blocked
+/// prompt) and send it to the agent. The send button submits with a trailing
+/// newline; an empty send is a bare Enter (accepts a default prompt).
+class _ComposerBar extends StatelessWidget {
+  const _ComposerBar({
+    required this.controller,
+    required this.onSend,
+    required this.enabled,
+  });
+
+  final TextEditingController controller;
+  final Future<void> Function() onSend;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      color: scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: enabled,
+              minLines: 1,
+              maxLines: 5,
+              keyboardType: TextInputType.multiline,
+              decoration: InputDecoration(
+                hintText: enabled ? 'Message the agent…' : 'Unavailable',
+                filled: true,
+                fillColor: scheme.surface,
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(22),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          IconButton.filled(
+            tooltip: 'Send',
+            onPressed: enabled ? onSend : null,
+            icon: const Icon(Icons.send, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EntryTile extends StatelessWidget {
   const _EntryTile({required this.entry, this.result});
 
@@ -473,31 +723,185 @@ class _MessageBubble extends StatelessWidget {
     }
 
     final isUser = role == EntryRole.user;
-    final bg = isUser ? scheme.primaryContainer : scheme.surfaceContainerHigh;
-    final fg = isUser ? scheme.onPrimaryContainer : scheme.onSurface;
+
+    // Assistant: full-width, no bubble — the reply flows like a document, which
+    // reads far better for long content. Only the user's own messages get a
+    // right-aligned bubble.
+    if (!isUser) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+        child: _ExpandableMarkdown(
+          text: text,
+          fg: scheme.onSurface,
+          isUser: false,
+        ),
+      );
+    }
 
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.86,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.82,
         ),
-        margin: const EdgeInsets.symmetric(vertical: 4),
+        margin: const EdgeInsets.symmetric(vertical: 5),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isUser ? 16 : 4),
-            bottomRight: Radius.circular(isUser ? 4 : 16),
+          color: scheme.primaryContainer,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(16),
+            topRight: Radius.circular(16),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(4),
           ),
         ),
-        child: SelectableText(
-          text,
-          style: TextStyle(color: fg, fontSize: 14, height: 1.35),
+        child: _ExpandableMarkdown(
+          text: text,
+          fg: scheme.onPrimaryContainer,
+          isUser: true,
         ),
       ),
+    );
+  }
+}
+
+/// An optimistic "you" bubble for a message sent but not yet echoed back by the
+/// agent — right-aligned like a real user message, dimmed with a clock so it
+/// clearly reads as pending/queued.
+class _PendingBubble extends StatelessWidget {
+  const _PendingBubble({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Opacity(
+        opacity: 0.6,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+          ),
+          margin: const EdgeInsets.symmetric(vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(16),
+              bottomRight: Radius.circular(4),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                text,
+                style: TextStyle(color: scheme.onPrimaryContainer, height: 1.35),
+              ),
+              const SizedBox(height: 3),
+              Icon(Icons.schedule,
+                  size: 12, color: scheme.onPrimaryContainer.withValues(alpha: 0.7)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A markdown body that collapses a long message to a preview — only the
+/// preview is parsed and laid out until you expand it, so one huge reply can't
+/// stall the scroll. Short messages render in full with no toggle.
+class _ExpandableMarkdown extends StatefulWidget {
+  const _ExpandableMarkdown({
+    required this.text,
+    required this.fg,
+    required this.isUser,
+  });
+
+  final String text;
+  final Color fg;
+  final bool isUser;
+
+  @override
+  State<_ExpandableMarkdown> createState() => _ExpandableMarkdownState();
+}
+
+class _ExpandableMarkdownState extends State<_ExpandableMarkdown> {
+  bool _expanded = false;
+  static const _previewLines = 24;
+  static const _maxChars = 1800;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = widget.fg;
+    final text = widget.text;
+    final lineCount = '\n'.allMatches(text).length + 1;
+    final canCollapse = lineCount > _previewLines || text.length > _maxChars;
+
+    var shown = text;
+    if (canCollapse && !_expanded) {
+      shown = text.split('\n').take(_previewLines).join('\n');
+      if (shown.length > _maxChars) shown = shown.substring(0, _maxChars);
+      shown = '$shown\n…';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MarkdownBody(
+          data: shown,
+          selectable: true,
+          fitContent: true,
+          styleSheet: MarkdownStyleSheet(
+            p: TextStyle(color: fg, fontSize: 14, height: 1.35),
+            a: TextStyle(
+              color: widget.isUser ? fg : scheme.primary,
+              decoration: TextDecoration.underline,
+            ),
+            code: TextStyle(
+              color: fg,
+              fontFamily: AppTheme.monoFamily,
+              fontSize: 12.5,
+              backgroundColor: scheme.surface.withValues(alpha: 0.5),
+            ),
+            codeblockPadding: const EdgeInsets.all(10),
+            codeblockDecoration: BoxDecoration(
+              color: scheme.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            blockquoteDecoration: BoxDecoration(
+              color: scheme.surface.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            listBullet: TextStyle(color: fg, fontSize: 14, height: 1.35),
+            h1: TextStyle(color: fg, fontSize: 18, fontWeight: FontWeight.w700),
+            h2: TextStyle(color: fg, fontSize: 16, fontWeight: FontWeight.w700),
+            h3: TextStyle(color: fg, fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+        ),
+        if (canCollapse)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Text(
+                _expanded ? 'Show less' : 'Show more',
+                style: TextStyle(
+                  color: widget.isUser ? fg : scheme.primary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

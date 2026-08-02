@@ -43,6 +43,11 @@ class SnapshotController extends _$SnapshotController {
 
   @override
   Future<Snapshot> build() async {
+    // Keep the live `/events` connection alive for the whole session — without
+    // this the provider auto-disposes whenever no screen is watching it (brief
+    // navigation gaps, heavy rebuilds), which tears the socket down and
+    // reconnects in a loop, so live updates never land. One durable connection.
+    ref.keepAlive();
     ref.onDispose(_teardown);
     final client = ref.watch(bridgeClientProvider);
     if (client == null) {

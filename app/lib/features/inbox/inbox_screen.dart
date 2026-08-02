@@ -267,7 +267,7 @@ class _AgentTile extends ConsumerWidget {
 
     return InkWell(
       onTap: () =>
-          context.push('/terminal/${Uri.encodeComponent(agent.paneId)}'),
+          context.push('/transcript/${Uri.encodeComponent(agent.paneId)}'),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(

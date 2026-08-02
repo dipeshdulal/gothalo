@@ -125,7 +125,8 @@ class _AlertTile extends StatelessWidget {
       onTap: event.paneId.isEmpty
           ? null
           : () => context.push(
-                '/terminal/${Uri.encodeComponent(event.paneId)}',
+                // Alerts are always about an agent → open its chat view.
+                '/transcript/${Uri.encodeComponent(event.paneId)}',
               ),
       // A needs-you alert gets an urgent filled dot; done a completion check;
       // resolved a hollow ring — the kind reads at a glance without the label.
