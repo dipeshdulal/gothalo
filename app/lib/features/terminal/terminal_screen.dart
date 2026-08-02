@@ -234,6 +234,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               icon: const Icon(Icons.check_circle_outline),
               color: scheme.primary,
             ),
+          // The chat/transcript view is only meaningful for an agent pane.
+          if (agent != null)
+            IconButton(
+              tooltip: 'Chat view',
+              onPressed: () => context.push(
+                '/transcript/${Uri.encodeComponent(widget.pane)}',
+              ),
+              icon: const Icon(Icons.chat_bubble_outline),
+            ),
           IconButton(
             tooltip: 'Overview',
             onPressed: () => context.push('/overview'),
