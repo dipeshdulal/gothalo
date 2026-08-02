@@ -213,25 +213,30 @@ class _SpaceTabbedView extends ConsumerWidget {
                 for (final t in tabs)
                   Tab(
                     height: 44,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (t.focused)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 6),
-                            child: Icon(Icons.my_location, size: 14),
+                    // Long-press a tab to close it (Herdr parity via /herdr).
+                    child: GestureDetector(
+                      onLongPress: () => closeTab(context, ref, t.tabId),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (t.focused)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 6),
+                              child: Icon(Icons.my_location, size: 14),
+                            ),
+                          Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${t.paneCount}',
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontSize: 12,
+                            ),
                           ),
-                        Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${t.paneCount}',
-                          style: TextStyle(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
               ],
