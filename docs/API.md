@@ -57,6 +57,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below) |
 | GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
+| GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
@@ -225,6 +226,46 @@ Reconnect + re-fetch `/snapshot` is the resilience story (no mosh-style state
 sync). Resize is not yet wired — the PTY starts at 80×24 and Herdr repaints on
 attach. Errors before the upgrade: `404` if `pane` doesn't exist, `401` no/invalid
 token, `400` missing `pane`.
+
+## WS /events — unified push event stream
+`GET /events?token=<bearer>` upgraded to a **WebSocket** carrying a single
+unified event stream, so the app can stop refetching `/snapshot` after every
+action. Auth is via `?token=` (like `/attach`). The stream is **text JSON**:
+
+1. **On connect**, one **snapshot** frame — the full `/snapshot` payload plus the
+   bus `seq` it's consistent with:
+   ```json
+   { "type":"snapshot", "source":"gothalo", "seq":420, "ts":<ms>,
+     "snapshot": { "result": { "snapshot": { … } } } }   // same JSON as GET /snapshot
+   ```
+2. Then a stream of **delta** frames — the unified envelope:
+   ```json
+   { "source":"herdr"|"gothalo", "type":"<type>", "seq":<uint>, "ts":<ms>, "payload":{…} }
+   ```
+
+`seq` is process-monotonic (shared across sources + the snapshot baseline); every
+delta is `> baseline`. Track the last `seq` — a gap (`seq > last+1`) means
+reconnect (which re-snapshots). The stream carries **both** Herdr's normalized
+events (`source:"herdr"` — `pane_agent_status_changed`, `pane_created`,
+`tab_*`, `workspace_*`, `layout_updated`, …) and gothalo's own system events
+(`source:"gothalo"` — `approve_applied`, `pane_created`/`pane_closed`,
+`device_paired`, `push_sent`, `herdr_connected`/`herdr_disconnected`/`herdr_resync`).
+
+The bridge holds **one** Herdr socket subscription for the whole process and fans
+it out; every client is just another in-process subscriber (never one Herdr
+connection per client). A slow client is dropped with close code **`4000`** and
+must reconnect + re-snapshot. Re-snapshot on: socket close, a `4000`, a
+`gothalo.herdr_resync`, or a seq gap. `/events` is **server→client only** — any
+inbound frame ends the connection. Errors before upgrade: `401` no/invalid token.
+
+The **full envelope, the complete 25-type Herdr catalog + every gothalo type with
+real captured examples, the reverse-engineered Herdr socket framing, and the
+resync/reconnect rules** live in [`CONTRACT.md`](../CONTRACT.md) at the repo root
+— that's what the app-side `HerdrStore` is built against.
+
+`pane_agent_status_changed` payload is `{pane_id, workspace_id, agent,
+agent_status}`; it does **not** carry `state_change_seq` (Herdr's event omits
+it), so pair `pane_id` with the snapshot to get the seq for `/approve`.
 
 ## POST /pane/new — create a terminal from mobile
 Creates a pane and returns its identity so the app can immediately `/attach` to

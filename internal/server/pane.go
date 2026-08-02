@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/dipeshdulal/gothalo/internal/events"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
 
@@ -74,6 +75,13 @@ func (s *Server) handlePaneNew(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("created pane", "pane", pane.PaneID, "tab", pane.TabID, "workspace", pane.Workspace)
+	// gothalo.pane_created marks an APP-initiated pane (distinct from Herdr's own
+	// pane_created, which fires for every pane however created).
+	s.publish(events.TypeGothaloPaneCreated, map[string]any{
+		"pane_id":      pane.PaneID,
+		"tab_id":       pane.TabID,
+		"workspace_id": pane.Workspace,
+	})
 	writeJSON(w, map[string]string{
 		"pane_id":      pane.PaneID,
 		"tab_id":       pane.TabID,
@@ -99,5 +107,6 @@ func (s *Server) handlePaneClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Info("closed pane", "pane", body.PaneID)
+	s.publish(events.TypeGothaloPaneClosed, map[string]any{"pane_id": body.PaneID})
 	writeJSON(w, map[string]any{"closed": true, "pane_id": body.PaneID})
 }

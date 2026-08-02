@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
+import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
@@ -80,6 +81,13 @@ class OverviewScreen extends ConsumerWidget {
                   ],
                 ),
           actions: [
+            // A space owns a workspace, so we can open a fresh terminal in it.
+            if (workspaceId != null)
+              IconButton(
+                tooltip: 'New terminal',
+                onPressed: () => _newTerminal(context, ref, workspaceId!),
+                icon: const Icon(Icons.add),
+              ),
             IconButton(
               tooltip: 'Refresh',
               onPressed: () =>
@@ -555,6 +563,38 @@ class _PaneCard extends ConsumerWidget {
           ),
         ),
       );
+  }
+}
+
+/// Create a fresh terminal (a new tab) in [workspaceId] and open it. Refreshes
+/// the snapshot so the new pane shows up in the space too.
+Future<void> _newTerminal(
+  BuildContext context,
+  WidgetRef ref,
+  String workspaceId,
+) async {
+  final client = ref.read(bridgeClientProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  final router = GoRouter.of(context);
+  if (client == null) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No bridge connection.')),
+    );
+    return;
+  }
+  messenger.showSnackBar(
+    const SnackBar(
+      content: Text('Opening a new terminal…'),
+      duration: Duration(seconds: 1),
+    ),
+  );
+  try {
+    final pane = await client.createPane(workspaceId: workspaceId);
+    // No manual refresh: the live event stream surfaces the new pane on its own.
+    if (!context.mounted) return;
+    router.push('/terminal/${Uri.encodeComponent(pane.paneId)}');
+  } on BridgeException catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(e.message)));
   }
 }
 

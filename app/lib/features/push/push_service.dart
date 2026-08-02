@@ -22,6 +22,26 @@ final _local = FlutterLocalNotificationsPlugin();
 /// shell watches this and navigates to that agent's terminal.
 final pendingDeepLink = ValueNotifier<String?>(null);
 
+/// Stable, pane-keyed notification id: the same key is used to **show** a
+/// notification and later to **cancel** it, so a "dismiss" push can clear the
+/// exact one an earlier "blocked" push raised.
+int notificationIdFor(String pane) =>
+    pane.isEmpty ? 0 : (pane.hashCode & 0x7fffffff);
+
+/// True for a dismiss push — the bridge sends `type:"dismiss"` when a blocked
+/// agent is handled from anywhere (this phone, the desktop, another device, or
+/// the agent moving on), so the tray notification should be cleared.
+bool _isDismiss(Map<String, dynamic> data) =>
+    (data['type'] as String?)?.trim() == 'dismiss';
+
+/// Clear the pane's notification (a no-op if it's already gone).
+Future<void> _dismissFromData(Map<String, dynamic> data) async {
+  final agent = (data['agent'] as String?)?.trim() ?? '';
+  if (agent.isEmpty) return;
+  await _ensureLocal();
+  await _local.cancel(id: notificationIdFor(agent));
+}
+
 /// Renders a notification from a **data-only** FCM payload. gothalo pushes carry
 /// `title`, `body`, `agent` (== pane_id, the deep-link target) and `status`;
 /// data-only messages don't auto-display, so we build the notification here.
@@ -31,7 +51,7 @@ Future<void> _showFromData(Map<String, dynamic> data) async {
   final body = (data['body'] as String?)?.trim() ?? '';
   final agent = (data['agent'] as String?)?.trim() ?? '';
   await _local.show(
-    id: agent.isEmpty ? 0 : (agent.hashCode & 0x7fffffff),
+    id: notificationIdFor(agent),
     title: title == null || title.isEmpty ? 'Herdr agent' : title,
     body: body,
     notificationDetails: const NotificationDetails(
@@ -93,6 +113,10 @@ Future<void> _logStandalone(Map<String, dynamic> data) async {
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   DartPluginRegistrant.ensureInitialized();
+  if (_isDismiss(message.data)) {
+    await _dismissFromData(message.data);
+    return;
+  }
   await _showFromData(message.data);
   await _logStandalone(message.data);
 }
@@ -144,8 +168,13 @@ class PushController extends _$PushController {
       final messaging = FirebaseMessaging.instance;
       await messaging.requestPermission();
 
-      // Foreground data messages don't display themselves — render + log them.
+      // Foreground data messages don't display themselves — render + log them,
+      // or clear one if it's a dismiss.
       FirebaseMessaging.onMessage.listen((m) async {
+        if (_isDismiss(m.data)) {
+          await _dismissFromData(m.data);
+          return;
+        }
         await _showFromData(m.data);
         try {
           await _logToDb(ref.read(databaseProvider), m.data);

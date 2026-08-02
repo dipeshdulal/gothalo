@@ -18,7 +18,9 @@ import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
-enum _Conn { connecting, connected, disconnected }
+/// [closed] is terminal: the pane no longer exists (closed on the host or the
+/// agent finished), so we stop reconnecting.
+enum _Conn { connecting, connected, disconnected, closed }
 
 /// The live terminal — a real WebSocket to the bridge's `WS /attach`.
 ///
@@ -123,8 +125,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
   }
 
-  /// Socket closed or failed to open. Reconnect with capped backoff and pull a
-  /// fresh snapshot so the rest of the app reflects reality.
+  /// Socket closed or failed to open. Before reconnecting, find out whether the
+  /// pane still exists: a pane closed on the host (or a finished agent) will
+  /// never come back, so we stop and show a terminal [_Conn.closed] state
+  /// instead of reconnecting forever. A transient network drop (snapshot also
+  /// unreachable) keeps reconnecting with capped backoff.
   void _handleDrop() {
     if (_disposed) return;
     _sub?.cancel();
@@ -137,10 +142,35 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         '\r\n\x1b[2m— connection lost, reconnecting… —\x1b[0m\r\n',
       );
     }
-    // Re-fetch snapshot on the first drop (the pane may be gone/finished).
+    _attempts++;
+    unawaited(_checkGoneThenReconnect());
+  }
+
+  Future<void> _checkGoneThenReconnect() async {
+    final client = _client;
+    if (client == null || _disposed) return;
+    // Keep the rest of the app's snapshot fresh too.
     ref.read(snapshotControllerProvider.notifier).refresh();
 
-    _attempts++;
+    bool gone = false;
+    try {
+      final snap = await client.getSnapshot();
+      gone = !snap.panes.any((p) => p.paneId == widget.pane) &&
+          !snap.agents.any((a) => a.paneId == widget.pane);
+    } catch (_) {
+      // Couldn't reach the bridge to check → treat as a transient drop and
+      // keep retrying rather than falsely declaring the pane closed.
+      gone = false;
+    }
+    if (_disposed) return;
+
+    if (gone) {
+      _reconnectTimer?.cancel();
+      terminal.write('\r\n\x1b[2m— this pane was closed —\x1b[0m\r\n');
+      if (mounted) setState(() => _conn = _Conn.closed);
+      return;
+    }
+
     final delay = Duration(seconds: _attempts.clamp(1, 8));
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, _connect);
@@ -216,6 +246,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 _Conn.connected => 'Live',
                 _Conn.connecting => 'Connecting…',
                 _Conn.disconnected => 'Reconnecting…',
+                _Conn.closed => 'Closed',
               },
               child: Icon(
                 _conn == _Conn.connected
@@ -226,6 +257,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                   _Conn.connected => scheme.primary,
                   _Conn.connecting => scheme.onSurfaceVariant,
                   _Conn.disconnected => scheme.error,
+                  _Conn.closed => scheme.onSurfaceVariant,
                 },
               ),
             ),
@@ -235,18 +267,38 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       body: Column(
         children: [
           Expanded(
-            child: TerminalView(
-              terminal,
-              theme: TerminalThemes.defaultTheme,
-              textStyle: const TerminalStyle(fontFamily: AppTheme.monoFamily),
-              padding: const EdgeInsets.all(8),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: TerminalView(
+                    terminal,
+                    theme: TerminalThemes.defaultTheme,
+                    textStyle:
+                        const TerminalStyle(fontFamily: AppTheme.monoFamily),
+                    padding: const EdgeInsets.all(8),
+                  ),
+                ),
+                // The pane is gone — dim the last frame and offer a way out
+                // rather than sitting on a stale terminal.
+                if (_conn == _Conn.closed)
+                  Positioned.fill(
+                    child: _ClosedOverlay(
+                      onBack: () {
+                        if (context.canPop()) context.pop();
+                      },
+                      onOverview: () => context.push('/overview'),
+                    ),
+                  ),
+              ],
             ),
           ),
-          _AccessoryKeyRow(
-            stickyCtrl: _stickyCtrl,
-            onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
-            onKey: _send,
-          ),
+          // No point typing into a pane that no longer exists.
+          if (_conn != _Conn.closed)
+            _AccessoryKeyRow(
+              stickyCtrl: _stickyCtrl,
+              onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
+              onKey: _send,
+            ),
         ],
       ),
     );
@@ -266,6 +318,64 @@ class _TerminalSink implements Sink<String> {
 
   @override
   void close() {}
+}
+
+/// Shown over the last (now-stale) terminal frame once the pane is gone: a scrim
+/// with a short explanation and a way out, instead of a frozen terminal.
+class _ClosedOverlay extends StatelessWidget {
+  const _ClosedOverlay({required this.onBack, required this.onOverview});
+
+  final VoidCallback onBack;
+  final VoidCallback onOverview;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.scrim.withValues(alpha: 0.6),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.tab_unselected, size: 44, color: scheme.onSurface),
+              const SizedBox(height: 12),
+              Text(
+                'This pane was closed',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'It was closed on the host or the agent finished. The last screen is shown above.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: onOverview,
+                    icon: const Icon(Icons.grid_view_outlined, size: 18),
+                    label: const Text('Overview'),
+                  ),
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    onPressed: onBack,
+                    icon: const Icon(Icons.arrow_back, size: 18),
+                    label: const Text('Back'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// D6: a toolbar above the soft keyboard that writes control bytes the on-screen

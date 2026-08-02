@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/config"
+	"github.com/dipeshdulal/gothalo/internal/events"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/pairing"
 	"github.com/dipeshdulal/gothalo/internal/push"
@@ -29,12 +30,25 @@ type Server struct {
 	push    *push.Client // may be nil (FCM disabled -> notify logs only)
 	store   *store.Store
 	pairing *pairing.Manager
-	web     fs.FS // static receiver page assets
+	web     fs.FS       // static receiver page assets
+	bus     *events.Bus // unified event bus; may be nil (WS /events disabled)
 }
 
-// New constructs a Server. push may be nil.
-func New(cfg *config.Config, h *herdr.Client, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS) *Server {
-	return &Server{cfg: cfg, herdr: h, push: p, store: st, pairing: pm, web: web}
+// New constructs a Server. push and bus may be nil.
+func New(cfg *config.Config, h *herdr.Client, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus) *Server {
+	return &Server{cfg: cfg, herdr: h, push: p, store: st, pairing: pm, web: web, bus: bus}
+}
+
+// publish emits a gothalo.* system event onto the bus, if one is wired. It never
+// fails a request: a marshalling error is logged, not surfaced. This is the one
+// call every gothalo publisher (approve, pane, pairing, push) uses.
+func (s *Server) publish(typ string, payload any) {
+	if s.bus == nil {
+		return
+	}
+	if _, err := s.bus.Publish(events.SourceGothalo, typ, payload); err != nil {
+		log.Error("event publish failed", "type", typ, "err", err)
+	}
 }
 
 // Handler returns the routed http.Handler. More specific API routes are matched
@@ -47,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/agent-state", s.handleAgentState)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
 	mux.HandleFunc("/attach", s.handleAttach)
+	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)
 	mux.HandleFunc("/register-token", s.handleRegisterToken)
@@ -211,6 +226,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Info("paired device", "name", d.Name, "id", d.ID)
+	s.publish(events.TypeDevicePaired, map[string]any{"id": d.ID, "name": d.Name})
 	writeJSON(w, map[string]string{"id": d.ID, "bearer": d.Bearer, "name": d.Name})
 }
 
@@ -290,6 +306,12 @@ func (s *Server) Notify(paneID, status, title string, seq int) {
 		sent++
 	}
 	log.Info("pushed", "sent", sent, "total", len(tokens), "agent", paneID, "status", status)
+	// The bus mirrors the FCM fan-out as a gothalo.push_sent system event. (Later,
+	// FCM can move to being a bus SUBSCRIBER instead of the watcher calling Notify
+	// directly; this event keeps app clients aware of what was pushed either way.)
+	s.publish(events.TypePushSent, map[string]any{
+		"agent": paneID, "status": status, "title": title, "seq": seq, "sent": sent, "total": len(tokens),
+	})
 }
 
 func principal(id string) string {
