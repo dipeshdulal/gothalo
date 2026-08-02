@@ -59,3 +59,28 @@ Activity, in-app) inherits it.
 Validate snapshot → tailnet reach → notify trigger → real push (in a browser tab
 via FCM web push) entirely with curl/browser before writing Flutter. The app is
 drawn over a backend already trusted. See `TESTING.md`.
+
+## D10 — One `gothalo` binary: bridge + CLI (cobra)
+The bridge is now a proper CLI (`gothalo serve | pair | devices`) built on cobra,
+laid out as a standard Go module (`cmd/gothalo` + `internal/*`). `pair`/`devices`
+are thin clients of the running `serve` daemon over a localhost admin API, so the
+daemon stays the single source of truth for state.
+
+## D11 — QR pairing + per-device bearer tokens
+Devices onboard by scanning a QR (`gothalo pair` prints it) that encodes a
+one-time code + a connect URL. `POST /pair {code, device_name, fcm_token}` issues
+a **per-device bearer**, stored in `~/.gothalo/devices.json`. This replaces the
+single shared token and finally delivers real revocation (D4): `gothalo devices
+revoke <id>` kills one device's bearer *and* stops its pushes without touching
+the others. An operator **admin token** (auto-generated, in `config.json`) gates
+the CLI/admin endpoints and the web test page.
+
+## D12 — Pluggable transport; Tailscale is one option, not a requirement
+The HTTP API is a transport-agnostic `http.Handler`. A `transport.Transport`
+seam runs it under **direct** mode (listen locally — behind `tailscale serve`,
+or a LAN/tailnet IP) today, and a **relay** mode later: the bridge dials OUT to a
+small hosted broker over a persistent WebSocket, so phones reach it through the
+relay with no inbound ports and no Tailscale. Both feed the same handlers. Push
+stays outbound (D3) and per-device bearers still gate access (D4) in either mode.
+The pairing QR carries a generic connect endpoint so the app never hardcodes
+Tailscale. Relay is stubbed now (`internal/transport/relay`), wired later.
