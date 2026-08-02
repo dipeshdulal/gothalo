@@ -84,17 +84,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     super.dispose();
   }
 
-  /// Send the composer's text to the pane as input; a trailing newline submits
-  /// it. An empty send is just Enter — which accepts a blocked agent's default
-  /// prompt (one-tap "yes"). What you send reappears in the transcript via the
-  /// live tail, since the agent records it.
+  /// Send the composer's text to the pane as input. The submit key is a carriage
+  /// return (`\r`) — that's what a terminal sends for Enter; a line feed (`\n`)
+  /// only inserts a newline in the agent's input box without submitting. An
+  /// empty send is a bare Enter, which accepts a blocked agent's default prompt
+  /// (one-tap "yes"). What you send reappears in the transcript via the live
+  /// tail once the agent records it.
   Future<void> _sendComposer() async {
     final client = _client;
     if (client == null) return;
     final text = _composer.text;
     _composer.clear();
     try {
-      await client.sendText(widget.pane, '$text\n');
+      await client.sendText(widget.pane, '$text\r');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
