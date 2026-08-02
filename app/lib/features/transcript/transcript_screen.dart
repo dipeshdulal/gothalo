@@ -13,7 +13,6 @@ import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
-import '../approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import 'transcript_models.dart';
 
@@ -68,10 +67,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
 
-  /// The blocked prompt (question + options) fetched from `/agent-state`, shown
-  /// as an approval bar while the agent is blocked; null otherwise.
+  /// The blocked prompt (question + options), polled from `/agent-state`, shown
+  /// as an approval bar while the agent is blocked; null/not-blocked otherwise.
+  /// Polling (not the snapshot flag) is the source of truth so the bar clears
+  /// the instant the agent unblocks and refreshes for each new prompt.
   AgentState? _agentState;
-  bool _fetchingState = false;
+  Timer? _agentStateTimer;
+
+  /// Messages sent from the composer but not yet echoed back in the transcript
+  /// (a busy agent queues them). Shown optimistically so a send is never
+  /// invisible; each is dropped when its matching user message arrives.
+  final List<String> _pending = [];
 
   @override
   void initState() {
@@ -85,6 +91,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close(ws_status.normalClosure);
+    _agentStateTimer?.cancel();
     _scroll.dispose();
     _composer.dispose();
     super.dispose();
@@ -101,41 +108,58 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (client == null) return;
     final text = _composer.text;
     _composer.clear();
+    final trimmed = text.trim();
+    // Show it right away (a busy agent won't echo it until it drains the queue).
+    if (trimmed.isNotEmpty) {
+      setState(() {
+        _pending.add(trimmed);
+        _pinnedToBottom = true;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    }
     try {
       await client.sendText(widget.pane, '$text\r');
     } catch (e) {
       if (!mounted) return;
+      // The send failed — drop the optimistic echo and say why.
+      setState(() => _pending.remove(trimmed));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
       );
     }
   }
 
-  /// Pull the blocked prompt (question + options) for the approval bar.
-  Future<void> _fetchAgentState() async {
+  /// Poll the parsed agent card so the approval bar always reflects the live
+  /// blocked state (clears on unblock, refreshes for a new prompt) — independent
+  /// of the snapshot, which can lag.
+  void _startAgentStatePolling() {
+    _agentStateTimer?.cancel();
+    _pollAgentState();
+    _agentStateTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _pollAgentState(),
+    );
+  }
+
+  Future<void> _pollAgentState() async {
     final client = _client;
-    if (client == null) return;
+    if (client == null || _disposed) return;
     try {
       final s = await client.getAgentState(widget.pane);
-      if (mounted) {
-        setState(() {
-          _agentState = s;
-          _fetchingState = false;
-        });
-      }
+      if (mounted) setState(() => _agentState = s);
     } catch (_) {
-      if (mounted) setState(() => _fetchingState = false);
+      // Non-agent / gone / transient — no bar.
+      if (mounted && _agentState != null) setState(() => _agentState = null);
     }
   }
 
-  /// Act on a tapped option: the highlighted default approves (idempotent via
-  /// `/approve`); any other choice types its number + Enter.
-  void _handleOption(BlockedOption opt, Agent agent) {
-    if (opt.selected) {
-      approveAgent(context, ref, agent);
-    } else {
-      _client?.sendText(widget.pane, '${opt.index}\r');
-    }
+  /// Act on a tapped option: the highlighted default is a bare Enter (accepts
+  /// the default); any other choice types its number. Sent as raw input (`\r`)
+  /// so it works even if the snapshot's seq is stale. Optimistically hide the
+  /// bar; the next poll confirms.
+  void _handleOption(BlockedOption opt) {
+    _client?.sendText(widget.pane, opt.selected ? '\r' : '${opt.index}\r');
+    setState(() => _agentState = null);
   }
 
   /// The `wss?://…/agent-transcript?pane=&token=` URL, derived from the
@@ -242,6 +266,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         }
         if (_bySeq.containsKey(entry.seq)) return false; // de-dupe on seq
         _bySeq[entry.seq] = entry;
+        // A real user message landed → drop its matching optimistic echo.
+        if (entry.role == EntryRole.user && entry.kind == EntryKind.message) {
+          _pending.remove((entry.text ?? '').trim());
+        }
         return true;
       case TranscriptFrameType.unknown:
         return false;
@@ -350,6 +378,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _channel?.sink.close(ws_status.normalClosure);
       _attempts = 0;
       WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+      _startAgentStatePolling();
     }
 
     final agents =
@@ -361,23 +390,6 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         agent = a;
         break;
       }
-    }
-
-    // While the agent is blocked, surface its question + options as an approval
-    // bar (fetched once from /agent-state); clear it once it moves on.
-    final blocked = agent?.agentStatus == AgentStatus.blocked;
-    if (blocked && _agentState == null && !_fetchingState) {
-      _fetchingState = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _fetchAgentState());
-    } else if (!blocked && (_agentState != null || _fetchingState)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          setState(() {
-            _agentState = null;
-            _fetchingState = false;
-          });
-        }
-      });
     }
 
     final scheme = Theme.of(context).colorScheme;
@@ -440,10 +452,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               ),
             ),
             // Blocked → show the pending question + options as tappable buttons.
-            if (blocked && _agentState?.isBlocked == true && agent != null)
+            if (_agentState?.isBlocked == true)
               _ApprovalBar(
                 state: _agentState!,
-                onOption: (opt) => _handleOption(opt, agent!),
+                onOption: _handleOption,
               ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
@@ -500,8 +512,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      itemCount: visible.length,
+      // Optimistic pending messages render after the real entries until the
+      // agent records them (or, for a busy agent, until it processes the queue).
+      itemCount: visible.length + _pending.length,
       itemBuilder: (context, i) {
+        if (i >= visible.length) {
+          return _PendingBubble(text: _pending[i - visible.length]);
+        }
         final entry = visible[i];
         return _EntryTile(
           entry: entry,
@@ -742,6 +759,54 @@ class _MessageBubble extends StatelessWidget {
           text: text,
           fg: scheme.onPrimaryContainer,
           isUser: true,
+        ),
+      ),
+    );
+  }
+}
+
+/// An optimistic "you" bubble for a message sent but not yet echoed back by the
+/// agent — right-aligned like a real user message, dimmed with a clock so it
+/// clearly reads as pending/queued.
+class _PendingBubble extends StatelessWidget {
+  const _PendingBubble({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Opacity(
+        opacity: 0.6,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+          ),
+          margin: const EdgeInsets.symmetric(vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(16),
+              bottomRight: Radius.circular(4),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                text,
+                style: TextStyle(color: scheme.onPrimaryContainer, height: 1.35),
+              ),
+              const SizedBox(height: 3),
+              Icon(Icons.schedule,
+                  size: 12, color: scheme.onPrimaryContainer.withValues(alpha: 0.7)),
+            ],
+          ),
         ),
       ),
     );
