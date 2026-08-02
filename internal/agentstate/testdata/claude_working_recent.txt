@@ -1,0 +1,60 @@
+
+  Ran 2 shell commands
+
+⏺ Confirmed: agent attach rejects non-agent panes with agent_not_found. Let me check for a lower-level pane stream via the api subcommand and inspect pane read raw output.
+
+  Ran 5 shell commands
+
+⏺ Let me test the write path round-trip on the plain shell pane.
+
+  Ran 1 shell command
+
+⏺ Write path works. Let me verify the key-name vocabulary send-keys accepts for the control-byte translation layer.
+
+  Ran 1 shell command
+
+⏺ Let me test whether send-text passes raw control bytes (newline, Ctrl-C) straight to the PTY — that would let me forward WS bytes with minimal translation.
+
+  Ran 2 shell commands
+
+⏺ send-text passes raw bytes straight to the PTY — Ctrl-C (0x03) interrupted sleep. That means the write path needs no translation layer: forward WS bytes directly to pane send-text. Now let me verify \r submits, and
+  capture real JSON from tab create / pane split / pane run (creating then cleaning up).
+
+  Ran 1 shell command
+
+⏺ tab create returns result.root_pane.{pane_id,tab_id,workspace_id}. Now let me capture pane split, pane run, and pane close JSON, then clean up the test tab.
+
+  Ran 1 shell command
+
+⏺ Now let me capture pane close JSON, error shapes, and the full ANSI frame structure for the read loop.
+
+  Ran 1 shell command
+
+⏺ I have all the CLI behavior mapped. Let me look at the full ANSI visible frame and check the docs/API.md to match style.
+
+  Ran 1 shell command
+
+⏺ The visible ANSI frame already emits \r-terminated rows — ideal for repaint. Now let me confirm how to detect agent vs non-agent panes via pane get, and check docs/API.md style.
+
+  Ran 1 shell command
+
+⏺ Detection is clear. Let me check docs/API.md, the project layout, and confirm it builds.
+
+  Ran 1 shell command
+
+⏺ Let me read the attach WS section of the API docs to preserve its contract wording.
+
+  Searched for 1 pattern
+
+⏺ Detection and all primitives confirmed. Let me verify one edge: pane run with a multi-word command as a single argument (how the Go wrapper will pass it).
+
+  Ran 1 shell command
+
+⏺ Everything verified. Let me set up task tracking and implement.
+
+✢ Germinating… (5m 59s · ↓ 17.3k tokens · thought for 1s)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← 1 agent

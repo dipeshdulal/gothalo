@@ -1,0 +1,296 @@
+package agentstate
+
+import (
+	"regexp"
+	"strings"
+)
+
+// claudeParser parses Claude Code's TUI. Claude renders assistant prose as
+// "⏺ …" bullets, tool actions as "⏺ Running…"/"⎿ …" lines, an in-progress
+// spinner ("✻ Germinating…"), a fenced input box ("❯"), and — when blocked — a
+// permission/choice form after the last horizontal rule ("Do you want to
+// proceed?" + a numbered list). We trust herdr's authoritative status and only
+// extract the presentation for it. See docs/API.md and CONTRACT.md.
+type claudeParser struct{}
+
+func init() { Register(claudeParser{}) }
+
+func (claudeParser) Kind() string { return "claude" }
+
+func (p claudeParser) Parse(in Input) State {
+	st := State{Parsed: true}
+
+	// Transcript is a cheap few lines of recent readable content, useful in every
+	// state. Recent-unwrapped carries more history than the detection screen.
+	st.Transcript = lastN(claudeReadable(in.Recent), 12)
+
+	if in.Status == "blocked" {
+		if b := parseClaudeBlocked(in.Detection); b != nil {
+			st.Blocked = b
+			st.Headline = truncate(b.Question, 120)
+			st.Detail = claudeBlockedContext(in.Detection, b.Question)
+			if st.Detail == "" {
+				st.Detail = b.Question
+			}
+			return st
+		}
+		// Blocked but the form didn't match a shape we know (e.g. a free-form
+		// prompt). Fall through to the message path but keep an empty Blocked so
+		// the app still learns it must respond.
+		st.Blocked = &Blocked{Question: firstLine(lastClaudeMessage(in.Detection))}
+	}
+
+	// idle / working / done (and unrecognised blocked): surface the last assistant
+	// *prose* message. Prefer recent (fuller history) over the live screen.
+	msg := lastClaudeMessage(in.Recent)
+	if msg == "" {
+		msg = lastClaudeMessage(in.Detection)
+	}
+	if msg != "" {
+		st.Detail = msg
+		st.Headline = truncate(firstLine(msg), 120)
+		return st
+	}
+
+	// No prose on screen (a long tool-only working stretch, or a freshly-cleared
+	// "done" pane): fall back to the task title for the headline and the current
+	// tool activity for the detail, so the card still says something useful.
+	activity := lastClaudeActivity(in.Recent)
+	if activity == "" {
+		activity = lastClaudeActivity(in.Detection)
+	}
+	st.Headline = truncate(in.Title, 120)
+	if st.Headline == "" {
+		st.Headline = truncate(activity, 120)
+	}
+	if st.Headline == "" {
+		st.Headline = "Agent " + normalizeStatus(in.Status)
+	}
+	switch {
+	case activity != "":
+		st.Detail = activity
+	case in.Title != "":
+		st.Detail = in.Title
+	}
+	return st
+}
+
+// bulletPrefix is Claude's assistant-line marker "⏺ ".
+const bulletPrefix = "⏺"
+
+// claudeActionRE matches the first line of a *summary-style* tool-action bullet
+// ("Running 1 shell command…", "Read 3 files", "Reading…") as opposed to
+// assistant prose. Claude also renders tool calls as `ToolName(args)` — see
+// toolCallRE. Either shape is an action; we prefer prose for Detail.
+var claudeActionRE = regexp.MustCompile(`^(Running|Ran|Read|Reading|List(ed|ing)?|Search(ed|ing)?|Wrote|Writing|Updat(ed|ing)|Creat(ed|ing)|Delet(ed|ing)|Fetch(ed|ing)|Call(ed|ing)|Explor(ed|ing)|Analy(zed|zing|sed|sing)|Wait(ed|ing)|Bash|Compact(ed|ing)|Referenc(ed|ing))\b`)
+
+// toolCallRE matches Claude's tool-invocation bullet, e.g. "Update(docs/API.md)",
+// "Bash(git status)", "Read(main.go)" — an identifier immediately followed by a
+// parenthesised argument. These are actions, not prose.
+var toolCallRE = regexp.MustCompile(`^[A-Za-z][\w.-]*\(`)
+
+// isClaudeAction reports whether a bullet head is a tool action (either shape)
+// rather than assistant prose.
+func isClaudeAction(head string) bool {
+	return claudeActionRE.MatchString(head) || toolCallRE.MatchString(head)
+}
+
+// claudeBlock is one assistant bullet: its body (head + wrapped continuation) and
+// whether it is a tool action vs prose.
+type claudeBlock struct {
+	body   string
+	action bool
+}
+
+// claudeBlocks splits a snapshot into assistant bullet blocks in order. A block
+// is a "⏺ " line plus the blank/indented continuation lines under it (its wrapped
+// body and bullet list), stopping at the next bullet, a dedent, or nested tool
+// output ("⎿ …").
+func claudeBlocks(text string) []claudeBlock {
+	lines := splitLines(text)
+	var blocks []claudeBlock
+	for i := 0; i < len(lines); i++ {
+		if !strings.HasPrefix(strings.TrimLeft(lines[i], " "), bulletPrefix) {
+			continue
+		}
+		head := strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(lines[i], " "), bulletPrefix))
+		var buf []string
+		if head != "" {
+			buf = append(buf, head)
+		}
+		j := i + 1
+		for ; j < len(lines); j++ {
+			l := lines[j]
+			t := strings.TrimSpace(l)
+			if t == "" {
+				buf = append(buf, "")
+				continue
+			}
+			if !strings.HasPrefix(l, " ") { // dedented -> block ended
+				break
+			}
+			if strings.HasPrefix(t, "⎿") { // nested tool result -> not prose body
+				break
+			}
+			buf = append(buf, t)
+		}
+		i = j - 1
+		body := strings.TrimSpace(strings.Join(buf, "\n"))
+		if body == "" {
+			continue
+		}
+		blocks = append(blocks, claudeBlock{body: body, action: isClaudeAction(head)})
+	}
+	return blocks
+}
+
+// lastClaudeMessage returns the last assistant *prose* block body in text, or ""
+// when the screen holds only tool actions (a long tool-only stretch).
+func lastClaudeMessage(text string) string {
+	blocks := claudeBlocks(text)
+	for k := len(blocks) - 1; k >= 0; k-- {
+		if !blocks[k].action {
+			return blocks[k].body
+		}
+	}
+	return ""
+}
+
+// lastClaudeActivity returns the first line of the last bullet of any kind — the
+// current tool step — used as a detail fallback when there is no prose to show.
+func lastClaudeActivity(text string) string {
+	blocks := claudeBlocks(text)
+	if len(blocks) == 0 {
+		return ""
+	}
+	return firstLine(blocks[len(blocks)-1].body)
+}
+
+// parseClaudeBlocked extracts the question + options from Claude's blocker form.
+// The form is rendered after the last horizontal rule; we search that region
+// first and fall back to the whole detection screen. Returns nil when no
+// recognisable question/options are present (caller degrades gracefully).
+func parseClaudeBlocked(detection string) *Blocked {
+	region := afterLastRule(detection)
+	if q, opts := scanBlocked(region); q != "" || len(opts) > 0 {
+		return &Blocked{Question: q, Options: opts}
+	}
+	if q, opts := scanBlocked(splitLines(detection)); q != "" || len(opts) > 0 {
+		return &Blocked{Question: q, Options: opts}
+	}
+	return nil
+}
+
+// questionRE matches the prompt line Claude ends its blocker with.
+var questionRE = regexp.MustCompile(`(?i)(do you want to|would you like to|proceed\?|allow this|trust the files|overwrite\?)`)
+
+// scanBlocked pulls the question line and the numbered options out of a set of
+// lines. The question is the last line ending in "?" (or matching questionRE);
+// options are the numbered choices, with Selected set on the "❯"-marked default.
+func scanBlocked(lines []string) (question string, options []Option) {
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if m := numberedOptionRE.FindStringSubmatch(l); m != nil {
+			idx := atoi(m[2])
+			options = append(options, Option{
+				Index:    idx,
+				Label:    strings.TrimSpace(m[3]),
+				Selected: m[1] != "",
+			})
+			continue
+		}
+		if strings.HasSuffix(t, "?") || questionRE.MatchString(t) {
+			// Keep the last question before the options (Claude prints it directly
+			// above the list); options after this reset any earlier false positive.
+			if len(options) == 0 {
+				question = t
+			}
+		}
+	}
+	return question, options
+}
+
+// claudeBlockedContext returns the short context Claude prints above the question
+// (e.g. "Bash command / touch demo_output.txt / Create empty …") as the Detail,
+// so a phone card explains what's being approved. It takes the readable lines in
+// the blocker region that precede the question and aren't options/chrome.
+func claudeBlockedContext(detection, question string) string {
+	region := afterLastRule(detection)
+	var ctx []string
+	for _, l := range region {
+		t := strings.TrimSpace(l)
+		if t == "" || isRuleLine(l) {
+			continue
+		}
+		if t == question {
+			break
+		}
+		if numberedOptionRE.MatchString(l) || isChromeLine(t) {
+			continue
+		}
+		ctx = append(ctx, t)
+	}
+	return strings.TrimSpace(strings.Join(ctx, "\n"))
+}
+
+// afterLastRule returns the cleaned lines that follow the last horizontal rule in
+// text — the region Claude draws its live blocker form and footer in. When there
+// is no rule, it returns all lines.
+func afterLastRule(text string) []string {
+	lines := splitLines(text)
+	last := -1
+	for i, l := range lines {
+		if isRuleLine(l) {
+			last = i
+		}
+	}
+	if last < 0 {
+		return lines
+	}
+	return lines[last+1:]
+}
+
+// claudeReadable returns Claude content lines for the transcript: readable lines
+// with the assistant bullet marker stripped and Claude's spinner/recap chrome
+// removed, on top of the shared chrome filter.
+func claudeReadable(text string) []string {
+	var out []string
+	for _, l := range splitLines(text) {
+		t := strings.TrimSpace(l)
+		if t == "" || isRuleLine(l) || isBoxOnly(l) || isChromeLine(t) {
+			continue
+		}
+		if claudeSpinnerRE.MatchString(t) { // "✻ Germinating… (…)" progress line
+			continue
+		}
+		if strings.HasPrefix(t, "⎿") { // nested tool-result line — noise for a card
+			continue
+		}
+		t = strings.TrimSpace(strings.TrimPrefix(t, bulletPrefix))
+		if t == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// claudeSpinnerRE matches Claude's in-progress spinner line: a spinner glyph
+// (braille/asterisk) then a gerund and an ellipsis, e.g. "✻ Germinating… (3m…)".
+var claudeSpinnerRE = regexp.MustCompile(`^[✻✳✽∗\x{2800}-\x{28FF}]\s+\S+…`)
+
+// atoi parses a small non-negative integer, returning 0 on failure (options with
+// an unparseable index simply get Index 0).
+func atoi(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}

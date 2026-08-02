@@ -54,6 +54,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/snapshot` | — | raw Herdr snapshot JSON | live agent state (shape below) |
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
+| GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
@@ -116,6 +117,56 @@ The confirm keystroke is chosen per agent **kind** (`claude`, `codex`, …) from
 small server-side map, defaulting to **Enter** for unknown kinds — so the guard
 and the key selection both live in the bridge and every approval surface inherits
 them. `400` if the body lacks `agent`.
+
+## GET /agent-state — parsed agent card
+A compact, **parsed, plain-text** state for a single **agent** pane — the phone
+alternative to WS /attach's raw terminal. Instead of a full PTY you get one JSON
+struct: what the agent is doing, its last message, and — when blocked — the exact
+question and choices it's waiting on (which pair with `POST /approve`). Use it for
+agent panes; keep raw `/attach` for non-agent panes.
+```
+GET /agent-state?pane=<pane_id>
+Authorization: Bearer <bearer>          // same auth as everything; ?token= also works
+```
+Response `200` — the **stable contract** (kind-agnostic; the same shape for every
+agent kind):
+```jsonc
+{
+  "pane_id": "wQ:p2",
+  "agent_kind": "claude",               // herdr agent kind
+  "agent_status": "idle|working|blocked|done|unknown",
+  "headline": "…",                      // one line: what it's doing / last step (the question when blocked)
+  "detail": "…",                        // short plain-text body, ANSI/box-drawing already stripped
+  "blocked": {                          // present ONLY when agent_status == "blocked"
+    "question": "Do you want to proceed?",
+    "options": [                        // may be empty for free-form prompts
+      { "index": 1, "label": "Yes", "selected": true },
+      { "index": 2, "label": "Yes, and always allow…", "selected": false },
+      { "index": 3, "label": "No", "selected": false }
+    ]
+  },
+  "transcript": [ "…recent plain-text lines…" ],   // optional, best-effort
+  "parsed": true                        // false => unrecognised kind, raw text fallback
+}
+```
+Field notes for the app:
+- **`headline`** is always safe to render alone. When blocked it is the question.
+- **`detail`** is phone-ready plain text (may contain `\n`); when blocked it's the
+  context being approved (e.g. the command).
+- **`blocked.options`** are tap targets. `selected:true` marks the default that a
+  bare Enter accepts — so one-tap "Yes" is `POST /approve {agent, seq}` (Enter).
+  To pick a *non-default* option, type its number then Enter via
+  `POST /send {pane, text:"2\n"}`. `index` is that number (0 if unnumbered).
+- **`parsed:false`** means the agent kind has no dedicated parser yet, so
+  `detail`/`transcript` are a best-effort raw recent-text dump. The card still
+  renders; just don't rely on `blocked`. (claude is parsed today; codex and
+  opencode are next behind the same contract.)
+- `agent_status` is authoritative (straight from herdr). Pair it with the same
+  `state_change_seq` from `/snapshot` for `/approve`.
+
+Parsing never fails the request: an unrecognised layout degrades to `parsed:false`
+rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` no
+agent in that pane · `502` herdr command failed.
 
 ## WS /attach — live terminal (any pane)
 `GET /attach?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**. Auth is
@@ -190,4 +241,4 @@ pane closes the tab too. Errors: `400` missing `pane_id` · `404` unknown pane �
 
 ## Errors
 `401` missing/invalid bearer · `403` invalid pairing code · `400` bad body ·
-`404` unknown pane/tab/workspace · `502` herdr command failed.
+`404` unknown pane/tab/workspace, or no agent in that pane (`/agent-state`) · `502` herdr command failed.
