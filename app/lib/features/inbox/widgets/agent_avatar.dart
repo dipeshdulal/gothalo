@@ -19,7 +19,16 @@ const _brands = <String, AgentBrand>{
     color: Color(0xFFD97757),
     label: 'Claude',
   ),
-  'codex': AgentBrand(color: Color(0xFF10A37F), label: 'Codex'),
+  'codex': AgentBrand(
+    asset: 'assets/agents/codex.png',
+    color: Color(0xFFD5D5D5),
+    label: 'Codex',
+  ),
+  'hermes': AgentBrand(
+    asset: 'assets/agents/hermes.png',
+    color: Color(0xFFD8B45C),
+    label: 'Hermes',
+  ),
   'gemini': AgentBrand(color: Color(0xFF4285F4), label: 'Gemini'),
   'cursor': AgentBrand(color: Color(0xFF9AA0A6), label: 'Cursor'),
   'copilot': AgentBrand(color: Color(0xFF8957E5), label: 'Copilot'),
