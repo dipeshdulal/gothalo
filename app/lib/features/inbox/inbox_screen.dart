@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
@@ -21,7 +22,9 @@ class InboxScreen extends ConsumerWidget {
     final snapshot = ref.watch(snapshotControllerProvider);
     final connection = ref.watch(activeConnectionProvider).asData?.value;
 
-    return DefaultTabController(
+    return AppBackground(
+      asset: Backgrounds.flock,
+      child: DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
@@ -78,6 +81,7 @@ class InboxScreen extends ConsumerWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

@@ -49,17 +49,25 @@ class ServersRepository {
   FlutterSecureStorage get _secure => _ref.read(secureStorageProvider);
 
   /// Add or update a server. Splits the [Connection] across the two stores.
-  Future<void> save(Connection c) async {
+  ///
+  /// Deduped by `baseUrl`: adding or (re-)pairing a bridge that already exists
+  /// updates that entry in place — refreshing its bearer — rather than creating
+  /// a duplicate. Returns the effective saved connection (whose id may be the
+  /// existing one) and whether it already existed.
+  Future<({Connection saved, bool existed})> save(Connection c) async {
+    final existing = await _db.profileByBaseUrl(c.baseUrl);
+    final saved = existing == null ? c : c.copyWith(id: existing.id);
     await _db.upsertProfile(
       ProfilesCompanion(
-        id: Value(c.id),
-        name: Value(c.name),
-        baseUrl: Value(c.baseUrl),
-        deviceId: Value(c.deviceId),
-        source: Value(c.source.name),
+        id: Value(saved.id),
+        name: Value(saved.name),
+        baseUrl: Value(saved.baseUrl),
+        deviceId: Value(saved.deviceId),
+        source: Value(saved.source.name),
       ),
     );
-    await _secure.write(key: _bearerKey(c.id), value: c.bearer);
+    await _secure.write(key: _bearerKey(saved.id), value: saved.bearer);
+    return (saved: saved, existed: existing != null);
   }
 
   /// The bearer for a server, for prefilling the edit form. Secret — only used

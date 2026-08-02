@@ -91,6 +91,10 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  assets:
+    - assets/img/flock_bg.png
+    - assets/img/servers_bg.png
+
   fonts:
     # UI typeface — Inter (OFL). Bundled so it renders crisp offline, no flash.
     - family: Inter

@@ -69,6 +69,12 @@ class AppDatabase extends _$AppDatabase {
   Future<Profile?> profileById(String id) =>
       (select(profiles)..where((t) => t.id.equals(id))).getSingleOrNull();
 
+  /// Look up a saved server by its base URL, so re-adding/re-pairing the same
+  /// bridge updates the existing entry instead of creating a duplicate.
+  Future<Profile?> profileByBaseUrl(String baseUrl) =>
+      (select(profiles)..where((t) => t.baseUrl.equals(baseUrl)))
+          .getSingleOrNull();
+
   Future<int> countProfiles() async {
     final c = countAll();
     final row = await (selectOnly(profiles)..addColumns([c])).getSingle();

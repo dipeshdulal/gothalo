@@ -76,14 +76,19 @@ class _AddEditServerScreenState extends ConsumerState<AddEditServerScreen> {
     );
 
     final repo = ref.read(serversRepositoryProvider);
-    await repo.save(connection);
+    final result = await repo.save(connection);
     // Adding a server also selects it, so you land straight in its inbox.
     if (!widget.isEditing) {
-      await ref.read(activeServerIdProvider.notifier).set(id);
+      await ref.read(activeServerIdProvider.notifier).set(result.saved.id);
     }
 
     if (!mounted) return;
     setState(() => _saving = false);
+    if (result.existed && !widget.isEditing) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${result.saved.name} already exists — updated it')),
+      );
+    }
     if (widget.isEditing) {
       if (context.canPop()) context.pop();
     } else {
@@ -182,13 +187,9 @@ class _AddEditServerScreenState extends ConsumerState<AddEditServerScreen> {
                   if (!widget.isEditing) ...[
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                      onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('QR pairing arrives with the /pair flow'),
-                        ),
-                      ),
+                      onPressed: () => context.push('/pair'),
                       icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Pair with QR (soon)'),
+                      label: const Text('Pair with QR instead'),
                     ),
                   ],
                 ],

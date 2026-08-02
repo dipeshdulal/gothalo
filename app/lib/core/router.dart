@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/inbox/inbox_screen.dart';
+import '../features/pairing/pairing_screen.dart';
 import '../features/servers/add_edit_server_screen.dart';
 import '../features/servers/servers_screen.dart';
 import '../features/terminal/terminal_screen.dart';
@@ -22,6 +23,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/servers/add',
         builder: (context, state) => const AddEditServerScreen(),
+      ),
+      GoRoute(
+        path: '/pair',
+        builder: (context, state) => const PairingScreen(),
       ),
       GoRoute(
         path: '/servers/:id/edit',

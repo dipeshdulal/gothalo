@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 
@@ -53,11 +54,22 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Widget build(BuildContext context) {
     final servers = ref.watch(serversProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Servers')),
+    return AppBackground(
+      asset: Backgrounds.servers,
+      child: Scaffold(
+      appBar: AppBar(
+        title: const Text('Servers'),
+        actions: [
+          IconButton(
+            tooltip: 'Pair via QR',
+            onPressed: () => context.push('/pair'),
+            icon: const Icon(Icons.qr_code_scanner),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => context.push('/servers/add'),
-        tooltip: 'Add server',
+        tooltip: 'Add server manually',
         child: const Icon(Icons.add),
       ),
       body: servers.when(
@@ -80,6 +92,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
             },
           );
         },
+      ),
       ),
     );
   }
@@ -206,9 +219,15 @@ class _EmptyServers extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
+              onPressed: () => context.push('/pair'),
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Pair via QR'),
+            ),
+            const SizedBox(height: 10),
+            TextButton.icon(
               onPressed: () => context.push('/servers/add'),
               icon: const Icon(Icons.add),
-              label: const Text('Add your first server'),
+              label: const Text('Add manually'),
             ),
           ],
         ),
