@@ -238,13 +238,23 @@ agent's **own transcript file** (Claude Code writes JSONL at
 into a kind-agnostic chat schema — messages, thinking, tool calls (command + diff),
 and tool results.
 
-Read-only, server→client. Frames are **text JSON**, one entry per frame (contrast
-`/attach`'s binary raw bytes). On connect it sends a `hello`, replays the
-**backlog** (`entry` frames, `live:false`, oldest→newest, capped at 2000 newest —
-`has_more` flags older elided), a `backlog_complete` marker, then **tails** the
-file and pushes each new normalized `entry` (`live:true`) as the agent appends it
-(250 ms poll). Correlate a tool call with its result via `tool.id == result.for_id`;
-order on `seq` (a monotonic counter shared by backlog and tail).
+Frames are **text JSON**, one entry per frame (contrast `/attach`'s binary raw
+bytes). On connect it sends a `hello`, replays the **newest page** (`entry` frames,
+`live:false`, oldest→newest, ~150 newest — `has_older`/`has_more` flag older
+elided, `oldest_loaded_seq` is the paging cursor), a `backlog_complete` marker,
+then **tails** the file and pushes each new normalized `entry` (`live:true`) as the
+agent appends it (250 ms poll). Correlate a tool call with its result via
+`tool.id == result.for_id`; `seq` is the **absolute 1-based position** in the whole
+file (stable cursor across pages and the tail — order/de-dupe on it).
+
+**Paginated (protocol `2`).** To read older history the client sends a control
+frame `{"type":"load_older","before_seq":<int>,"limit":<int≤500, default 150>}`
+over the same socket; the server replies with that page (`entry` frames,
+`live:false`, oldest→newest, `seq < before_seq`) then
+`{"type":"page_complete","requested_before_seq","oldest_loaded_seq","has_older"}`.
+The live tail keeps running while a page loads. Any other/garbage inbound frame
+closes the socket cleanly (`1000`). Every page is read with a bounded ring buffer —
+the whole file is never held in memory.
 
 The transcript file is resolved from the pane's `cwd` + `agent_session.value`
 (Claude's session id == the filename), with a newest-matching-`cwd` fallback. This

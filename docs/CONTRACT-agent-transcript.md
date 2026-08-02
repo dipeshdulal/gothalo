@@ -255,10 +255,17 @@ GET ws(s)://<host>/agent-transcript?pane=<pane_id>&token=<bearer>
 | Protocol | WebSocket (upgrade of a GET). Use `wss://` in prod. |
 | Query | `pane` — the Herdr `pane_id` (e.g. `wN:p1`), from `/snapshot`. **Required.** |
 | Auth | `?token=<bearer>` — per-device bearer (from `/pair`) or the admin token. **Required in the query** because WS clients can't set headers (mirrors `/attach`). An `Authorization: Bearer` header also works if your client can send one. |
-| Direction | **Read-only, server→client.** The client sends nothing (anything it sends is ignored). Prompts/approvals still go through `POST /send` / `POST /approve`. |
+| Direction | **Mostly server→client**, plus one client control frame: `load_older` (paging up). Prompts/approvals still go through `POST /send` / `POST /approve`. |
 
-Per-connection state is only a byte offset into the file; closing the socket stops
-the tail. Auth is re-checked on connect (not per frame).
+Per-connection state is only a byte offset into the file (for the tail) plus the
+running `seq` counter; closing the socket stops the tail. Auth is re-checked on
+connect (not per frame).
+
+> **`protocol` is `2`.** The backlog is now **paginated**: connect sends only the
+> newest page (~150), reports the cursor in `hello`, and older history is fetched
+> on demand with a `load_older` control frame. Inbound frames are no longer
+> end-of-stream — a `load_older` is serviced; anything else closes the socket
+> cleanly.
 
 ---
 
@@ -268,40 +275,96 @@ Every frame is a **text** JSON object (contrast `/attach`, which is binary raw
 bytes). **One entry per frame** (never batched), so the app can render
 incrementally and back-pressure naturally. Each frame has a `type`:
 
+**Server → client:**
+
 | `type` | When | Payload |
 |---|---|---|
-| `hello` | once, first | identity + backlog stats |
-| `entry` | backlog, then live | one normalized entry; `live` is `false` for backlog, `true` for tail |
-| `backlog_complete` | once, after the backlog | boundary marker between backlog and live tail |
+| `hello` | once, first | identity + pagination stats |
+| `entry` | newest page, older pages, then live | one normalized entry; `live` is `false` for backlog/older pages, `true` for the tail |
+| `backlog_complete` | once, after the newest page | boundary marker between the newest page and the live tail |
+| `page_complete` | after each `load_older` reply | end-of-page marker + the new cursor |
 
-The stream is: **`hello` → `entry`×N (`live:false`, oldest→newest) →
-`backlog_complete` → `entry`… (`live:true`, forever until close)**.
+**Client → server** (the only inbound frame the server acts on):
+
+| `type` | When | Payload |
+|---|---|---|
+| `load_older` | to page up (fetch older history) | `{before_seq, limit}` |
+
+The stream on connect is: **`hello` → `entry`×N (`live:false`, the newest page,
+oldest→newest) → `backlog_complete` → `entry`… (`live:true`, forever until
+close)**. The **live tail runs continuously** — `load_older` replies are
+interleaved with live entries, so an `entry` with `live:false` after
+`backlog_complete` belongs to a page you requested, never to the tail.
+
+`seq` is the **absolute 1-based position** of an entry in the whole file's
+normalized stream (the newest entry's `seq` == `total`). It is a stable cursor:
+the same entry always has the same `seq` across the newest page, any older page,
+and the live tail.
 
 ### `hello`
 ```json
-{"type":"hello","protocol":1,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":1025,"total":1025,"has_more":false}
+{"type":"hello","protocol":2,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true}
 ```
 | Field | Type | Notes |
 |---|---|---|
-| `protocol` | int | Wire version. `1` today. |
+| `protocol` | int | Wire version. **`2`** (paginated backlog + `load_older`). |
 | `pane` | string | Echoes the requested pane. |
 | `agent_kind` | string | `claude` (later `codex`/`opencode`). |
 | `session_id` | string | The resolved transcript session id (see *Resolution*). |
-| `backlog_count` | int | How many `entry` frames the backlog will send. |
-| `total` | int | Total normalized entries in the whole file. |
-| `has_more` | bool | `true` ⇒ older entries were elided by the backlog cap (`total` > `backlog_count`). |
+| `backlog_count` | int | How many `entry` frames the newest page will send (≤ 150). |
+| `total` | int | Total normalized entries in the whole file. The newest entry's `seq` == `total`. |
+| `has_more` | bool | `true` ⇒ older entries exist before this page. **Equals `has_older`** (kept for back-compat). |
+| `oldest_loaded_seq` | int | Absolute `seq` of the oldest entry in this first page (`0` if the file is empty). **Pass it back as `load_older.before_seq`** to page up. |
+| `has_older` | bool | `true` ⇒ entries with `seq < oldest_loaded_seq` exist — there is more to page up. |
 
 ### `backlog_complete`
 ```json
-{"type":"backlog_complete","count":1025,"has_more":false}
+{"type":"backlog_complete","count":150,"has_more":true}
 ```
 Use it to hide a loading spinner and jump the scroll to the bottom; entries after
-it are live (`live:true`).
+it are live (`live:true`) **or** older-page entries you requested via `load_older`.
 
 ### `entry`
 ```json
 {"type":"entry","live":false,"entry": { …normalized entry… }}
 ```
+
+### `load_older` (client → server) and `page_complete` (reply)
+
+To page up, send a `load_older` control frame with the cursor you currently hold
+(the oldest `seq` you have — `hello.oldest_loaded_seq`, or the previous page's
+`page_complete.oldest_loaded_seq`):
+
+```json
+{"type":"load_older","before_seq":876,"limit":150}
+```
+| Field | Type | Notes |
+|---|---|---|
+| `before_seq` | int | Return entries with `seq < before_seq`. Use the oldest `seq` you already have. |
+| `limit` | int | Max entries in this page. Optional — omit/`0` ⇒ **150**; capped at **500**. |
+
+The server replies with the page — `entry` frames (`live:false`, **oldest→newest**)
+for the `limit` entries immediately older than `before_seq` — then a single
+`page_complete`:
+
+```json
+{"type":"page_complete","requested_before_seq":876,"oldest_loaded_seq":826,"has_older":true}
+```
+| Field | Type | Notes |
+|---|---|---|
+| `requested_before_seq` | int | Echoes the `before_seq` you asked for (correlate the reply). |
+| `oldest_loaded_seq` | int | Absolute `seq` of the oldest entry in **this page** (`0` if the page was empty). Your next `load_older.before_seq`. |
+| `has_older` | bool | `true` ⇒ still more to page up (`oldest_loaded_seq > 1`). `false` ⇒ you've reached the start of the file; stop. |
+
+Notes:
+- Pages are bounded and streamed from disk — the whole file is never held in
+  memory, no matter how deep you page.
+- The live tail keeps flowing while a page loads; the two never block each other.
+- An empty page (`before_seq ≤ 1`, or nothing older) returns just a
+  `page_complete` with `oldest_loaded_seq:0`, `has_older:false`.
+- Any inbound frame that isn't a well-formed `load_older` (garbage, unknown
+  `type`, binary) closes the socket cleanly with `1000` — it does **not** crash
+  the stream.
 
 ---
 
@@ -313,7 +376,7 @@ The same shape for every agent kind. Optional/empty fields are omitted.
 |---|---|---|
 | `id` | string | Unique per entry. One transcript line can expand into several entries (an assistant turn = text + N tool calls), so it's the source line's uuid plus a block index, e.g. `…f117#0`. |
 | `parent_id` | string? | The source line's `parentUuid` (threading), when present. |
-| `seq` | int | **1-based monotonic order across the whole stream** (backlog then live share one counter). Order and de-dupe on this; don't rely on `ts`. |
+| `seq` | int | **Absolute 1-based position in the whole file's normalized stream** (the newest entry's `seq` == `hello.total`). Stable across the newest page, older pages, and the live tail, so it's the paging cursor. Order and de-dupe on this; don't rely on `ts`. |
 | `ts` | string? | ISO-8601 timestamp of the source line. |
 | `role` | string | `user` \| `assistant` \| `system`. |
 | `kind` | string | `message` \| `thinking` \| `tool_call` \| `tool_result` \| `attachment`. |
@@ -452,9 +515,12 @@ client sees a real status:
 | `502` | the underlying `herdr` command failed | `herdr agent get …: <stderr>` |
 
 Once open, the socket closes with WebSocket **`1000` (normal closure)** when the
-client goes away or the server shuts the stream down. A transient tail read error
-(e.g. the file briefly unavailable during a rotation) is **not** fatal — the tail
-logs and keeps polling.
+client goes away, the server shuts the stream down, or the client sends an
+**unrecognized inbound frame** (anything that isn't a well-formed `load_older`) —
+the last case closes with reason `"unrecognized control frame"`. A transient tail
+read error (e.g. the file briefly unavailable during a rotation) is **not** fatal —
+the tail logs and keeps polling; likewise a `load_older` read error just yields an
+empty page rather than tearing down the socket.
 
 ---
 
@@ -462,15 +528,17 @@ logs and keeps polling.
 
 | Limit | Value | Effect |
 |---|---|---|
-| Backlog cap | **2000** newest normalized entries | Older entries are elided; `hello.has_more` / `backlog_complete.has_more` = `true`. No pagination endpoint — the cap is a live-view bound, not a history API. |
+| Newest page | **150** newest normalized entries on connect | Older entries are elided from the first page; `hello.has_more` / `has_older` / `backlog_complete.has_more` = `true`. Page up with `load_older`. |
+| `load_older` page | **150** default, **500** max per request | Omitted/`0` `limit` ⇒ 150; a larger `limit` is clamped to 500. |
 | Tool output | **4000 runes** per `output_summary` | Capped; `result.truncated = true`. |
 | Diff size | **400 lines / 12000 runes** per diff | Capped; `tool.diff_truncated` or `result.truncated = true`. |
 | Message/thinking body | **20000 runes** | Capped. |
 | Tail poll | **250 ms** | New appended lines surface within ~one poll. |
 
-Backpressure/safety: the backlog is read with a bounded ring buffer (the whole file
-is never held in memory); transcript content is only ever sent to the one
-authorized socket.
+Backpressure/safety: every page (newest **and** older) is read with a bounded ring
+buffer (the whole file is never held in memory, no matter how deep you page); an
+older page also stops scanning as soon as it reaches the cursor; transcript content
+is only ever sent to the one authorized socket.
 
 ---
 

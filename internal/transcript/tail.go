@@ -14,21 +14,30 @@ import (
 // entries, so this caps entries, not lines.
 const DefaultBacklogCap = 2000
 
-// Backlog is the normalized history sent on connect.
+// Backlog is the newest page of normalized history sent on connect.
 type Backlog struct {
-	// Entries are the newest (up to cap) normalized entries, in file order.
+	// Entries are the newest (up to cap) normalized entries, in file order, with
+	// their absolute Seq stamped (see OldestSeq).
 	Entries []Entry
-	// HasMore is true when older entries were elided by the cap.
+	// HasMore is true when older entries exist before this page (seq < OldestSeq).
 	HasMore bool
-	// Total is how many normalized entries the whole file produced.
+	// Total is how many normalized entries the whole file produced. The newest
+	// entry's absolute seq is Total.
 	Total int
+	// OldestSeq is the absolute 1-based seq of the first (oldest) entry in this
+	// page, or 0 when the file is empty. It is the cursor a client passes back as
+	// load_older's before_seq to fetch the page immediately older than this one.
+	OldestSeq int
 }
 
 // ReadBacklog scans the transcript once, normalizing every line, and returns the
 // last cap entries plus the byte offset to resume tailing from (the end of the
-// last complete line). Memory is bounded to cap entries via a ring buffer — the
-// whole file is never held. A trailing partial line (mid-append) is left for the
-// tailer and excluded from the offset.
+// last complete line). Every returned entry carries its ABSOLUTE 1-based seq (its
+// position in the whole file's normalized stream), so the page's oldest seq is a
+// stable cursor into the file even though older entries were elided. Memory is
+// bounded to cap entries via a ring buffer — the whole file is never held. A
+// trailing partial line (mid-append) is left for the tailer and excluded from the
+// offset.
 func ReadBacklog(path string, r Reader, cap int) (Backlog, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -63,7 +72,88 @@ func ReadBacklog(path string, r Reader, cap int) (Backlog, int64, error) {
 			break
 		}
 	}
-	return Backlog{Entries: rb.slice(), HasMore: dropped, Total: total}, offset, nil
+	entries := rb.slice()
+	// The kept slice is the tail of the stream, so its entries occupy the absolute
+	// seq range [total-len+1 .. total]. Stamp each so the client has a real cursor.
+	base := total - len(entries)
+	for i := range entries {
+		entries[i].Seq = base + i + 1
+	}
+	oldest := 0
+	if len(entries) > 0 {
+		oldest = base + 1
+	}
+	return Backlog{Entries: entries, HasMore: dropped, Total: total, OldestSeq: oldest}, offset, nil
+}
+
+// OlderPage is a page of history strictly older than a cursor, returned by
+// ReadOlder to service a client's load_older request.
+type OlderPage struct {
+	// Entries are up to `limit` normalized entries immediately older than the
+	// requested before_seq, in oldest→newest order, with absolute Seq stamped.
+	Entries []Entry
+	// OldestSeq is the absolute seq of the first (oldest) entry in this page. When
+	// the page is empty (nothing older existed) it is 0.
+	OldestSeq int
+	// HasOlder is true when entries older than this page still exist (OldestSeq > 1).
+	HasOlder bool
+}
+
+// ReadOlder returns the page of up to `limit` normalized entries immediately older
+// than beforeSeq — entries whose absolute 1-based seq is < beforeSeq — in
+// oldest→newest order, each with its absolute Seq stamped. Memory is bounded to
+// `limit` entries via a ring buffer (the whole file is never held), and scanning
+// stops as soon as the seq counter reaches beforeSeq, so paging near the head of a
+// large file stays cheap. This is the load_older cursor read; the live tail is
+// unaffected and keeps running independently.
+func ReadOlder(path string, r Reader, beforeSeq, limit int) (OlderPage, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	// Nothing can be older than the first entry.
+	if beforeSeq <= 1 {
+		return OlderPage{}, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return OlderPage{}, err
+	}
+	defer f.Close()
+
+	rb := newRing(limit)
+	br := bufio.NewReaderSize(f, 128*1024)
+	seq := 0
+scan:
+	for {
+		lineBytes, rerr := br.ReadBytes('\n')
+		if len(lineBytes) > 0 && rerr == nil {
+			if trimmed := bytes.TrimRight(lineBytes, "\r\n"); len(trimmed) > 0 {
+				for _, e := range r.Normalize(trimmed) {
+					seq++
+					if seq >= beforeSeq {
+						break scan // reached the cursor; entries from here are not older
+					}
+					e.Seq = seq
+					rb.push(e)
+				}
+			}
+		}
+		if rerr != nil {
+			if rerr != io.EOF {
+				return OlderPage{}, rerr
+			}
+			break
+		}
+	}
+
+	entries := rb.slice()
+	page := OlderPage{Entries: entries}
+	if len(entries) > 0 {
+		page.OldestSeq = entries[0].Seq
+		page.HasOlder = entries[0].Seq > 1
+	}
+	return page, nil
 }
 
 // Tailer follows a transcript file from a byte offset, yielding newly-appended
