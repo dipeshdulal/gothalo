@@ -18,18 +18,16 @@ class AlertsScreen extends ConsumerStatefulWidget {
 }
 
 class _AlertsScreenState extends ConsumerState<AlertsScreen> {
-  @override
-  void initState() {
-    super.initState();
-    // Seeing the list counts as reading it.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(databaseProvider).markAllHandled();
-    });
-  }
+  /// Row ids that were unread when this screen opened — highlighted for this
+  /// viewing even after we clear the badge, so "what's new" stays visible.
+  /// Captured from the first data emission (before [markAllHandled] runs).
+  Set<int>? _unreadOnOpen;
+  bool _markedRead = false;
 
   @override
   Widget build(BuildContext context) {
     final alerts = ref.watch(alertsProvider);
+    final live = ref.watch(activeAgentsByPaneProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Alerts'),
@@ -47,6 +45,18 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
         error: (e, _) => Center(child: Text('$e')),
         data: (events) {
           if (events.isEmpty) return const _EmptyAlerts();
+          // Snapshot the unread set once, from the first real data, then mark
+          // everything read on the next frame (clears the bell badge).
+          _unreadOnOpen ??= {
+            for (final e in events)
+              if (!e.handled) e.rowId,
+          };
+          if (!_markedRead) {
+            _markedRead = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              ref.read(databaseProvider).markAllHandled();
+            });
+          }
           return ListView.builder(
             padding: const EdgeInsets.only(bottom: 24),
             itemCount: events.length,
@@ -60,7 +70,15 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (showHeader) _DayHeader(label: header),
-                  _AlertTile(event: e),
+                  _AlertTile(
+                    event: e,
+                    unread: _unreadOnOpen!.contains(e.rowId),
+                    liveness: alertLiveness(
+                      e,
+                      activeProfileId: live.profileId,
+                      byPane: live.byPane,
+                    ),
+                  ),
                 ],
               );
             },
@@ -72,57 +90,135 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
 }
 
 class _AlertTile extends StatelessWidget {
-  const _AlertTile({required this.event});
+  const _AlertTile({
+    required this.event,
+    required this.unread,
+    required this.liveness,
+  });
   final AgentEvent event;
+
+  /// Was this alert unread when the screen opened — drives the emphasis.
+  final bool unread;
+
+  /// Does the alert still reflect the agent's live state.
+  final AlertLiveness liveness;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final blocked = event.status == 'blocked';
-    final color = blocked ? const Color(0xFFFF5252) : const Color(0xFF00C853);
-    return ListTile(
+    // Only a still-blocked alert wants you; done and resolved are both settled,
+    // so both recede (dimmed, muted title) — just with different markers.
+    final needsYou = liveness == AlertLiveness.needsYou;
+    final settled = !needsYou;
+    const blockedColor = Color(0xFFFF5252);
+    const doneColor = Color(0xFF00C853);
+
+    // Three reads: needs-you (urgent red), done (calm green completion), and
+    // resolved (a stale ask that no longer wants you — dimmed, hollow).
+    final (statusLabel, statusColor) = switch (liveness) {
+      AlertLiveness.needsYou => ('blocked', blockedColor),
+      AlertLiveness.done => ('done', doneColor),
+      AlertLiveness.resolved => ('resolved', scheme.onSurfaceVariant),
+    };
+
+    final tile = ListTile(
       onTap: event.paneId.isEmpty
           ? null
           : () => context.push(
                 '/terminal/${Uri.encodeComponent(event.paneId)}',
               ),
-      leading: Container(
-        width: 10,
-        height: 10,
-        margin: const EdgeInsets.only(top: 6),
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      // A needs-you alert gets an urgent filled dot; done a completion check;
+      // resolved a hollow ring — the kind reads at a glance without the label.
+      leading: SizedBox(
+        width: 16,
+        child: switch (liveness) {
+          AlertLiveness.done => const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Icon(Icons.check_circle, size: 15, color: doneColor),
+            ),
+          AlertLiveness.resolved => Container(
+              width: 12,
+              height: 12,
+              margin: const EdgeInsets.only(top: 6),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border:
+                    Border.all(color: scheme.onSurfaceVariant, width: 1.5),
+              ),
+            ),
+          AlertLiveness.needsYou => Container(
+              width: 12,
+              height: 12,
+              margin: const EdgeInsets.only(top: 6),
+              decoration: const BoxDecoration(
+                color: blockedColor,
+                shape: BoxShape.circle,
+              ),
+            ),
+        },
       ),
       title: Text(
         event.title.isEmpty ? event.paneId : event.title,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w600),
+        style: TextStyle(
+          fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+          color: settled ? scheme.onSurfaceVariant : null,
+        ),
       ),
       subtitle: Row(
         children: [
-          Text(
-            event.status.isEmpty ? 'alert' : event.status,
-            style: TextStyle(color: color, fontWeight: FontWeight.w600),
-          ),
-          Text('  ·  ', style: TextStyle(color: scheme.onSurfaceVariant)),
-          Text(
-            event.paneId,
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontFamily: AppTheme.monoFamily,
-              fontSize: 12,
+          Flexible(
+            child: Text(
+              statusLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),
             ),
           ),
-          const Spacer(),
+          Text('  ·  ', style: TextStyle(color: scheme.onSurfaceVariant)),
+          Flexible(
+            child: Text(
+              event.paneId,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: scheme.onSurfaceVariant,
+                fontFamily: AppTheme.monoFamily,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
           Text(
             _timeAgo(event.receivedAt),
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
         ],
       ),
-      trailing: event.paneId.isEmpty
-          ? null
-          : Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+      trailing: unread
+          ? Container(
+              width: 8,
+              height: 8,
+              decoration:
+                  BoxDecoration(color: scheme.primary, shape: BoxShape.circle),
+            )
+          : (event.paneId.isEmpty
+              ? null
+              : Icon(Icons.chevron_right, color: scheme.onSurfaceVariant)),
+    );
+
+    // Unread → accent left-bar + faint tint. Resolved → dimmed as a whole.
+    return Container(
+      decoration: unread
+          ? BoxDecoration(
+              color: scheme.primary.withValues(alpha: 0.05),
+              border: Border(
+                left: BorderSide(color: scheme.primary, width: 3),
+              ),
+            )
+          : null,
+      child: settled ? Opacity(opacity: 0.6, child: tile) : tile,
     );
   }
 }
