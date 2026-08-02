@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
@@ -585,9 +586,36 @@ class _MessageBubble extends StatelessWidget {
             bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
         ),
-        child: SelectableText(
-          text,
-          style: TextStyle(color: fg, fontSize: 14, height: 1.35),
+        child: MarkdownBody(
+          data: text,
+          selectable: true,
+          fitContent: true,
+          styleSheet: MarkdownStyleSheet(
+            p: TextStyle(color: fg, fontSize: 14, height: 1.35),
+            a: TextStyle(
+              color: isUser ? fg : scheme.primary,
+              decoration: TextDecoration.underline,
+            ),
+            code: TextStyle(
+              color: fg,
+              fontFamily: AppTheme.monoFamily,
+              fontSize: 12.5,
+              backgroundColor: scheme.surface.withValues(alpha: 0.5),
+            ),
+            codeblockPadding: const EdgeInsets.all(10),
+            codeblockDecoration: BoxDecoration(
+              color: scheme.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            blockquoteDecoration: BoxDecoration(
+              color: scheme.surface.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            listBullet: TextStyle(color: fg, fontSize: 14, height: 1.35),
+            h1: TextStyle(color: fg, fontSize: 18, fontWeight: FontWeight.w700),
+            h2: TextStyle(color: fg, fontSize: 16, fontWeight: FontWeight.w700),
+            h3: TextStyle(color: fg, fontSize: 15, fontWeight: FontWeight.w700),
+          ),
         ),
       ),
     );
