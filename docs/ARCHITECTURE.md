@@ -39,6 +39,8 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 |---|---|---|---|
 | GET  | `/snapshot` | device bearer or admin | live Herdr state |
 | POST | `/send` | device bearer or admin | type into a pane |
+| POST | `/approve` | device bearer or admin | idempotent one-tap approval (D8) |
+| GET  | `/attach` | device bearer or admin (`?token=`) | WS live terminal (PTY-streamed) |
 | POST | `/register-token` | device bearer or admin | (re)register a push token |
 | POST | `/testpush` | device bearer or admin | fan a sample push to all devices |
 | POST | `/pair` | one-time code | issue a per-device bearer |
@@ -54,7 +56,17 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
   time. Push fans out to every device's FCM token.
 
 ## Notifications
-The watcher fires `server.Notify(pane, status, title)` on each transition into
-`blocked`/`done`; Notify pushes a **data-only, high-urgency** FCM message to every
-registered device (reliable lock-screen delivery). A pre-existing blocked/done
-state at watcher start is not replayed.
+The watcher fires `server.Notify(pane, status, title, seq)` on each transition
+into `blocked`/`done`; Notify pushes a **data-only, high-urgency** FCM message to
+every registered device (reliable lock-screen delivery). The message carries the
+agent's `state_change_seq` so an **Approve** action tapped later can echo it back
+to `POST /approve`, which no-ops if the agent has moved past that seq (D8). A
+pre-existing blocked/done state at watcher start is not replayed.
+
+## Live terminal (`WS /attach`)
+`GET /attach` upgrades to a WebSocket (`github.com/coder/websocket`) and runs
+`herdr agent attach <pane>` under a PTY (`github.com/creack/pty`). Two `io.Copy`
+loops bridge the PTY and the socket (via `websocket.NetConn`, binary frames):
+pty stdout → WS and WS → pty stdin. Whichever side ends first tears down the
+other and the subprocess is killed. Auth accepts `?token=` since WS clients can't
+always set headers.

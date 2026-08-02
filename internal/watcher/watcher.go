@@ -14,8 +14,10 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
 
-// NotifyFunc is called once per transition into blocked/done.
-type NotifyFunc func(paneID, status, title string)
+// NotifyFunc is called once per transition into blocked/done. seq is the
+// agent's state_change_seq at the transition — carried into the push so a
+// lock-screen approve can be idempotent (D8).
+type NotifyFunc func(paneID, status, title string, seq int)
 
 // Watcher observes Herdr agents via a herdr.Client.
 type Watcher struct {
@@ -91,7 +93,7 @@ func (w *Watcher) watchAgent(pane, initialStatus string, done func()) {
 			return // agent gone
 		}
 		if r.Status == "blocked" || r.Status == "done" {
-			w.notify(pane, r.Status, r.Title)
+			w.notify(pane, r.Status, r.Title, r.StateChangeSeq)
 		}
 		// Wait for it to leave blocked/done before looping, so we catch the
 		// NEXT entry instead of re-firing the same still-current state.
@@ -116,7 +118,7 @@ func (w *Watcher) pollLoop() {
 		for _, a := range agents {
 			prev := seen[a.PaneID]
 			if !first && a.Status != prev && (a.Status == "blocked" || a.Status == "done") {
-				w.notify(a.PaneID, a.Status, a.Title)
+				w.notify(a.PaneID, a.Status, a.Title, a.StateChangeSeq)
 			}
 			seen[a.PaneID] = a.Status
 		}

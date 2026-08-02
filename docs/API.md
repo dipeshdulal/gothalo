@@ -53,6 +53,8 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 |---|---|---|---|---|
 | GET  | `/snapshot` | — | raw Herdr snapshot JSON | live agent state (shape below) |
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
+| POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
+| GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal stream (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
 | POST | `/testpush` | — | `{ok:true,sent:true}` | fan a sample push to all devices (test your FCM handler) |
 
@@ -62,25 +64,30 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
   { "agent": "claude",
     "agent_status": "idle|working|blocked|done|unknown",
     "pane_id": "wN:p2",
+    "state_change_seq": 42,
     "terminal_title_stripped": "…",
     "workspace_id": "wN",
     "cwd": "/…" }
 ] } } }
 ```
 Group by `workspace_id`; badge on `agent_status`; title = `terminal_title_stripped`;
-`pane_id` is the id used for `/send` and (later) approvals.
+`pane_id` is the id used for `/send`, `/approve`, and `/attach`.
+`state_change_seq` is a per-agent monotonic counter Herdr bumps on every state
+transition — pass it to `/approve` as the idempotency token (see below).
 
 ## Push messages (what your FCM handler receives)
 Messages are **data-only** (no `notification` block) so your handler always runs
 and renders the notification itself (reliable on locked Android). Data keys:
 ```
-title   e.g. "Herdr agent blocked"
-body    the agent's terminal title
-agent   the pane_id (e.g. "wN:p2")  -> deep-link target
-status  "blocked" | "done"
+title             e.g. "Herdr agent blocked"
+body              the agent's terminal title
+agent             the pane_id (e.g. "wN:p2")  -> deep-link target
+status            "blocked" | "done"
+state_change_seq  the agent's seq at this transition (string int) -> pass to /approve
 ```
 Render a local notification from `title`/`body`; tapping it should deep-link to
-the agent identified by `agent` (== `pane_id`).
+the agent identified by `agent` (== `pane_id`). Carry `state_change_seq` into any
+lock-screen/banner **Approve** action so `/approve` can no-op a stale tap (D8).
 
 ### Native FCM setup
 Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
@@ -88,11 +95,41 @@ Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
 `firebase_messaging`, pass it as `fcm_token` during `/pair`, and
 `POST /register-token {token}` whenever it refreshes.
 
+## POST /approve — idempotent one-tap approval (D8)
+One-tap "yes" for a **blocked** agent, safe to fire from a stale lock-screen
+banner. The bridge sends the agent's confirm keystroke **only if** the agent is
+still blocked at the `seq` you carried; otherwise it no-ops and tells you why.
+```
+POST /approve
+{ "agent": "wN:p2", "seq": 42 }        // seq == the agent's state_change_seq
+```
+Response `200` (always `200` — `applied` tells you what happened):
+```json
+{ "ok": true, "applied": true }                                  // confirm keystroke sent
+{ "ok": true, "applied": false, "reason": "agent is working, not blocked" }
+{ "ok": true, "applied": false, "reason": "stale seq: approve carried 42, agent now at 45" }
+{ "ok": true, "applied": false, "reason": "no such agent" }
+```
+The confirm keystroke is chosen per agent **kind** (`claude`, `codex`, …) from a
+small server-side map, defaulting to **Enter** for unknown kinds — so the guard
+and the key selection both live in the bridge and every approval surface inherits
+them. `400` if the body lacks `agent`.
+
+## WS /attach — live terminal
+`GET /attach?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**. Auth is
+via `?token=` (WS clients can't always set an `Authorization` header); the same
+bearer/admin token works. The bridge runs `herdr agent attach <pane>` under a PTY
+and bridges it to the socket:
+- **pty stdout → WS**: server sends **binary** frames — raw terminal bytes; feed
+  them straight into your terminal emulator (`xterm.dart`).
+- **WS → pty stdin**: send **binary** frames — raw keystrokes and control bytes
+  (the accessory key row writes Esc `0x1b`, Ctrl-C `0x03`, arrows `\e[A`… here).
+
+Frames MUST be binary; a text frame closes the connection (`1003`). The attach
+subprocess is killed when the socket closes (either side). Reconnect + re-fetch
+`/snapshot` is the resilience story (no mosh-style state sync). Resize is not yet
+wired — the PTY starts at 80×24 and Herdr repaints on attach.
+
 ## Errors
 `401` missing/invalid bearer · `403` invalid pairing code · `400` bad body ·
 `502` herdr command failed.
-
-## Not built yet (stub in the app, don't block on them)
-- `WS /attach` (live terminal stream) — coming in a later backend phase.
-- `POST /approve {agent, seq}` (idempotent approvals) — coming; for now "approve"
-  = `/send` the agent's confirm keystroke.

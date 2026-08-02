@@ -5,6 +5,8 @@ go 1.26.5
 require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/log v1.0.0
+	github.com/coder/websocket v1.8.15
+	github.com/creack/pty v1.1.24
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/spf13/cobra v1.10.2
 )

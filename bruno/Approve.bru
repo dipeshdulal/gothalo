@@ -1,0 +1,29 @@
+meta {
+  name: Approve
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/approve
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{bearer}}
+}
+
+body:json {
+  {
+    "agent": "wN:p2",
+    "seq": 42
+  }
+}
+
+docs {
+  Idempotent one-tap approval (D8). Sends the agent's confirm keystroke ONLY if
+  it is still blocked at `seq` (== state_change_seq from /snapshot); otherwise
+  no-ops. Returns {ok, applied, reason?}. The confirm key is chosen per agent
+  kind server-side, defaulting to Enter.
+}

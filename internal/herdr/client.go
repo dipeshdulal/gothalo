@@ -40,6 +40,10 @@ type Agent struct {
 	PaneID    string `json:"pane_id"`
 	Title     string `json:"terminal_title_stripped"`
 	Workspace string `json:"workspace_id"`
+	// StateChangeSeq is a monotonically increasing counter Herdr bumps on every
+	// agent state transition. It is the idempotency token for approvals (D8): an
+	// approve only applies if the agent is still blocked at the same seq.
+	StateChangeSeq int `json:"state_change_seq"`
 }
 
 type snapshotEnvelope struct {
@@ -69,19 +73,43 @@ func (c *Client) Send(pane, text string) error {
 	return err
 }
 
+// SendKeys sends one or more logical keys to a pane (`herdr pane send-keys`),
+// e.g. "enter" to confirm a blocked prompt. This is the keystroke analog of
+// Send's `pane send-text`: it writes to the pane's terminal, which is where the
+// hosted agent reads its input. The pane-level path is used (not the
+// agent-level one) because `herdr agent send-keys` only accepts a currently
+// "active named agent" and would reject an approval mid-transition; a pane
+// always accepts keys. Key names are the ones Herdr accepts (see
+// `herdr pane send-keys` help).
+func (c *Client) SendKeys(pane string, keys ...string) error {
+	args := append([]string{"pane", "send-keys", pane}, keys...)
+	_, err := c.run(args...)
+	return err
+}
+
+// AttachCommand builds (but does not start) the `herdr agent attach <target>`
+// command used to stream a live terminal. The caller starts it under a PTY and
+// wires its stdio to the WebSocket. Kept here so the herdr binary path stays
+// owned by the client.
+func (c *Client) AttachCommand(target string) *exec.Cmd {
+	return exec.Command(c.bin, "agent", "attach", target)
+}
+
 // WaitResult is the settled agent state returned by Wait.
 type WaitResult struct {
-	Status string
-	PaneID string
-	Title  string
+	Status         string
+	PaneID         string
+	Title          string
+	StateChangeSeq int
 }
 
 type waitEnvelope struct {
 	Result struct {
 		Agent struct {
-			Status string `json:"agent_status"`
-			PaneID string `json:"pane_id"`
-			Title  string `json:"terminal_title_stripped"`
+			Status         string `json:"agent_status"`
+			PaneID         string `json:"pane_id"`
+			Title          string `json:"terminal_title_stripped"`
+			StateChangeSeq int    `json:"state_change_seq"`
 		} `json:"agent"`
 	} `json:"result"`
 }
@@ -103,9 +131,10 @@ func (c *Client) Wait(pane string, until ...string) (WaitResult, bool) {
 			var w waitEnvelope
 			_ = json.Unmarshal(out, &w)
 			return WaitResult{
-				Status: w.Result.Agent.Status,
-				PaneID: w.Result.Agent.PaneID,
-				Title:  w.Result.Agent.Title,
+				Status:         w.Result.Agent.Status,
+				PaneID:         w.Result.Agent.PaneID,
+				Title:          w.Result.Agent.Title,
+				StateChangeSeq: w.Result.Agent.StateChangeSeq,
 			}, true
 		}
 		if bytes.Contains(out, []byte(`"code":"timeout"`)) {
