@@ -706,27 +706,43 @@ class _MessageBubble extends StatelessWidget {
     }
 
     final isUser = role == EntryRole.user;
-    final bg = isUser ? scheme.primaryContainer : scheme.surfaceContainerHigh;
-    final fg = isUser ? scheme.onPrimaryContainer : scheme.onSurface;
+
+    // Assistant: full-width, no bubble — the reply flows like a document, which
+    // reads far better for long content. Only the user's own messages get a
+    // right-aligned bubble.
+    if (!isUser) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+        child: _ExpandableMarkdown(
+          text: text,
+          fg: scheme.onSurface,
+          isUser: false,
+        ),
+      );
+    }
 
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.86,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.82,
         ),
-        margin: const EdgeInsets.symmetric(vertical: 4),
+        margin: const EdgeInsets.symmetric(vertical: 5),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isUser ? 16 : 4),
-            bottomRight: Radius.circular(isUser ? 4 : 16),
+          color: scheme.primaryContainer,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(16),
+            topRight: Radius.circular(16),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(4),
           ),
         ),
-        child: _ExpandableMarkdown(text: text, fg: fg, isUser: isUser),
+        child: _ExpandableMarkdown(
+          text: text,
+          fg: scheme.onPrimaryContainer,
+          isUser: true,
+        ),
       ),
     );
   }
