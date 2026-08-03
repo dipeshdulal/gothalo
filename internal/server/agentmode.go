@@ -52,7 +52,12 @@ func (s *Server) handleAgentModeCycle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := s.herdr.Get(body.Pane)
+	c, _, pane, err := s.target(body.Pane)
+	if err != nil {
+		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
+	agent, err := c.Get(pane)
 	if err != nil {
 		if errors.Is(err, herdr.ErrAgentNotFound) {
 			http.Error(w, "no such agent", http.StatusNotFound)
@@ -70,15 +75,15 @@ func (s *Server) handleAgentModeCycle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the current mode first so the read-back can tell when the cycle landed.
-	before := s.readPermissionMode(body.Pane, agent.Kind)
+	before := readPermissionMode(c, pane, agent.Kind)
 
-	if err := s.herdr.CyclePermissionMode(body.Pane); err != nil {
+	if err := c.CyclePermissionMode(pane); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	log.Info("cycled agent mode", "pane", body.Pane, "kind", agent.Kind, "from", before)
 
-	newMode := s.pollModeChange(body.Pane, agent.Kind, before)
+	newMode := pollModeChange(c, pane, agent.Kind, before)
 
 	s.publish(events.TypeModeCycled, map[string]any{"pane": body.Pane, "permission_mode": newMode})
 
@@ -92,8 +97,8 @@ func (s *Server) handleAgentModeCycle(w http.ResponseWriter, r *http.Request) {
 // readPermissionMode reads a pane's live permission mode from its detection frame,
 // returning "" on any read failure or when the pane has no mode footer (so the
 // caller degrades gracefully).
-func (s *Server) readPermissionMode(pane, kind string) string {
-	detection, err := s.herdr.ReadText(pane, "detection", 0)
+func readPermissionMode(c *herdr.Client, pane, kind string) string {
+	detection, err := c.ReadText(pane, "detection", 0)
 	if err != nil {
 		return ""
 	}
@@ -104,10 +109,10 @@ func (s *Server) readPermissionMode(pane, kind string) string {
 // the new mode once it differs from before (or the first non-empty mode when
 // before was unknown). It returns "" if nothing changed within the window — the
 // signal to omit permission_mode and let the app re-fetch /agent-state.
-func (s *Server) pollModeChange(pane, kind, before string) string {
+func pollModeChange(c *herdr.Client, pane, kind, before string) string {
 	for i := 0; i < modeReadbackAttempts; i++ {
 		time.Sleep(modeReadbackInterval)
-		m := s.readPermissionMode(pane, kind)
+		m := readPermissionMode(c, pane, kind)
 		if m != "" && m != before {
 			return m
 		}

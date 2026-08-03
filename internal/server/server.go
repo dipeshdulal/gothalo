@@ -33,20 +33,29 @@ type herdrRequester interface {
 
 // Server bundles the dependencies the handlers need.
 type Server struct {
-	cfg     *config.Config
-	herdr   *herdr.Client
-	push    *push.Client // may be nil (FCM disabled -> notify logs only)
-	store   *store.Store
-	pairing *pairing.Manager
-	web     fs.FS       // static receiver page assets
-	bus     *events.Bus // unified event bus; may be nil (WS /events disabled)
-	// requester backs POST /herdr; defaults to herdr but is swappable for tests.
+	cfg      *config.Config
+	sessions *herdr.Manager // one client per running Herdr session
+	push     *push.Client   // may be nil (FCM disabled -> notify logs only)
+	store    *store.Store
+	pairing  *pairing.Manager
+	web      fs.FS       // static receiver page assets
+	bus      *events.Bus // unified event bus; may be nil (WS /events disabled)
+	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
 }
 
 // New constructs a Server. push and bus may be nil.
-func New(cfg *config.Config, h *herdr.Client, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus) *Server {
-	return &Server{cfg: cfg, herdr: h, push: p, store: st, pairing: pm, web: web, bus: bus, requester: h}
+func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus) *Server {
+	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus}
+}
+
+// target resolves a possibly session-qualified id ("acme/w1:p2") to its
+// session's client and the bare id Herdr understands. An unknown session's
+// error satisfies herdr.IsNotFound, so call sites map it to a 404.
+func (s *Server) target(id string) (c *herdr.Client, session, bare string, err error) {
+	session, bare = herdr.SplitTarget(id)
+	c, err = s.sessions.Client(session)
+	return c, session, bare, err
 }
 
 // publish emits a gothalo.* system event onto the bus, if one is wired. It never
@@ -141,12 +150,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 // ---- handlers ----
 
-// GET /snapshot -> raw herdr snapshot JSON.
+// GET /snapshot -> herdr snapshot JSON, merged across all running sessions.
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
 	}
-	out, err := s.herdr.SnapshotRaw()
+	out, err := s.sessions.MergedSnapshotRaw()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -168,7 +177,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want {pane,text}", http.StatusBadRequest)
 		return
 	}
-	if err := s.herdr.Send(body.Pane, body.Text); err != nil {
+	c, _, pane, err := s.target(body.Pane)
+	if err != nil {
+		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
+	if err := c.Send(pane, body.Text); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

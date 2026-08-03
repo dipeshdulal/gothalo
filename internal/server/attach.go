@@ -10,6 +10,8 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
+
+	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
 
 // paneReadInterval is how often a non-agent pane is re-read and repainted.
@@ -46,10 +48,15 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want ?pane=<pane_id>", http.StatusBadRequest)
 		return
 	}
+	c, _, bare, err := s.target(pane)
+	if err != nil {
+		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
 
 	// Resolve the pane before upgrading so a missing pane is a clean HTTP 404
 	// (not a torn-down socket), and so we can pick the right backend.
-	info, err := s.herdr.GetPane(pane)
+	info, err := c.GetPane(bare)
 	if err != nil {
 		log.Error("attach: pane lookup failed", "pane", pane, "err", err)
 		http.Error(w, err.Error(), herdrStatus(err))
@@ -66,16 +73,16 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 	defer conn.CloseNow()
 
 	if info.IsAgent() {
-		s.attachAgentPTY(conn, pane)
+		attachAgentPTY(conn, c, bare)
 		return
 	}
-	s.attachPaneStream(conn, pane)
+	attachPaneStream(conn, c, bare)
 }
 
 // attachAgentPTY streams an agent pane via `herdr agent attach` under a PTY,
 // copying raw bytes both ways. This is the original attach behaviour, unchanged.
-func (s *Server) attachAgentPTY(conn *websocket.Conn, pane string) {
-	cmd := s.herdr.AttachCommand(pane)
+func attachAgentPTY(conn *websocket.Conn, c *herdr.Client, pane string) {
+	cmd := c.AttachCommand(pane)
 	// A sane default geometry; the client re-renders from Herdr's own repaint.
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
@@ -115,7 +122,7 @@ func (s *Server) attachAgentPTY(conn *websocket.Conn, pane string) {
 // via `herdr pane send-text` (which delivers raw bytes to the pane's PTY, so
 // Enter/arrows/Ctrl-C all work). The WS contract is identical to the agent
 // path — binary frames of raw terminal bytes in both directions.
-func (s *Server) attachPaneStream(conn *websocket.Conn, pane string) {
+func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	nc := websocket.NetConn(ctx, conn, websocket.MessageBinary)
@@ -131,7 +138,7 @@ func (s *Server) attachPaneStream(conn *websocket.Conn, pane string) {
 		for {
 			n, err := nc.Read(buf)
 			if n > 0 {
-				if e := s.herdr.Send(pane, string(buf[:n])); e != nil {
+				if e := c.Send(pane, string(buf[:n])); e != nil {
 					log.Error("attach: send-text failed", "pane", pane, "err", e)
 				}
 			}
@@ -149,7 +156,7 @@ func (s *Server) attachPaneStream(conn *websocket.Conn, pane string) {
 		ticker := time.NewTicker(paneReadInterval)
 		defer ticker.Stop()
 		for {
-			frame, err := s.herdr.ReadPane(pane)
+			frame, err := c.ReadPane(pane)
 			if err != nil {
 				return // pane closed / herdr gone
 			}

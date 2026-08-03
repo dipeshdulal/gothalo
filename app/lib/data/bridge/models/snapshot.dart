@@ -77,6 +77,13 @@ sealed class Agent with _$Agent {
   String get gitLabel => gitContext.worktree ?? gitContext.project;
 
   bool get isWorktree => gitContext.worktree != null;
+
+  /// The Herdr session this agent lives in, derived from the bridge's
+  /// session-qualified pane id ("acme/w1:p2"); unqualified ids are the
+  /// default session.
+  String get sessionName => sessionForId(paneId);
+
+  bool get isDefaultSession => sessionName == 'default';
 }
 
 /// Herdr's session handle for an agent — `{ "value": "<uuid>" }`.
@@ -86,6 +93,13 @@ sealed class AgentSession with _$AgentSession {
 
   factory AgentSession.fromJson(Map<String, dynamic> json) =>
       _$AgentSessionFromJson(json);
+}
+
+/// Session prefix of a bridge id ("acme/w1:p2" → "acme"); the bridge leaves
+/// the default session's ids unqualified, so no prefix means "default".
+String sessionForId(String id) {
+  final i = id.indexOf('/');
+  return i > 0 ? id.substring(0, i) : 'default';
 }
 
 /// Derive `{project, worktree}` from a cwd. Herdr worktrees live under
@@ -122,6 +136,9 @@ sealed class Pane with _$Pane {
   }) = _Pane;
 
   factory Pane.fromJson(Map<String, dynamic> json) => _$PaneFromJson(json);
+
+  /// The Herdr session this pane lives in (see [sessionForId]).
+  String get sessionName => sessionForId(paneId);
 
   /// The pane's most telling location (current foreground dir, else cwd).
   String get where => foregroundCwd.isNotEmpty ? foregroundCwd : cwd;

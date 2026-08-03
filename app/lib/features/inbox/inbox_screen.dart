@@ -312,6 +312,16 @@ class _AgentTile extends ConsumerWidget {
                       bold: true,
                     ),
                   ],
+                  // Which Herdr session hosts this agent; the default session
+                  // is implied and not shown.
+                  if (!agent.isDefaultSession) ...[
+                    SizedBox(height: (showFolder || isWt) ? 3 : 6),
+                    _GitLine(
+                      icon: Icons.layers_outlined,
+                      text: agent.sessionName,
+                      color: dim,
+                    ),
+                  ],
                 ],
               ),
             ),

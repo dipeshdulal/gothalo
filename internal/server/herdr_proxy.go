@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -51,10 +52,60 @@ var herdrProxyAllowlist = map[string]bool{
 // herdrProxyRequest is the POST /herdr body: a Herdr socket method plus its
 // params. Params is passed through to the socket verbatim (as raw JSON), so the
 // app can use exactly the shapes from `herdr api schema --json` without the
-// bridge re-modelling each one.
+// bridge re-modelling each one. Session picks the Herdr session explicitly;
+// when absent it is inferred from session-qualified ids inside params
+// ("acme/w1:p2"), which are stripped to the bare ids Herdr understands.
 type herdrProxyRequest struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Session string          `json:"session"`
+}
+
+// resolveProxySession strips session prefixes from every id in params and
+// returns (session, bareParams). Ids naming different sessions in one call are
+// an error; explicit wins over inferred but must not contradict it. Params
+// without any qualified id pass through VERBATIM (byte-for-byte).
+func resolveProxySession(explicit string, params json.RawMessage) (string, json.RawMessage, error) {
+	if explicit == "default" {
+		explicit = ""
+	}
+	var v any
+	if err := json.Unmarshal(params, &v); err != nil {
+		return explicit, params, nil // not an object we can walk; let Herdr complain
+	}
+	inferred := ""
+	conflict := false
+	changed := false
+	herdr.RewriteIDs(v, func(id string) string {
+		sess, bare := herdr.SplitTarget(id)
+		if sess == "" {
+			return id
+		}
+		if inferred != "" && sess != inferred {
+			conflict = true
+		}
+		inferred = sess
+		changed = true
+		return bare
+	})
+	if conflict {
+		return "", nil, fmt.Errorf("params mix ids from different sessions")
+	}
+	if explicit != "" && inferred != "" && explicit != inferred {
+		return "", nil, fmt.Errorf("session %q contradicts ids qualified with %q", explicit, inferred)
+	}
+	session := explicit
+	if session == "" {
+		session = inferred
+	}
+	if !changed {
+		return session, params, nil
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return "", nil, err
+	}
+	return session, out, nil
 }
 
 // writeProxyError writes a normalized {"error": msg} body with the given status.
@@ -102,18 +153,45 @@ func (s *Server) handleHerdrProxy(w http.ResponseWriter, r *http.Request) {
 		params = json.RawMessage("{}")
 	}
 
-	result, err := s.requester.Request(body.Method, params)
+	session, params, err := resolveProxySession(body.Session, params)
+	if err != nil {
+		writeProxyError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Route to the session's socket; the test seam (s.requester) bypasses routing.
+	req := s.requester
+	if req == nil {
+		c, cerr := s.sessions.Client(session)
+		if cerr != nil {
+			writeProxyError(w, http.StatusNotFound, cerr.Error())
+			return
+		}
+		req = c
+	}
+
+	result, err := req.Request(body.Method, params)
 	if err != nil {
 		status, msg := herdrProxyErrorStatus(err)
-		log.Error("herdr proxy failed", "method", body.Method, "status", status, "err", err)
+		log.Error("herdr proxy failed", "method", body.Method, "session", session, "status", status, "err", err)
 		writeProxyError(w, status, msg)
 		return
 	}
 
-	log.Info("herdr proxy", "method", body.Method)
+	log.Info("herdr proxy", "method", body.Method, "session", session)
 	// result is already JSON; wrap it in {"result": …} without re-encoding.
 	if len(result) == 0 {
 		result = json.RawMessage("null")
+	}
+	// Re-qualify ids in the result so the app can address them back directly.
+	if session != "" {
+		var v any
+		if json.Unmarshal(result, &v) == nil {
+			herdr.QualifyIDs(v, session)
+			if b, merr := json.Marshal(v); merr == nil {
+				result = b
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"result":`))

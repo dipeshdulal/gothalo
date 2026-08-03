@@ -122,7 +122,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // writeSnapshot sends the initial snapshot frame. A herdr failure is fatal to the
 // connection (there is nothing to seed the client with).
 func (s *Server) writeSnapshot(ctx context.Context, conn *websocket.Conn, baseline uint64) error {
-	raw, err := s.herdr.SnapshotRaw()
+	raw, err := s.sessions.MergedSnapshotRaw()
 	if err != nil {
 		conn.Close(websocket.StatusInternalError, "snapshot failed")
 		return err

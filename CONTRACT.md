@@ -213,6 +213,17 @@ keep it read-only and let WebSocket pings/pongs keep it alive.
 
 ## 7. Scope notes
 
+- **Multi-session.** The bridge watches every running Herdr session (`herdr
+  session list`), one ingester + watcher per session. Ids from non-default
+  sessions are qualified as `<session>/<id>` (e.g. `acme/w1:p2`) everywhere
+  they leave the bridge — snapshot, event payloads, push data — and every
+  endpoint accepts them back (`/send`, `/approve`, `/attach`, …). The default
+  session stays unqualified. Every bus payload also carries a `session` label
+  ("default" included), and the merged `/snapshot` adds a `sessions` name list
+  plus a `session` field on each agent/pane/tab/workspace/layout element.
+  `POST /herdr` infers the session from qualified ids in `params` (stripping
+  them for Herdr) or takes an explicit top-level `"session"`; result ids come
+  back re-qualified.
 - `pane_output_changed` is in Herdr's catalog but is **intentionally not
   delivered** on this bus: it's high-volume per-pane output churn. Live terminal
   bytes stay on `WS /attach`; the parsed card stays on `/agent-state`. The bus is

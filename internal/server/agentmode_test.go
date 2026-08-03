@@ -24,7 +24,7 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("store.Open: %v", err)
 	}
 	cfg := &config.Config{AdminToken: "admin-tok"}
-	return New(cfg, herdr.New(), nil, st, nil, nil, nil)
+	return New(cfg, herdr.NewManager(nil), nil, st, nil, nil, nil)
 }
 
 // TestAgentModeCycleAuth asserts the endpoint rejects unauthenticated callers
