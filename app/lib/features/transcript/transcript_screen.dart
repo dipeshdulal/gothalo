@@ -675,21 +675,52 @@ class _ApprovalBar extends StatelessWidget {
         ? state.blockedQuestion!
         : (state.headline.isNotEmpty ? state.headline : 'Waiting for you');
 
+    // Style off Herdr's block category (blocked.category), degrading cleanly
+    // when it's absent: a permission grant gets a lock and a red tint; a plain
+    // question panel stays neutral so we don't cry wolf on every choice.
+    final severity = state.blockSeverity;
+    final (Color bg, Color accent, IconData icon) = switch (severity) {
+      BlockSeverity.danger => (
+          scheme.errorContainer.withValues(alpha: 0.55),
+          scheme.error,
+          Icons.lock_outline,
+        ),
+      BlockSeverity.permission => (
+          scheme.errorContainer.withValues(alpha: 0.32),
+          scheme.error,
+          Icons.lock_outline,
+        ),
+      BlockSeverity.question => (
+          scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+          scheme.onSurfaceVariant,
+          Icons.help_outline,
+        ),
+    };
+    final categoryLabel = state.blockedCategoryLabel;
+
     return Container(
       width: double.infinity,
-      color: scheme.errorContainer.withValues(alpha: 0.32),
+      color: bg,
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (categoryLabel != null) ...[
+            _CategoryPill(
+              label: categoryLabel,
+              icon: icon,
+              accent: accent,
+              strong: severity == BlockSeverity.danger,
+            ),
+            const SizedBox(height: 8),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 2, right: 8),
-                child: Icon(Icons.pan_tool_outlined,
-                    size: 15, color: scheme.error),
+                child: Icon(icon, size: 15, color: accent),
               ),
               Expanded(
                 child: Text(
@@ -734,6 +765,56 @@ class _ApprovalBar extends StatelessWidget {
                     TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A small pill labelling a block's category (from `blocked.category`), e.g.
+/// "Dangerous command" or "Tool permission". Filled/strong for a danger-class
+/// block, outlined otherwise.
+class _CategoryPill extends StatelessWidget {
+  const _CategoryPill({
+    required this.label,
+    required this.icon,
+    required this.accent,
+    required this.strong,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color accent;
+  final bool strong;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: strong ? accent : accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(6),
+        border: strong ? null : Border.all(color: accent.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              size: 12,
+              color: strong
+                  ? Theme.of(context).colorScheme.onError
+                  : accent),
+          const SizedBox(width: 4),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+              color:
+                  strong ? Theme.of(context).colorScheme.onError : accent,
+            ),
+          ),
         ],
       ),
     );
