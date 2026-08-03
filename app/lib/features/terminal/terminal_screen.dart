@@ -52,12 +52,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   bool _disposed = false;
   _Conn _conn = _Conn.connecting;
 
-  /// The last column count sent to the PTY. The soft keyboard changes the
-  /// terminal's height (rows) but not its width (cols); resizing on a rows-only
-  /// change would trigger a full agent repaint (SIGWINCH) and flash the screen.
-  /// Since line-editing/wrapping only depend on cols, we resize only when the
-  /// column count actually changes. Reset to 0 on each new connection.
-  int _lastCols = 0;
+  /// Coalesces resize signals. `onResize` fires continuously while the soft
+  /// keyboard slides open/closed; sending each one flashes the screen with a
+  /// full agent repaint. We debounce so exactly one resize goes out once the
+  /// viewport settles — the PTY still ends at the right size (so content is
+  /// restored after the keyboard closes) with a single clean repaint.
+  Timer? _resizeDebounce;
+  int _pendingCols = 0;
+  int _pendingRows = 0;
 
   @override
   void initState() {
@@ -74,6 +76,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
+    _resizeDebounce?.cancel();
     _sub?.cancel();
     _channel?.sink.close(ws_status.normalClosure);
     super.dispose();
@@ -117,10 +120,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       if (mounted) setState(() => _conn = _Conn.connected);
       // Send our real geometry up front — onResize only fires on *change*, and
       // the viewport is usually already sized by the time the socket is ready,
-      // so without this the PTY would stay at its default 80×24. A fresh socket
-      // is a fresh PTY, so clear the guard to force this initial resize through.
-      _lastCols = 0;
-      _sendResize(terminal.viewWidth, terminal.viewHeight, 0, 0);
+      // so without this the PTY would stay at its default 80×24. Immediate (not
+      // debounced) so the fresh PTY is sized before any interaction.
+      _pendingCols = terminal.viewWidth;
+      _pendingRows = terminal.viewHeight;
+      _flushResize();
 
       _sub = channel.stream.listen(
         (message) {
@@ -213,14 +217,24 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   /// (autocomplete, history recall, wrapping) stay aligned with the phone's
   /// viewport. Fired on first layout and on every later resize.
   void _sendResize(int cols, int rows, int pixelWidth, int pixelHeight) {
+    if (cols <= 0 || rows <= 0) return;
+    // Debounce: onResize fires repeatedly during the keyboard's slide animation;
+    // hold off until it settles, then send one resize (in _flushResize).
+    _pendingCols = cols;
+    _pendingRows = rows;
+    _resizeDebounce?.cancel();
+    _resizeDebounce =
+        Timer(const Duration(milliseconds: 150), _flushResize);
+  }
+
+  /// Sends the latest pending geometry as one resize control frame.
+  void _flushResize() {
     final channel = _channel;
     if (channel == null || _conn != _Conn.connected) return;
-    if (cols <= 0 || rows <= 0) return;
-    // Skip rows-only changes (e.g. the keyboard opening/closing) — they'd flash
-    // the screen with a full repaint for no line-editing benefit.
-    if (cols == _lastCols) return;
-    _lastCols = cols;
-    channel.sink.add(jsonEncode({'type': 'resize', 'cols': cols, 'rows': rows}));
+    if (_pendingCols <= 0 || _pendingRows <= 0) return;
+    channel.sink.add(
+      jsonEncode({'type': 'resize', 'cols': _pendingCols, 'rows': _pendingRows}),
+    );
   }
 
   @override
