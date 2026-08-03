@@ -256,10 +256,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return l == 'chat about this' || l.startsWith('chat about');
   }
 
-  /// The status strip above the composer. A blocked agent with a real prompt
-  /// gets an actionable approval card; a blocked agent with no question (the
-  /// live-blocked-form fallback) gets a soft "waiting" cue — no red, no lock; a
-  /// working agent gets the thinking indicator; otherwise nothing.
+  /// The status strip above the composer. Only a blocked agent with a **real
+  /// prompt** gets an actionable approval card; a working agent gets the
+  /// thinking indicator. Everything else (just-waiting, idle, done) shows
+  /// nothing — the composer alone is enough, a lone "waiting" label is
+  /// redundant.
   Widget _bottomStatus() {
     final s = _agentState;
     if (s != null && s.isBlocked) {
@@ -267,15 +268,15 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           s.options.where((o) => !_isAppInjectedOption(o.label)).toList();
       final hasPrompt =
           (s.blockedQuestion?.trim().isNotEmpty ?? false) || opts.isNotEmpty;
-      return hasPrompt
-          ? _ApprovalCard(
-              state: s,
-              options: opts,
-              contextLine: _approvalContext(),
-              onApprove: _approveDefault,
-              onOption: _handleOption,
-            )
-          : const _WaitingCue();
+      if (hasPrompt) {
+        return _ApprovalCard(
+          state: s,
+          options: opts,
+          contextLine: _approvalContext(),
+          onApprove: _approveDefault,
+          onOption: _handleOption,
+        );
+      }
     }
     if (s != null && s.isWorking) return const _ThinkingIndicator();
     return const SizedBox.shrink();
@@ -907,37 +908,6 @@ class _ApprovalCard extends StatelessWidget {
         onPressed: onPressed,
         icon: const Icon(Icons.check, size: 18),
         label: label,
-      ),
-    );
-  }
-}
-
-/// A soft, non-alarming cue that the agent is idle and waiting for the user's
-/// next message — shown instead of the approval card when the block carries no
-/// real question (the live-blocked-form fallback). No red, no lock.
-class _WaitingCue extends StatelessWidget {
-  const _WaitingCue();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      color: scheme.surfaceContainerHigh.withValues(alpha: 0.5),
-      child: Row(
-        children: [
-          Icon(Icons.reply_outlined, size: 15, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Text(
-            'Waiting for your reply',
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 12.5,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
-        ],
       ),
     );
   }
