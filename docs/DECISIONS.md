@@ -84,3 +84,69 @@ relay with no inbound ports and no Tailscale. Both feed the same handlers. Push
 stays outbound (D3) and per-device bearers still gate access (D4) in either mode.
 The pairing QR carries a generic connect endpoint so the app never hardcodes
 Tailscale. Relay is stubbed now (`internal/transport/relay`), wired later.
+
+## D13 — Unified in-process event bus, streamed over `WS /events`
+One process-wide Herdr subscription feeds an in-process pub/sub bus
+(`internal/events`); every phone client is just another subscriber over `WS
+/events`. Fan-out is bounded — a subscriber that can't keep up is **dropped**
+(channel closed) and expected to reconnect and resync from the snapshot frame —
+so one lagging phone can't stall the bus or the others. This is the live-update
+backbone the app builds on, and the seam an event/plugin ingestion layer plugs
+into (see D19).
+
+## D14 — Multi-session bridge
+`herdr.Manager` watches **all** Herdr sessions, not just the default, starting and
+stopping per-session workers as sessions appear/disappear. People run more than
+one Herdr session; the bridge must not be blind to the others.
+
+## D15 — Three views of an agent, not one
+The app consumes an agent at three altitudes: the raw PTY (`WS /attach`, full
+terminal), a parsed compact **state** card (`agentstate` — "what is it doing / what
+is it asking"), and a normalized **transcript** chat (`transcript`). The phone
+usually wants the semantic views; the PTY is the escape hatch / fallback.
+
+## D16 — Transcript from the agent's own on-disk log, normalized
+`transcript` tails the agent's structured session file (Claude Code writes JSONL;
+codex has its own format) and normalizes every entry — messages, thinking, tool
+calls (command/diff), tool results — into one kind-agnostic chat schema, so the app
+renders a single chat UI for any agent. Unrecognized entries pass through so the
+tail survives schema drift. (Revisited in D19.)
+
+## D17 — Notification lifecycle via the bus
+The notify-clearer (`internal/notify`), the bus's first consumer, dismisses stale
+"blocked" pushes: it remembers the pane behind each blocked push and, when the bus
+shows that pane leaving `blocked`, clears the now-irrelevant notification — keeping
+the lock screen honest (complements D8's idempotent approvals).
+
+## D18 — `/herdr` allowlisted CLI proxy
+A single `POST /herdr` proxies an **allowlisted** set of Herdr operations
+(worktree/tab/pane create+close, focus, …) so the app gets Herdr-parity controls
+without a bespoke endpoint per verb, while the allowlist stops it from becoming an
+arbitrary command sink.
+
+## D19 — Push-based plugin events supersede live file-tailing (direction)
+Each coding agent gains a **gothalo plugin** — its own native hook/plugin config
+that `POST`s **normalized** events (message, tool call, approval-needed, done) to
+the bridge, which `Publish`es them to the event bus (D13). Push is real-time and
+carries **intent** — "approval needed for `Bash: rm -rf …`" *before* the tool runs
+— which tailing a transcript after the fact (D16) cannot give the notification /
+approval path. It also drops the fragile per-agent file-path resolution.
+
+Scope (deliberately not a hard delete of D16):
+- Push becomes the **primary live source**; the app reads history + live from the
+  bridge, not from agent files.
+- File-reading is **demoted, not removed**: a one-time transcript **import** seeds
+  pre-plugin history, and it stays the **fallback** for agents whose hook surface is
+  too thin to reconstruct chat content.
+- The normalized chat schema (D16) is the **target** every plugin maps into, so
+  adding an agent = a plugin adapter, not a new file parser. Mirrors how Herdr
+  normalizes status (D1/D7) — here gothalo normalizes *events*.
+- Reality check: hook richness varies a lot — Claude Code is rich; opencode is
+  event-native (client/server with an event stream); codex and others are thinner.
+  **Verify each agent's real surface before writing its adapter.** Where a plugin
+  can't carry full content, it fires on events and the bridge reads the transcript
+  at that moment (hook-triggered) instead of continuously tailing.
+
+Ingestion lands on a new path (`POST /hook` or similar) since `GET /events` is the
+outbound stream. Spike with Claude Code first to prove the "approve with context"
+UX, then generalize.

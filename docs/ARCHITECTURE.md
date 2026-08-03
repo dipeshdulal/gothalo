@@ -10,7 +10,7 @@ cmd/
 internal/
 ├── cli/                cobra tree: serve · pair · devices (+ daemon client)
 ├── config/             ~/.gothalo config (JSON), admin token, transport mode
-├── herdr/              typed wrapper over the herdr CLI (Agents, Send, Wait)
+├── herdr/              typed herdr CLI wrapper + multi-session Manager (all sessions)
 ├── watcher/            event-driven agent watcher (herdr agent wait) + poll fallback
 ├── push/              FCM v1 sender (stdlib JWT->OAuth->messages:send, data-only)
 ├── store/              paired-device registry -> ~/.gothalo/devices.json
@@ -19,6 +19,10 @@ internal/
 ├── transport/          Transport interface
 │   ├── direct/         http.Server (tailnet / LAN / localhost)  [active]
 │   └── relay/          outbound-WS broker client                [stub, later]
+├── events/             in-process pub/sub bus (fan-out; drops slow subscribers)
+├── agentstate/         parse `herdr agent read` -> compact per-agent state (per-kind)
+├── transcript/         tail the agent's on-disk transcript -> kind-agnostic chat
+├── notify/             bus consumer: dismiss stale "blocked" pushes
 └── web/                embedded web-push receiver page (go:embed)
 ```
 
@@ -41,6 +45,10 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 | POST | `/send` | device bearer or admin | type into a pane |
 | POST | `/approve` | device bearer or admin | idempotent one-tap approval (D8) |
 | GET  | `/attach` | device bearer or admin (`?token=`) | WS live terminal (PTY-streamed) |
+| GET  | `/agent-state` | device bearer or admin | parsed compact state for one agent pane |
+| GET  | `/agent-transcript` | device bearer or admin (`?token=`) | WS normalized transcript chat + backlog |
+| GET  | `/events` | device bearer or admin (`?token=`) | WS unified event bus (state changes, push lifecycle) |
+| POST | `/herdr` | device bearer or admin | allowlisted Herdr CLI proxy (worktree/tab/pane parity) |
 | POST | `/register-token` | device bearer or admin | (re)register a push token |
 | POST | `/testpush` | device bearer or admin | fan a sample push to all devices |
 | POST | `/pair` | one-time code | issue a per-device bearer |
