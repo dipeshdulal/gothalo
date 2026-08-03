@@ -22,6 +22,7 @@ package transcript
 import (
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -166,6 +167,36 @@ const (
 	// maxInlineTextRunes caps a passed-through message/thinking body.
 	maxInlineTextRunes = 20000
 )
+
+// Terminal escape / control matchers. Coding-agent stdout is frequently colorized,
+// so a captured tool output can carry ANSI SGR runs (\x1b[2m … \x1b[0m), cursor
+// moves, OSC title/hyperlink sequences, and stray C0 control bytes. Rendered raw on
+// the phone these show up as literal "ESC[2m" gibberish, so stripANSI removes them
+// before the output is capped and streamed.
+var (
+	// ansiCSI matches a CSI sequence: ESC '[' , parameter bytes (0x30–0x3f),
+	// intermediate bytes (0x20–0x2f), then a final byte (0x40–0x7e). Covers SGR
+	// color/style, cursor movement, erase, etc.
+	ansiCSI = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]")
+	// ansiOSC matches an OSC sequence: ESC ']' , a payload, terminated by BEL
+	// (0x07) or ST (ESC '\\'). Covers window-title and hyperlink escapes.
+	ansiOSC = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
+	// c0Control matches stray C0 control bytes and DEL, preserving only newline
+	// (\n) and tab (\t) as legitimate whitespace. This also sweeps up any lone ESC
+	// left behind by a partial/other escape sequence.
+	c0Control = regexp.MustCompile("[\x00-\x08\x0b-\x1f\x7f]")
+)
+
+// stripANSI removes ANSI CSI/OSC escape sequences and stray C0 control bytes from
+// s, keeping newlines and tabs. It is applied to raw tool output before capping so
+// the transcript ledger renders clean plain text (and the cap counts visible runes,
+// not escape-sequence noise).
+func stripANSI(s string) string {
+	s = ansiOSC.ReplaceAllString(s, "")
+	s = ansiCSI.ReplaceAllString(s, "")
+	s = c0Control.ReplaceAllString(s, "")
+	return s
+}
 
 // truncateRunes caps s to n runes, returning the capped string and whether it was
 // cut. Cheaper than importing agentstate; kept local so the packages stay decoupled.
