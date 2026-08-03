@@ -15,8 +15,13 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
 
-// paneReadInterval is how often a non-agent pane is re-read and repainted.
-const paneReadInterval = 200 * time.Millisecond
+// paneFallbackInterval is a slow safety-net read for a plain pane, in case a
+// pane.updated event is ever missed; the live path is the subscription below.
+const paneFallbackInterval = 1 * time.Second
+
+// paneCoalesce bounds the repaint rate: a burst of pane.updated events (a single
+// keystroke can emit ~20) collapses into repaints at most this often.
+const paneCoalesce = 40 * time.Millisecond
 
 // GET /attach?pane=<pane_id>&token=<...> — upgraded to a WebSocket that streams
 // a live terminal for ANY pane (agent, shell, dev-server, logs…). It bridges:
@@ -157,18 +162,21 @@ func attachAgentPTY(conn *websocket.Conn, c *herdr.Client, pane string) {
 	conn.Close(websocket.StatusNormalClosure, "")
 }
 
-// attachPaneStream bridges a non-agent pane: it repaints the pane's visible
-// frame to the WS on change, and forwards inbound binary bytes to the pane
-// verbatim via `herdr pane send-text`. Text frames (resize) are swallowed — a
-// plain pane's geometry is owned by Herdr, so we neither resize it nor inject
-// the control JSON as keystrokes.
+// attachPaneStream bridges a non-agent pane. Herdr exposes no live stream for a
+// plain pane, so we mirror it: forward inbound binary frames to the pane via
+// send-text, and repaint the visible frame to the client. Rather than poll on a
+// fixed tick, we subscribe to Herdr's pane.updated event for THIS pane and
+// repaint on change (coalesced), with a slow fallback read as a safety net — so
+// interactive redraws (autocomplete, history recall) track near-live instead of
+// being sampled a few times a second. Text frames (resize) are swallowed —
+// Herdr owns a plain pane's geometry.
 func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	log.Info("attach: streaming pane", "pane", pane)
 
-	done := make(chan struct{}, 2)
+	done := make(chan struct{}, 3)
 
 	// WS -> pane: binary frames are raw keystrokes; text frames are control
 	// messages we ignore for a plain pane (so the JSON never reaches the shell).
@@ -190,14 +198,61 @@ func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 		}
 	}()
 
-	// pane -> WS: poll the visible frame; on change, repaint (home + clear +
-	// frame). Repainting only on change keeps an idle pane flicker-free.
+	// dirty carries a coalesced "this pane changed" signal from the subscription
+	// (and the fallback ticker) to the repaint loop.
+	dirty := make(chan struct{}, 1)
+	poke := func() {
+		select {
+		case dirty <- struct{}{}:
+		default: // a signal is already pending; one repaint takes the latest frame
+		}
+	}
+
+	// Subscribe to pane.updated for this pane on its own Herdr connection and
+	// poke the repaint loop on each event. Torn down with the attach.
+	go func() {
+		defer func() { done <- struct{}{} }()
+		path, err := c.ServerSocketPath()
+		if err != nil {
+			return
+		}
+		sub, err := herdr.DialSocket(path)
+		if err != nil {
+			log.Error("attach: subscribe dial failed", "pane", pane, "err", err)
+			return
+		}
+		defer sub.Close()
+		go func() { <-ctx.Done(); sub.Close() }()
+		if err := sub.Subscribe([]herdr.Subscription{{Type: "pane.updated", PaneID: pane}}); err != nil {
+			log.Error("attach: subscribe failed", "pane", pane, "err", err)
+			return
+		}
+		for {
+			msg, err := sub.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msg.Event != "" {
+				poke()
+			}
+		}
+	}()
+
+	// Repaint loop: read + repaint on a change (or the fallback tick), then hold
+	// off briefly so a burst of events collapses into a bounded repaint rate.
 	go func() {
 		defer func() { done <- struct{}{} }()
 		var last []byte
-		ticker := time.NewTicker(paneReadInterval)
-		defer ticker.Stop()
+		fallback := time.NewTicker(paneFallbackInterval)
+		defer fallback.Stop()
+		poke() // initial paint
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-dirty:
+			case <-fallback.C:
+			}
 			frame, err := c.ReadPane(pane)
 			if err != nil {
 				return // pane closed / herdr gone
@@ -211,7 +266,7 @@ func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-time.After(paneCoalesce):
 			}
 		}
 	}()
