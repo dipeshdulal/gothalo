@@ -166,6 +166,32 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     }
   }
 
+  /// Cycle the Claude permission mode (one Shift+Tab), then refresh the card so
+  /// the chip shows the new value.
+  Future<void> _cycleMode() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      await client.cycleAgentMode(widget.pane);
+      await _pollAgentState();
+    } on BridgeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
+  /// A short, readable label for a permission mode; unknown values pass through.
+  String _modeLabel(String m) => switch (m) {
+        'default' => 'manual',
+        'acceptEdits' => 'accept edits',
+        'plan' => 'plan',
+        'auto' => 'auto',
+        'bypassPermissions' => 'bypass',
+        _ => m,
+      };
+
   /// Act on a tapped option: the highlighted default is a bare Enter (accepts
   /// the default); any other choice types its number. Sent as raw input (`\r`)
   /// so it works even if the snapshot's seq is stale. Optimistically hide the
@@ -442,6 +468,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       appBar: AppBar(
         title: Text(agent?.displayTitle ?? widget.pane),
         actions: [
+          // Claude permission mode: a tap cycles it (Shift+Tab). Shown only when
+          // /agent-state reports one (Claude panes).
+          if (_agentState?.permissionMode != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 2),
+              child: ActionChip(
+                avatar: const Icon(Icons.tune, size: 15),
+                label: Text(_modeLabel(_agentState!.permissionMode!)),
+                labelStyle: const TextStyle(fontSize: 12),
+                visualDensity: VisualDensity.compact,
+                onPressed: _cycleMode,
+              ),
+            ),
           IconButton(
             tooltip: 'Raw terminal',
             onPressed: () => context.push(
