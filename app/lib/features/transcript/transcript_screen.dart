@@ -511,54 +511,28 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(agent?.displayTitle ?? widget.pane),
-        actions: [
-          // Claude permission mode: a tap cycles it (Shift+Tab). Shown only when
-          // /agent-state reports one (Claude panes).
-          if (_agentState?.permissionMode != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: ActionChip(
-                avatar: const Icon(Icons.tune, size: 15),
-                label: Text(_modeLabel(_agentState!.permissionMode!)),
-                labelStyle: const TextStyle(fontSize: 12),
-                visualDensity: VisualDensity.compact,
-                onPressed: _cycleMode,
-              ),
-            ),
-          IconButton(
-            tooltip: 'Raw terminal',
-            onPressed: () => context.push(
-              '/terminal/${Uri.encodeComponent(widget.pane)}',
-            ),
-            icon: const Icon(Icons.terminal),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12, left: 4),
-            child: Tooltip(
-              message: switch (_conn) {
-                _Conn.connected => 'Live',
-                _Conn.connecting => 'Connecting…',
-                _Conn.disconnected => 'Reconnecting…',
-                _Conn.closed => 'Closed',
-                _Conn.failed => 'Unavailable',
-              },
-              child: Icon(
-                _conn == _Conn.connected
-                    ? Icons.circle
-                    : Icons.circle_outlined,
-                size: 12,
-                color: switch (_conn) {
-                  _Conn.connected => scheme.primary,
-                  _Conn.connecting => scheme.onSurfaceVariant,
-                  _Conn.disconnected => scheme.error,
-                  _Conn.closed => scheme.onSurfaceVariant,
-                  _Conn.failed => scheme.error,
-                },
-              ),
-            ),
-          ),
-        ],
+        titleSpacing: 12,
+        title: _TranscriptTitle(
+          title: agent?.displayTitle ?? widget.pane,
+          subtitle: [
+            if (agent != null) agent.gitLabel,
+            if (agent != null) agent.agent,
+          ].where((s) => s.isNotEmpty).join(' · '),
+          connLabel: switch (_conn) {
+            _Conn.connected => 'Live',
+            _Conn.connecting => 'Connecting…',
+            _Conn.disconnected => 'Reconnecting…',
+            _Conn.closed => 'Closed',
+            _Conn.failed => 'Unavailable',
+          },
+          connColor: switch (_conn) {
+            _Conn.connected => scheme.primary,
+            _Conn.connecting => scheme.onSurfaceVariant,
+            _Conn.disconnected => scheme.error,
+            _Conn.closed => scheme.onSurfaceVariant,
+            _Conn.failed => scheme.error,
+          },
+        ),
       ),
       body: SafeArea(
         top: false,
@@ -589,11 +563,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Working → a live "thinking…" indicator so the chat feels alive.
             else if (_agentState?.isWorking == true)
               const _ThinkingIndicator(),
+            // The permission-mode switcher and raw-terminal jump live down here
+            // with the composer, not the app bar — they're actions about *how
+            // you're about to talk to the agent*, so grouping them with the input
+            // reads better than a cluttered header.
+            _ComposerToolbar(
+              modeLabel: _agentState?.permissionMode != null
+                  ? _modeLabel(_agentState!.permissionMode!)
+                  : null,
+              onCycleMode: _cycleMode,
+              onOpenTerminal: () => context.push(
+                '/terminal/${Uri.encodeComponent(widget.pane)}',
+              ),
+            ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
               controller: _composer,
               onSend: _sendComposer,
+              hintText: _agentState?.isBlocked == true
+                  ? 'Type a number, or your own reply…'
+                  : null,
               enabled: _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
@@ -785,6 +775,56 @@ class _ApprovalBar extends StatelessWidget {
   }
 }
 
+/// The app bar's title: the agent's headline title, plus a small muted
+/// subtitle line (git context + agent kind) and a live-connection dot+label —
+/// context that used to need a tooltip hover to discover, now just readable
+/// at a glance in the freed-up header space.
+class _TranscriptTitle extends StatelessWidget {
+  const _TranscriptTitle({
+    required this.title,
+    required this.subtitle,
+    required this.connLabel,
+    required this.connColor,
+  });
+
+  final String title;
+  final String subtitle;
+  final String connLabel;
+  final Color connColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle, size: 8, color: connColor),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                subtitle.isEmpty ? connLabel : '$subtitle · $connLabel',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 /// A live "thinking…" indicator shown above the composer while the agent is
 /// working — three pulsing dots, like a chat typing indicator.
 class _ThinkingIndicator extends StatefulWidget {
@@ -860,6 +900,57 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
   }
 }
 
+/// A slim strip above the composer for actions about *how* you're talking to
+/// the agent, rather than the chat itself: the Claude permission-mode switcher
+/// (tap to cycle Shift+Tab) and a jump to the raw terminal. Kept out of the
+/// app bar so the header stays just identity + navigation; these live with
+/// the input they modify. [modeLabel] is null (and the chip hidden) for a
+/// kind/pane with no permission mode to show.
+class _ComposerToolbar extends StatelessWidget {
+  const _ComposerToolbar({
+    required this.modeLabel,
+    required this.onCycleMode,
+    required this.onOpenTerminal,
+  });
+
+  final String? modeLabel;
+  final VoidCallback onCycleMode;
+  final VoidCallback onOpenTerminal;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 0),
+      child: Row(
+        children: [
+          if (modeLabel != null)
+            ActionChip(
+              avatar: const Icon(Icons.tune, size: 15),
+              label: Text(modeLabel!),
+              labelStyle: const TextStyle(fontSize: 12),
+              visualDensity: VisualDensity.compact,
+              onPressed: onCycleMode,
+            ),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Raw terminal',
+            onPressed: onOpenTerminal,
+            icon: const Icon(Icons.terminal, size: 20),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The bottom input bar — type a prompt (or an option number for a blocked
 /// prompt) and send it to the agent. The send button submits with a trailing
 /// newline; an empty send is a bare Enter (accepts a default prompt).
@@ -868,11 +959,16 @@ class _ComposerBar extends StatefulWidget {
     required this.controller,
     required this.onSend,
     required this.enabled,
+    this.hintText,
   });
 
   final TextEditingController controller;
   final Future<void> Function() onSend;
   final bool enabled;
+
+  /// Overrides the default hint — e.g. while an approval card is up, to make
+  /// clear that typing here answers it just as well as tapping a button.
+  final String? hintText;
 
   @override
   State<_ComposerBar> createState() => _ComposerBarState();
@@ -946,7 +1042,9 @@ class _ComposerBarState extends State<_ComposerBar> {
                 decoration: InputDecoration(
                   isCollapsed: true,
                   contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                  hintText: enabled ? 'Message the agent…' : 'Unavailable',
+                  hintText: !enabled
+                      ? 'Unavailable'
+                      : (widget.hintText ?? 'Message the agent…'),
                   hintStyle: TextStyle(color: scheme.onSurfaceVariant),
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
