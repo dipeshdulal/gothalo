@@ -28,6 +28,24 @@ class OverviewScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final snapshot = ref.watch(snapshotControllerProvider);
 
+    // A scoped space whose workspace disappears from the snapshot — its worktree
+    // was removed here, from the desktop, or another device — leaves this
+    // overview dead. React to that live and pop back, so we never sit on a
+    // stale/empty screen. (workspaceId is constant for this widget, so the
+    // conditional listen is stable across rebuilds.)
+    if (workspaceId != null) {
+      ref.listen(snapshotControllerProvider, (_, next) {
+        final snap = next.asData?.value;
+        if (snap == null) return;
+        final gone =
+            !snap.workspaces.any((w) => w.workspaceId == workspaceId) &&
+                !snap.panes.any((p) => p.workspaceId == workspaceId);
+        if (gone && context.mounted && context.canPop()) {
+          context.pop();
+        }
+      });
+    }
+
     // Title = project; for a worktree space, show the branch beneath it.
     var title = workspaceId == null ? 'Overview' : 'Space';
     String? branch;
