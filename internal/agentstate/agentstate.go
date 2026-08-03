@@ -64,13 +64,19 @@ type Blocked struct {
 // Option is one selectable choice in a blocked prompt.
 type Option struct {
 	// Index is the number the user would type to pick this option (1-based), or 0
-	// when the choice isn't numbered.
+	// when the choice isn't numbered (see Key).
 	Index int `json:"index"`
 	// Label is the choice text, e.g. "Yes, and always allow…".
 	Label string `json:"label"`
 	// Selected marks the currently-highlighted default (the one POST /approve's
 	// Enter keystroke would accept).
 	Selected bool `json:"selected"`
+	// Key is set instead of Index for an option that has no menu number and is
+	// only reachable via a raw keystroke — e.g. "esc" for the decline action on
+	// Claude's single-choice approval form ("❯ 1. Yes" with no numbered "No",
+	// just an "Esc to cancel" footer hint). OMITTED for numbered options. Pairs
+	// with POST /send's "key" field: {"pane": pane_id, "key": "esc"}.
+	Key string `json:"key,omitempty"`
 }
 
 // Input is the raw material a Parser works from. The endpoint gathers it by
