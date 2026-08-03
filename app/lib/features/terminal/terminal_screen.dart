@@ -16,6 +16,7 @@ import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
+import '../jump/jump_sheet.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
 /// [closed] is terminal: the pane no longer exists (closed on the host or the
@@ -273,6 +274,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       appBar: AppBar(
         title: Text(agent?.displayTitle ?? widget.pane),
         actions: [
+          IconButton(
+            tooltip: 'Jump to an agent',
+            onPressed: () => showJumpSheet(context, currentPane: widget.pane),
+            icon: const Icon(Icons.bolt),
+          ),
           if (approvable != null)
             IconButton(
               tooltip: 'Approve',

@@ -14,6 +14,7 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/inbox_providers.dart';
+import '../jump/jump_sheet.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -612,6 +613,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             _Conn.failed => scheme.error,
           },
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Jump to an agent',
+            onPressed: () => showJumpSheet(context, currentPane: widget.pane),
+            icon: const Icon(Icons.bolt),
+          ),
+        ],
       ),
       body: SafeArea(
         top: false,
