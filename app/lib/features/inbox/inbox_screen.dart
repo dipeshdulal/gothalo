@@ -9,6 +9,7 @@ import '../alerts/alerts_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
+import '../jump/jump_sheet.dart';
 import 'inbox_providers.dart';
 import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
@@ -51,6 +52,11 @@ class InboxScreen extends ConsumerWidget {
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: 'Jump to an agent',
+              onPressed: () => showJumpSheet(context),
+              icon: const Icon(Icons.bolt),
+            ),
             IconButton(
               tooltip: 'Alerts',
               onPressed: () => context.push('/alerts'),

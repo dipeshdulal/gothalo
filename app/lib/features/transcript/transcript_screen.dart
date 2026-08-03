@@ -14,6 +14,7 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/inbox_providers.dart';
+import '../jump/jump_sheet.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -468,6 +469,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       appBar: AppBar(
         title: Text(agent?.displayTitle ?? widget.pane),
         actions: [
+          IconButton(
+            tooltip: 'Jump to an agent',
+            onPressed: () => showJumpSheet(context, currentPane: widget.pane),
+            icon: const Icon(Icons.bolt),
+          ),
           // Claude permission mode: a tap cycles it (Shift+Tab). Shown only when
           // /agent-state reports one (Claude panes).
           if (_agentState?.permissionMode != null)
