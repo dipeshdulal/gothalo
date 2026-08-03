@@ -301,7 +301,7 @@ func claudeResult(b claudeBlock, tur json.RawMessage) *Result {
 				out += "[stderr] " + obj.Stderr
 			}
 			if out != "" {
-				capped, cut := truncateRunes(out, maxOutputRunes)
+				capped, cut := truncateRunes(stripANSI(out), maxOutputRunes)
 				r.OutputSummary = capped
 				r.Truncated = r.Truncated || cut
 			}
@@ -309,7 +309,7 @@ func claudeResult(b claudeBlock, tur json.RawMessage) *Result {
 			// toolUseResult was a bare string.
 			var s string
 			if json.Unmarshal(tur, &s) == nil && s != "" {
-				capped, cut := truncateRunes(s, maxOutputRunes)
+				capped, cut := truncateRunes(stripANSI(s), maxOutputRunes)
 				r.OutputSummary = capped
 				r.Truncated = cut
 			}
@@ -320,7 +320,7 @@ func claudeResult(b claudeBlock, tur json.RawMessage) *Result {
 	// nothing textual (e.g. Read results, error messages).
 	if r.OutputSummary == "" && r.Diff == "" {
 		if txt := claudeText(b.Content); txt != "" {
-			capped, cut := truncateRunes(txt, maxOutputRunes)
+			capped, cut := truncateRunes(stripANSI(txt), maxOutputRunes)
 			r.OutputSummary = capped
 			r.Truncated = cut
 		}

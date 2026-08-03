@@ -171,17 +171,94 @@ func lastClaudeActivity(text string) string {
 	return firstLine(blocks[len(blocks)-1].body)
 }
 
-// parseClaudeBlocked extracts the question + options from Claude's blocker form.
-// The form is rendered after the last horizontal rule; we search that region
-// first and fall back to the whole detection screen. Returns nil when no
-// recognisable question/options are present (caller degrades gracefully).
+// parseClaudeBlocked extracts the question + options from Claude's blocker
+// form. The active menu always restarts its numbering at "1.", so the last
+// "1." (or "❯ 1.") line in the screen anchors where it begins — this also
+// works when Claude splits the menu across a rule, appending a trailing meta
+// option ("5. Chat about this") below its own rule, after the boxed 1-4
+// choices: scanning from the anchor to the end of the screen still picks up
+// every option regardless of the rule in between. The question is the nearest
+// qualifying line above the anchor. Falls back to the old last-rule-region (and
+// then whole-screen) scan for any shape that doesn't fit. Returns nil when
+// nothing recognisable is present (caller degrades gracefully).
 func parseClaudeBlocked(detection string) *Blocked {
+	lines := splitLines(detection)
+	if start := lastOptionOneIndex(lines); start >= 0 {
+		_, opts := scanBlocked(lines[start:])
+		if len(opts) > 0 {
+			b := &Blocked{Question: questionBefore(lines, start), Options: opts}
+			if len(opts) <= 1 {
+				b.Options = append(b.Options, hintNoOption(lines)...)
+			}
+			return b
+		}
+	}
 	region := afterLastRule(detection)
 	if q, opts := scanBlocked(region); q != "" || len(opts) > 0 {
 		return &Blocked{Question: q, Options: opts}
 	}
-	if q, opts := scanBlocked(splitLines(detection)); q != "" || len(opts) > 0 {
+	if q, opts := scanBlocked(lines); q != "" || len(opts) > 0 {
 		return &Blocked{Question: q, Options: opts}
+	}
+	return nil
+}
+
+// firstOptionRE matches the line that (re)starts a menu's numbering at 1,
+// optionally ❯-marked — the anchor for where the CURRENT blocker form begins.
+var firstOptionRE = regexp.MustCompile(`^\s*(❯\s*)?1\.\s+`)
+
+// lastOptionOneIndex returns the index of the last "1." line in lines (the
+// start of the active menu, since a fresh menu always renumbers from 1), or -1
+// if there is none.
+func lastOptionOneIndex(lines []string) int {
+	idx := -1
+	for i, l := range lines {
+		if firstOptionRE.MatchString(l) {
+			idx = i
+		}
+	}
+	return idx
+}
+
+// questionBefore searches backward from just above lines[start] for the
+// prompt line the menu at start answers: the nearest non-blank, non-chrome
+// line above it. Returns "" (rather than guessing) when that nearest line
+// isn't question-shaped, or when a rule is hit first — the question lives in
+// the same section as its menu, not across a divider.
+func questionBefore(lines []string, start int) string {
+	for i := start - 1; i >= 0; i-- {
+		if isRuleLine(lines[i]) {
+			return ""
+		}
+		t := strings.TrimSpace(lines[i])
+		if t == "" || isBoxOnly(lines[i]) {
+			continue
+		}
+		if strings.HasSuffix(t, "?") || questionRE.MatchString(t) {
+			return t
+		}
+		return ""
+	}
+	return ""
+}
+
+// escHintRE matches Claude's footer key hint for declining outright, e.g.
+// "Esc to cancel" (one "·"-separated segment of "Esc to cancel · Tab to amend
+// · ctrl+e to explain").
+var escHintRE = regexp.MustCompile(`(?i)\bEsc\s+to\s+cancel\b`)
+
+// hintNoOption returns a synthetic "No" Option keyed "esc" when lines carry
+// Claude's "Esc to cancel" footer hint. Claude's newer single-choice approval
+// form ("❯ 1. Yes") has no numbered decline — Esc is the only way to say no —
+// so without this the app would have a Yes button and nothing else. Callers
+// only append it when the menu had one option or fewer, so a classic 3-option
+// form (which also prints this same footer, redundantly) doesn't get a
+// duplicate "No".
+func hintNoOption(lines []string) []Option {
+	for _, l := range lines {
+		if escHintRE.MatchString(l) {
+			return []Option{{Key: "esc", Label: "No"}}
+		}
 	}
 	return nil
 }

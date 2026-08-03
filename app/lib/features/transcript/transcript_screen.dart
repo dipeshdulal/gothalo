@@ -28,9 +28,10 @@ enum _Conn { connecting, connected, disconnected, closed, failed }
 /// lifecycle): a text-JSON stream of a `hello` frame, the ordered backlog, a
 /// `backlog_complete` boundary, then the live tail. Entries are ordered and
 /// de-duped on `seq`; a `tool_call` is merged with its `tool_result`
-/// (correlated on `tool.id == result.for_id`) into one tool card. A permanent
-/// pre-upgrade error (e.g. codex/opencode → 404 "transcript not supported")
-/// shows a message instead of reconnecting forever.
+/// (correlated on `tool.id == result.for_id`) into one collapsed row, and runs
+/// of consecutive tool calls group into an indented ledger under the assistant
+/// message. A permanent pre-upgrade error (e.g. codex/opencode → 404
+/// "transcript not supported") shows a message instead of reconnecting forever.
 class TranscriptScreen extends ConsumerStatefulWidget {
   const TranscriptScreen({super.key, required this.pane});
 
@@ -64,6 +65,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _backlogComplete = false;
   bool _sawBacklogComplete = false; // latched: don't re-spin on reconnect
   bool _pinnedToBottom = true;
+
+  /// Set the first time the backlog finishes so the very next layout jumps to
+  /// the newest entry (standard chat open-at-bottom). Consumed once; after that
+  /// the ordinary pinned-to-bottom rule takes over.
+  bool _needInitialSettle = false;
+
+  /// True while the initial settle-to-bottom loop runs. Scroll events are
+  /// ignored during it, so the lazy list growing beneath us (which momentarily
+  /// looks like "scrolled up") can't clear [_pinnedToBottom] and abort the loop.
+  bool _settling = false;
 
   /// Pagination cursor (protocol 2): [_oldestSeq] is the oldest seq we hold —
   /// pass it as `load_older.before_seq` to page up; [_hasOlder] gates it.
@@ -193,13 +204,91 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         _ => m,
       };
 
-  /// Act on a tapped option: the highlighted default is a bare Enter (accepts
-  /// the default); any other choice types its number. Sent as raw input (`\r`)
-  /// so it works even if the snapshot's seq is stale. Optimistically hide the
-  /// bar; the next poll confirms.
-  void _handleOption(BlockedOption opt) {
-    _client?.sendText(widget.pane, opt.selected ? '\r' : '${opt.index}\r');
+  /// Approve the highlighted default via idempotent `POST /approve {agent, seq}`
+  /// (the bridge picks the confirm key and no-ops a stale seq). The seq comes
+  /// from the live snapshot for this pane. Optimistically hide the card; the
+  /// next poll confirms.
+  Future<void> _approveDefault() async {
+    final client = _client;
+    if (client == null) return;
+    final agents =
+        ref.read(snapshotControllerProvider).asData?.value.agents ??
+            const <Agent>[];
+    var seq = 0;
+    for (final a in agents) {
+      if (a.paneId == widget.pane) {
+        seq = a.stateChangeSeq ?? 0;
+        break;
+      }
+    }
     setState(() => _agentState = null);
+    try {
+      final res = await client.approve(widget.pane, seq);
+      if (!res.applied && res.reason != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.reason!)),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
+      );
+    }
+  }
+
+  /// Pick a non-default option. A keyed option (no menu number, e.g. Esc to
+  /// decline) sends that raw keystroke; a numbered one types its number and
+  /// submits via `POST /send {pane, text:'<index>\n'}` (the bridge turns the
+  /// trailing newline into a real Enter). Optimistically hide the card.
+  void _handleOption(BlockedOption opt) {
+    if (opt.isKeyed) {
+      _client?.sendKey(widget.pane, opt.key!);
+    } else {
+      _client?.sendText(widget.pane, '${opt.index}\n');
+    }
+    setState(() => _agentState = null);
+  }
+
+  /// The command / file context being approved — pulled from the most recent
+  /// tool_call still awaiting a result (the one blocking), falling back to the
+  /// parsed `/agent-state` detail. Lets the approval card show *what* it does.
+  String? _approvalContext() {
+    for (final e in _ordered.reversed) {
+      if (e.kind != EntryKind.toolCall || e.tool == null) continue;
+      final t = e.tool!;
+      if (_resultsByForId[t.id] != null) break; // resolved → not the pending one
+      final ctx = _firstText([t.command, t.file, t.inputSummary, t.title]);
+      if (ctx != null) return ctx;
+      break;
+    }
+    final d = _agentState?.detail.trim() ?? '';
+    return d.isEmpty ? null : d;
+  }
+
+  /// The status strip above the composer. Only a blocked agent with a **real
+  /// prompt** gets an actionable approval card; a working agent gets the
+  /// thinking indicator. Everything else (just-waiting, idle, done) shows
+  /// nothing — the composer alone is enough, a lone "waiting" label is
+  /// redundant.
+  Widget _bottomStatus() {
+    final s = _agentState;
+    if (s != null && s.isBlocked) {
+      final opts = s.options;
+      final hasPrompt =
+          (s.blockedQuestion?.trim().isNotEmpty ?? false) || opts.isNotEmpty;
+      if (hasPrompt) {
+        return _ApprovalCard(
+          state: s,
+          options: opts,
+          contextLine: _approvalContext(),
+          onApprove: _approveDefault,
+          onOption: _handleOption,
+        );
+      }
+    }
+    if (s != null && s.isWorking) return const _ThinkingIndicator();
+    return const SizedBox.shrink();
   }
 
   /// The `wss?://…/agent-transcript?pane=&token=` URL, derived from the
@@ -283,7 +372,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     }
     if (touched && mounted) {
       setState(_rebuildOrdered);
-      _maybeAutoScroll();
+      if (_needInitialSettle) {
+        _needInitialSettle = false;
+        _settleToBottom(); // first paint after backlog → land on the newest
+      } else {
+        _maybeAutoScroll();
+      }
     }
   }
 
@@ -308,6 +402,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         _backlogComplete = true;
         _sawBacklogComplete = true;
         _pinnedToBottom = true; // jump to the live tail once backlog lands
+        _needInitialSettle = true; // open at the newest entry, like a chat
         return true;
       case TranscriptFrameType.entry:
         final entry = frame.entry;
@@ -389,6 +484,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
   void _onScroll() {
     if (!_scroll.hasClients) return;
+    // Ignore scroll churn while the initial settle is still re-jumping to the
+    // bottom — otherwise the list growing beneath us reads as "scrolled up".
+    if (_settling) return;
     final pos = _scroll.position;
     final pinned = pos.pixels >= pos.maxScrollExtent - 80;
     if (pinned != _pinnedToBottom) {
@@ -423,6 +521,32 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
       _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  /// Reliably land on the newest entry after the initial backlog. The list is
+  /// lazily built under a `center` anchor, so `maxScrollExtent` is only an
+  /// estimate until off-screen rows lay out — one jump undershoots. Re-jump
+  /// across a few frames until the position stops moving. Bails the moment the
+  /// user scrolls up (`_pinnedToBottom` clears), so it never fights paging or a
+  /// deliberate scroll into history.
+  void _settleToBottom({int tries = 6}) {
+    if (!_pinnedToBottom || _disposed) return;
+    _settling = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed || !_scroll.hasClients) {
+        _settling = false;
+        return;
+      }
+      final max = _scroll.position.maxScrollExtent;
+      if ((_scroll.position.pixels - max).abs() > 1.5) {
+        _scroll.jumpTo(max);
+      }
+      if (tries > 1) {
+        _settleToBottom(tries: tries - 1);
+      } else {
+        _settling = false; // done — hand control back to _onScroll
+      }
     });
   }
 
@@ -467,57 +591,33 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(agent?.displayTitle ?? widget.pane),
+        titleSpacing: 12,
+        title: _TranscriptTitle(
+          title: agent?.displayTitle ?? widget.pane,
+          subtitle: [
+            if (agent != null) agent.gitLabel,
+            if (agent != null) agent.agent,
+          ].where((s) => s.isNotEmpty).join(' · '),
+          connLabel: switch (_conn) {
+            _Conn.connected => 'Live',
+            _Conn.connecting => 'Connecting…',
+            _Conn.disconnected => 'Reconnecting…',
+            _Conn.closed => 'Closed',
+            _Conn.failed => 'Unavailable',
+          },
+          connColor: switch (_conn) {
+            _Conn.connected => scheme.primary,
+            _Conn.connecting => scheme.onSurfaceVariant,
+            _Conn.disconnected => scheme.error,
+            _Conn.closed => scheme.onSurfaceVariant,
+            _Conn.failed => scheme.error,
+          },
+        ),
         actions: [
           IconButton(
             tooltip: 'Jump to an agent',
             onPressed: () => showJumpSheet(context, currentPane: widget.pane),
             icon: const Icon(Icons.bolt),
-          ),
-          // Claude permission mode: a tap cycles it (Shift+Tab). Shown only when
-          // /agent-state reports one (Claude panes).
-          if (_agentState?.permissionMode != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: ActionChip(
-                avatar: const Icon(Icons.tune, size: 15),
-                label: Text(_modeLabel(_agentState!.permissionMode!)),
-                labelStyle: const TextStyle(fontSize: 12),
-                visualDensity: VisualDensity.compact,
-                onPressed: _cycleMode,
-              ),
-            ),
-          IconButton(
-            tooltip: 'Raw terminal',
-            onPressed: () => context.push(
-              '/terminal/${Uri.encodeComponent(widget.pane)}',
-            ),
-            icon: const Icon(Icons.terminal),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12, left: 4),
-            child: Tooltip(
-              message: switch (_conn) {
-                _Conn.connected => 'Live',
-                _Conn.connecting => 'Connecting…',
-                _Conn.disconnected => 'Reconnecting…',
-                _Conn.closed => 'Closed',
-                _Conn.failed => 'Unavailable',
-              },
-              child: Icon(
-                _conn == _Conn.connected
-                    ? Icons.circle
-                    : Icons.circle_outlined,
-                size: 12,
-                color: switch (_conn) {
-                  _Conn.connected => scheme.primary,
-                  _Conn.connecting => scheme.onSurfaceVariant,
-                  _Conn.disconnected => scheme.error,
-                  _Conn.closed => scheme.onSurfaceVariant,
-                  _Conn.failed => scheme.error,
-                },
-              ),
-            ),
           ),
         ],
       ),
@@ -541,20 +641,30 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
                 ],
               ),
             ),
-            // Blocked → show the pending question + options as tappable buttons.
-            if (_agentState?.isBlocked == true)
-              _ApprovalBar(
-                state: _agentState!,
-                onOption: _handleOption,
-              )
-            // Working → a live "thinking…" indicator so the chat feels alive.
-            else if (_agentState?.isWorking == true)
-              const _ThinkingIndicator(),
+            // Real approval → an actionable card; just-waiting → a soft cue;
+            // working → a live "thinking…" indicator (see _bottomStatus).
+            _bottomStatus(),
+            // The permission-mode switcher and raw-terminal jump live down here
+            // with the composer, not the app bar — they're actions about *how
+            // you're about to talk to the agent*, so grouping them with the input
+            // reads better than a cluttered header.
+            _ComposerToolbar(
+              modeLabel: _agentState?.permissionMode != null
+                  ? _modeLabel(_agentState!.permissionMode!)
+                  : null,
+              onCycleMode: _cycleMode,
+              onOpenTerminal: () => context.push(
+                '/terminal/${Uri.encodeComponent(widget.pane)}',
+              ),
+            ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
               controller: _composer,
               onSend: _sendComposer,
+              hintText: _agentState?.isBlocked == true
+                  ? 'Type a number, or your own reply…'
+                  : null,
               enabled: _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
@@ -605,11 +715,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     // Split at the fixed anchor: the first page onward (+ live tail + pending)
     // renders BELOW the center; older pages loaded on scroll-up render ABOVE it.
     // Prepending above the center never shifts the viewport — no scroll math.
-    final below = <TranscriptEntry>[];
-    final above = <TranscriptEntry>[];
+    final belowEntries = <TranscriptEntry>[];
+    final aboveEntries = <TranscriptEntry>[];
     for (final e in visible) {
-      (e.seq < _anchorSeq ? above : below).add(e);
+      (e.seq < _anchorSeq ? aboveEntries : belowEntries).add(e);
     }
+    // Collapse each run of consecutive tool_calls into one indented ledger, so
+    // the chat reads as prose + a compact tool ledger rather than a wall of
+    // cards. Grouping happens per-segment; a run that straddles the page anchor
+    // just renders as two adjacent ledgers (harmless, and rare).
+    final below = _toBlocks(belowEntries);
+    final above = _toBlocks(aboveEntries);
 
     return CustomScrollView(
       controller: _scroll,
@@ -636,7 +752,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
-              (context, i) => _entryTile(above[above.length - 1 - i]),
+              (context, i) => _blockWidget(above[above.length - 1 - i]),
               childCount: above.length,
             ),
           ),
@@ -647,7 +763,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, i) => i < below.length
-                  ? _entryTile(below[i])
+                  ? _blockWidget(below[i])
                   : _PendingBubble(text: _pending[i - below.length]),
               childCount: below.length + _pending.length,
             ),
@@ -657,45 +773,136 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     );
   }
 
-  Widget _entryTile(TranscriptEntry entry) => _EntryTile(
-        entry: entry,
-        result: entry.tool != null ? _resultsByForId[entry.tool!.id] : null,
-      );
+  /// Group a flat entry list into render blocks: a run of consecutive
+  /// `tool_call` entries becomes one [_ToolGroupBlock]; everything else stays a
+  /// standalone [_EntryBlock].
+  List<_Block> _toBlocks(List<TranscriptEntry> entries) {
+    final blocks = <_Block>[];
+    List<TranscriptEntry>? run;
+    void flush() {
+      if (run != null) {
+        blocks.add(_ToolGroupBlock(run!));
+        run = null;
+      }
+    }
+
+    for (final e in entries) {
+      if (e.kind == EntryKind.toolCall) {
+        (run ??= <TranscriptEntry>[]).add(e);
+      } else {
+        flush();
+        blocks.add(_EntryBlock(e));
+      }
+    }
+    flush();
+    return blocks;
+  }
+
+  Widget _blockWidget(_Block block) => switch (block) {
+        _EntryBlock(:final entry) => _EntryTile(entry: entry),
+        _ToolGroupBlock(:final calls) => _ToolLedger(
+            calls: calls,
+            resultFor: (id) => _resultsByForId[id],
+          ),
+      };
 }
 
-/// Dispatches one entry to the right bubble/card by kind.
-/// Shown above the composer while the agent is blocked: the pending question and
-/// its options as tappable buttons (the default is highlighted). Tapping the
-/// default approves via `/approve`; any other option types its number.
-class _ApprovalBar extends StatelessWidget {
-  const _ApprovalBar({required this.state, required this.onOption});
+/// A unit of the rendered transcript: either a standalone entry or a grouped
+/// run of tool calls.
+sealed class _Block {
+  const _Block();
+}
+
+class _EntryBlock extends _Block {
+  const _EntryBlock(this.entry);
+  final TranscriptEntry entry;
+}
+
+class _ToolGroupBlock extends _Block {
+  const _ToolGroupBlock(this.calls);
+  final List<TranscriptEntry> calls;
+}
+
+/// First non-blank string in [xs] (trimmed), or null.
+String? _firstText(List<String?> xs) {
+  for (final x in xs) {
+    if (x != null && x.trim().isNotEmpty) return x.trim();
+  }
+  return null;
+}
+
+/// Shown above the composer when an agent is blocked on a **real prompt** — an
+/// approval or a question with choices. Renders the question, the command/
+/// context being approved, and the options as buttons: the highlighted default
+/// is a prominent Approve (→ `/approve`), other choices type their number
+/// (→ `/send`). Styled by `blocked.category` — red + lock only for
+/// dangerous_command_approval / tool_approval, softer for other permission
+/// grants, neutral for a plain question panel.
+class _ApprovalCard extends StatelessWidget {
+  const _ApprovalCard({
+    required this.state,
+    required this.options,
+    required this.contextLine,
+    required this.onApprove,
+    required this.onOption,
+  });
 
   final AgentState state;
+  final List<BlockedOption> options;
+  final String? contextLine;
+  final VoidCallback onApprove;
   final void Function(BlockedOption) onOption;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final maxW = MediaQuery.sizeOf(context).width * 0.82;
-    final question = (state.blockedQuestion?.isNotEmpty ?? false)
-        ? state.blockedQuestion!
-        : (state.headline.isNotEmpty ? state.headline : 'Waiting for you');
+    final severity = state.blockSeverity;
+    final (Color bg, Color accent, IconData icon) = switch (severity) {
+      BlockSeverity.danger => (
+          scheme.errorContainer.withValues(alpha: 0.55),
+          scheme.error,
+          Icons.lock_outline,
+        ),
+      BlockSeverity.permission => (
+          scheme.errorContainer.withValues(alpha: 0.3),
+          scheme.error,
+          Icons.lock_outline,
+        ),
+      BlockSeverity.question => (
+          scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+          scheme.primary,
+          Icons.forum_outlined,
+        ),
+    };
+    final categoryLabel = state.blockedCategoryLabel;
+    final question = (state.blockedQuestion?.trim().isNotEmpty ?? false)
+        ? state.blockedQuestion!.trim()
+        : (state.headline.isNotEmpty ? state.headline : 'Approve?');
+    final hasSelected = options.any((o) => o.selected);
 
     return Container(
       width: double.infinity,
-      color: scheme.errorContainer.withValues(alpha: 0.32),
+      color: bg,
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (categoryLabel != null) ...[
+            _CategoryPill(
+              label: categoryLabel,
+              icon: icon,
+              accent: accent,
+              strong: severity == BlockSeverity.danger,
+            ),
+            const SizedBox(height: 8),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 2, right: 8),
-                child: Icon(Icons.pan_tool_outlined,
-                    size: 15, color: scheme.error),
+                child: Icon(icon, size: 16, color: accent),
               ),
               Expanded(
                 child: Text(
@@ -708,40 +915,244 @@ class _ApprovalBar extends StatelessWidget {
               ),
             ],
           ),
-          if (state.options.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final o in state.options)
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: maxW),
-                    child: o.selected
-                        ? FilledButton(
-                            onPressed: () => onOption(o),
-                            child: Text(o.label,
-                                maxLines: 2, overflow: TextOverflow.ellipsis),
-                          )
-                        : OutlinedButton(
-                            onPressed: () => onOption(o),
-                            child: Text(o.label,
-                                maxLines: 2, overflow: TextOverflow.ellipsis),
-                          ),
-                  ),
-              ],
-            ),
-          ] else
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
+          if (contextLine != null && contextLine!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: scheme.surface.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+              ),
               child: Text(
-                'Type your answer below.',
-                style:
-                    TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+                contextLine!,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: AppTheme.monoFamily,
+                  fontSize: 12,
+                  height: 1.35,
+                  color: scheme.onSurface,
+                ),
               ),
             ),
+          ],
+          if (options.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (var i = 0; i < options.length; i++) ...[
+              if (i > 0) const SizedBox(height: 6),
+              _OptionRow(
+                option: options[i],
+                primary: options[i].selected || (!hasSelected && i == 0),
+                danger: severity == BlockSeverity.danger,
+                onTap: () {
+                  final o = options[i];
+                  if (o.selected) {
+                    onApprove();
+                  } else {
+                    onOption(o);
+                  }
+                },
+              ),
+            ],
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              'Type your answer below.',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+            ),
+          ],
         ],
       ),
+    );
+  }
+}
+
+/// One row in the approval card's option list — a full-width tappable choice,
+/// stacked vertically rather than wrapped as chips so long labels (a real
+/// menu can have several, e.g. Claude's disambiguation prompts) read cleanly
+/// instead of crowding into a chip cloud of mismatched widths. The default
+/// (`primary`) is filled and accent-coloured with a check; every other choice
+/// is a plain outlined row, each fronted by a small badge — the number to
+/// type, or the raw key name (e.g. "ESC") for a [BlockedOption.isKeyed] choice
+/// that has no menu number at all.
+class _OptionRow extends StatelessWidget {
+  const _OptionRow({
+    required this.option,
+    required this.primary,
+    required this.danger,
+    required this.onTap,
+  });
+
+  final BlockedOption option;
+  final bool primary;
+  final bool danger;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = danger ? scheme.error : scheme.primary;
+    final bg = primary ? accent : scheme.surface.withValues(alpha: 0.6);
+    final fg = primary ? (danger ? scheme.onError : scheme.onPrimary) : scheme.onSurface;
+    final badgeText = option.isKeyed ? option.key!.toUpperCase() : '${option.index}';
+
+    return Material(
+      color: bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: primary
+            ? BorderSide.none
+            : BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: primary
+                      ? fg.withValues(alpha: 0.18)
+                      : scheme.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  badgeText,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: fg,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  option.label,
+                  style: TextStyle(
+                    color: fg,
+                    fontWeight: primary ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+              if (primary) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.check, size: 18, color: fg),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small pill labelling a block's category (from `blocked.category`), e.g.
+/// "Dangerous command" or "Tool permission". Filled/strong for a danger-class
+/// block, outlined otherwise.
+class _CategoryPill extends StatelessWidget {
+  const _CategoryPill({
+    required this.label,
+    required this.icon,
+    required this.accent,
+    required this.strong,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color accent;
+  final bool strong;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: strong ? accent : accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(6),
+        border: strong ? null : Border.all(color: accent.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              size: 12,
+              color: strong
+                  ? Theme.of(context).colorScheme.onError
+                  : accent),
+          const SizedBox(width: 4),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+              color:
+                  strong ? Theme.of(context).colorScheme.onError : accent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The app bar's title: the agent's headline title, plus a small muted
+/// subtitle line (git context + agent kind) and a live-connection dot+label —
+/// context that used to need a tooltip hover to discover, now just readable
+/// at a glance in the freed-up header space.
+class _TranscriptTitle extends StatelessWidget {
+  const _TranscriptTitle({
+    required this.title,
+    required this.subtitle,
+    required this.connLabel,
+    required this.connColor,
+  });
+
+  final String title;
+  final String subtitle;
+  final String connLabel;
+  final Color connColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle, size: 8, color: connColor),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                subtitle.isEmpty ? connLabel : '$subtitle · $connLabel',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -821,55 +1232,50 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
   }
 }
 
-/// The bottom input bar — type a prompt (or an option number for a blocked
-/// prompt) and send it to the agent. The send button submits with a trailing
-/// newline; an empty send is a bare Enter (accepts a default prompt).
-class _ComposerBar extends StatelessWidget {
-  const _ComposerBar({
-    required this.controller,
-    required this.onSend,
-    required this.enabled,
+/// A slim strip above the composer for actions about *how* you're talking to
+/// the agent, rather than the chat itself: the Claude permission-mode switcher
+/// (tap to cycle Shift+Tab) and a jump to the raw terminal. Kept out of the
+/// app bar so the header stays just identity + navigation; these live with
+/// the input they modify. [modeLabel] is null (and the chip hidden) for a
+/// kind/pane with no permission mode to show.
+class _ComposerToolbar extends StatelessWidget {
+  const _ComposerToolbar({
+    required this.modeLabel,
+    required this.onCycleMode,
+    required this.onOpenTerminal,
   });
 
-  final TextEditingController controller;
-  final Future<void> Function() onSend;
-  final bool enabled;
+  final String? modeLabel;
+  final VoidCallback onCycleMode;
+  final VoidCallback onOpenTerminal;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 0),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: enabled,
-              minLines: 1,
-              maxLines: 5,
-              keyboardType: TextInputType.multiline,
-              decoration: InputDecoration(
-                hintText: enabled ? 'Message the agent…' : 'Unavailable',
-                filled: true,
-                fillColor: scheme.surface,
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(22),
-                  borderSide: BorderSide.none,
-                ),
-              ),
+          if (modeLabel != null)
+            ActionChip(
+              avatar: const Icon(Icons.tune, size: 15),
+              label: Text(modeLabel!),
+              labelStyle: const TextStyle(fontSize: 12),
+              visualDensity: VisualDensity.compact,
+              onPressed: onCycleMode,
             ),
-          ),
-          const SizedBox(width: 6),
-          IconButton.filled(
-            tooltip: 'Send',
-            onPressed: enabled ? onSend : null,
-            icon: const Icon(Icons.send, size: 20),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Raw terminal',
+            onPressed: onOpenTerminal,
+            icon: const Icon(Icons.terminal, size: 20),
+            visualDensity: VisualDensity.compact,
           ),
         ],
       ),
@@ -877,11 +1283,169 @@ class _ComposerBar extends StatelessWidget {
   }
 }
 
+/// The bottom input bar — type a prompt (or an option number for a blocked
+/// prompt) and send it to the agent. The send button submits with a trailing
+/// newline; an empty send is a bare Enter (accepts a default prompt).
+class _ComposerBar extends StatefulWidget {
+  const _ComposerBar({
+    required this.controller,
+    required this.onSend,
+    required this.enabled,
+    this.hintText,
+  });
+
+  final TextEditingController controller;
+  final Future<void> Function() onSend;
+  final bool enabled;
+
+  /// Overrides the default hint — e.g. while an approval card is up, to make
+  /// clear that typing here answers it just as well as tapping a button.
+  final String? hintText;
+
+  @override
+  State<_ComposerBar> createState() => _ComposerBarState();
+}
+
+class _ComposerBarState extends State<_ComposerBar> {
+  static const _green = Color(0xFF00C853);
+  final FocusNode _focus = FocusNode();
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocusChange);
+    widget.controller.addListener(_onTextChange);
+    _hasText = widget.controller.text.trim().isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    widget.controller.removeListener(_onTextChange);
+    super.dispose();
+  }
+
+  void _onFocusChange() => setState(() {});
+
+  void _onTextChange() {
+    final has = widget.controller.text.trim().isNotEmpty;
+    if (has != _hasText) setState(() => _hasText = has);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final enabled = widget.enabled;
+    final focused = _focus.hasFocus;
+
+    return Container(
+      color: scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // The input pill: the message text field.
+          Expanded(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(
+                  color: focused
+                      ? _green.withValues(alpha: 0.7)
+                      : scheme.outlineVariant.withValues(alpha: 0.5),
+                  width: focused ? 1.5 : 1,
+                ),
+              ),
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focus,
+                enabled: enabled,
+                minLines: 1,
+                maxLines: 5,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                style: const TextStyle(fontSize: 15, height: 1.3),
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  hintText: !enabled
+                      ? 'Unavailable'
+                      : (widget.hintText ?? 'Message the agent…'),
+                  hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Prominent green paper-plane send.
+          _SendButton(
+            enabled: enabled,
+            active: _hasText,
+            onTap: enabled ? widget.onSend : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The circular green paper-plane send button. Full green when there's text to
+/// send, softer when the field is empty (a bare send is still valid — it accepts
+/// a blocked agent's default), muted when the composer is disabled.
+class _SendButton extends StatelessWidget {
+  const _SendButton({
+    required this.enabled,
+    required this.active,
+    required this.onTap,
+  });
+
+  static const _green = Color(0xFF00C853);
+  final bool enabled;
+  final bool active;
+  final Future<void> Function()? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Color bg = !enabled
+        ? scheme.surfaceContainerHighest
+        : (active ? _green : _green.withValues(alpha: 0.65));
+    final Color fg =
+        enabled ? Colors.white : scheme.onSurfaceVariant.withValues(alpha: 0.6);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap == null ? null : () => onTap!(),
+          child: Center(
+            child: Icon(Icons.send_rounded, size: 22, color: fg),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _EntryTile extends StatelessWidget {
-  const _EntryTile({required this.entry, this.result});
+  const _EntryTile({required this.entry});
 
   final TranscriptEntry entry;
-  final ToolResult? result;
 
   @override
   Widget build(BuildContext context) {
@@ -891,9 +1455,11 @@ class _EntryTile extends StatelessWidget {
     return switch (entry.kind) {
       EntryKind.message => _MessageBubble(entry: entry),
       EntryKind.thinking => _ThinkingBlock(entry: entry),
-      EntryKind.toolCall => _ToolCard(entry: entry, result: result),
+      // Tool calls/results are grouped into a _ToolLedger upstream; if one ever
+      // reaches here standalone, drop it rather than double-render.
+      EntryKind.toolCall => const SizedBox.shrink(),
       EntryKind.attachment => _AttachmentChip(entry: entry),
-      EntryKind.toolResult => const SizedBox.shrink(), // handled by its call
+      EntryKind.toolResult => const SizedBox.shrink(),
       EntryKind.unknown => _RawEntry(entry: entry),
     };
   }
@@ -1193,196 +1759,320 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
 
 /// A `tool_call` merged with its `tool_result`: header (icon + label + ok/fail
 /// chip) and an expandable body with the output summary and a tinted mini-diff.
-class _ToolCard extends StatefulWidget {
-  const _ToolCard({required this.entry, this.result});
+/// Per-tool compact treatment. Classifies by raw name; unknown kinds fall to
+/// [other] (input_summary), so a new tool never renders blank.
+enum _ToolClass { bash, edit, read, search, web, task, other }
 
-  final TranscriptEntry entry;
-  final ToolResult? result;
+_ToolClass _classifyTool(String name) => switch (name.toLowerCase()) {
+      'bash' => _ToolClass.bash,
+      'edit' || 'write' || 'multiedit' || 'notebookedit' => _ToolClass.edit,
+      'read' => _ToolClass.read,
+      'grep' || 'glob' => _ToolClass.search,
+      'webfetch' || 'websearch' => _ToolClass.web,
+      'task' => _ToolClass.task,
+      _ => _ToolClass.other,
+    };
 
-  @override
-  State<_ToolCard> createState() => _ToolCardState();
+/// The one-line primary content for a tool row: an icon, the text, and whether
+/// to render the text monospaced.
+class _Primary {
+  const _Primary(this.icon, this.text, {this.mono = false});
+  final IconData icon;
+  final String text;
+  final bool mono;
 }
 
-class _ToolCardState extends State<_ToolCard> {
-  bool _expanded = false;
+/// Build the compact primary line for a tool, keyed off its class. Always uses
+/// existing structured fields and falls back to `input_summary`/name, so it
+/// never crashes on a missing field.
+_Primary _primaryFor(_ToolClass cls, ToolCall tool) {
+  switch (cls) {
+    case _ToolClass.bash:
+      final cmd = _firstNonEmpty(
+              [tool.command, tool.inputSummary, tool.subtitle, tool.title]) ??
+          tool.name;
+      return _Primary(Icons.terminal, '\$ $cmd', mono: true);
+    case _ToolClass.edit:
+      final file = _firstNonEmpty(
+              [tool.file, _basename(tool.inputSummary), tool.title]) ??
+          tool.name;
+      return _Primary(Icons.edit_outlined, file, mono: true);
+    case _ToolClass.read:
+      final file = _firstNonEmpty(
+              [tool.file, _basename(tool.inputSummary), tool.subtitle]) ??
+          tool.name;
+      return _Primary(Icons.description_outlined, file, mono: true);
+    case _ToolClass.search:
+      final pattern = _firstNonEmpty(
+              [tool.command, tool.subtitle, tool.inputSummary, tool.title]) ??
+          tool.name;
+      return _Primary(Icons.search, pattern, mono: true);
+    case _ToolClass.web:
+      final u =
+          _firstNonEmpty([tool.subtitle, tool.inputSummary, tool.title]) ??
+              tool.name;
+      return _Primary(Icons.public, u);
+    case _ToolClass.task:
+      final t =
+          _firstNonEmpty([tool.title, tool.subtitle, tool.inputSummary]) ??
+              tool.name;
+      return _Primary(Icons.smart_toy_outlined, t);
+    case _ToolClass.other:
+      final t =
+          _firstNonEmpty([tool.inputSummary, tool.subtitle, tool.title]) ??
+              tool.name;
+      return _Primary(Icons.build_outlined, t);
+  }
+}
 
-  IconData _iconFor(String name) {
-    switch (name.toLowerCase()) {
-      case 'bash':
-        return Icons.terminal;
-      case 'edit':
-      case 'write':
-      case 'multiedit':
-      case 'notebookedit':
-        return Icons.edit_outlined;
-      case 'read':
-        return Icons.description_outlined;
-      case 'webfetch':
-      case 'websearch':
-        return Icons.public;
-      case 'grep':
-      case 'glob':
-        return Icons.search;
-      case 'task':
-        return Icons.smart_toy_outlined;
-      default:
-        return Icons.build_outlined;
+String? _firstNonEmpty(List<String?> xs) {
+  for (final x in xs) {
+    if (x != null && x.trim().isNotEmpty) return x.trim();
+  }
+  return null;
+}
+
+String _basename(String? path) {
+  if (path == null || path.isEmpty) return '';
+  final parts = path.split('/').where((s) => s.isNotEmpty).toList();
+  return parts.isEmpty ? path : parts.last;
+}
+
+/// Count added/removed lines in a unified diff (ignoring the `+++`/`---`
+/// headers) — the `+N -M` collapsed stat for an edit.
+(int, int) _diffStat(String diff) {
+  var added = 0, removed = 0;
+  for (final l in const LineSplitter().convert(diff)) {
+    if (l.startsWith('+') && !l.startsWith('+++')) {
+      added++;
+    } else if (l.startsWith('-') && !l.startsWith('---')) {
+      removed++;
     }
   }
+  return (added, removed);
+}
+
+/// A run of tool calls, indented under the assistant message that spawned them
+/// with a left rail — so the chat reads as prose plus a compact tool ledger.
+class _ToolLedger extends StatelessWidget {
+  const _ToolLedger({required this.calls, required this.resultFor});
+
+  final List<TranscriptEntry> calls;
+  final ToolResult? Function(String id) resultFor;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final tool = widget.entry.tool;
-    final result = widget.result;
-    if (tool == null) return const SizedBox.shrink();
+    final rows = <Widget>[];
+    for (final c in calls) {
+      final tool = c.tool;
+      if (tool == null) continue;
+      rows.add(_ToolRow(tool: tool, result: resultFor(tool.id)));
+    }
+    if (rows.isEmpty) return const SizedBox.shrink();
 
-    // The primary label under the header: a command / subtitle / file, mono.
-    final mono = tool.command ?? tool.subtitle ?? tool.file ??
-        tool.inputSummary;
-    // The applied diff (on the result) is authoritative over the preview.
-    final diff = result?.diff ?? tool.diff;
-    final output = result?.outputSummary;
-    final hasBody = (diff != null && diff.isNotEmpty) ||
-        (output != null && output.isNotEmpty);
-    final truncated = (result?.truncated ?? false) || tool.diffTruncated;
-
-    return Align(
-      alignment: Alignment.centerLeft,
+    // The rail's left edge sits on the same gutter as the assistant message
+    // text above it (both are inside the body's horizontal:12 sliver, and the
+    // message adds left:4) — so there's no left-margin jog switching between a
+    // paragraph and its tool rows. The rail spans the whole group's height; the
+    // row content is a small, consistent inset to its right.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 2, 2, 8),
       child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.92,
-        ),
-        margin: const EdgeInsets.symmetric(vertical: 5),
+        padding: const EdgeInsets.only(left: 8),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainer,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+          border: Border(
+            left: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.6),
+              width: 2,
+            ),
+          ),
         ),
-        clipBehavior: Clip.antiAlias,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            InkWell(
-              onTap: hasBody ? () => setState(() => _expanded = !_expanded) : null,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      _iconFor(tool.name),
-                      size: 18,
-                      color: scheme.primary,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(
-                                tool.title?.isNotEmpty == true
-                                    ? tool.title!
-                                    : tool.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              if (tool.file != null) ...[
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    tool.file!,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: AppTheme.monoFamily,
-                                      fontSize: 12,
-                                      color: scheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          if (mono != null && mono.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              mono,
-                              maxLines: _expanded ? 6 : 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontFamily: AppTheme.monoFamily,
-                                fontSize: 12,
-                                height: 1.3,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _ResultChip(result: result),
-                    if (hasBody)
-                      Icon(
-                        _expanded ? Icons.expand_less : Icons.expand_more,
-                        size: 18,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            if (_expanded && hasBody)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (diff != null && diff.isNotEmpty)
-                      _MiniDiff(diff: diff),
-                    if (output != null && output.isNotEmpty) ...[
-                      if (diff != null && diff.isNotEmpty)
-                        const SizedBox(height: 8),
-                      _OutputBlock(text: output),
-                    ],
-                    if (truncated)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          '… truncated',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontStyle: FontStyle.italic,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-          ],
+          children: rows,
         ),
       ),
     );
   }
 }
 
-/// An ok / fail pill from the tool result. Absent while a live call has no
-/// result yet — that reads as "still running".
-class _ResultChip extends StatelessWidget {
-  const _ResultChip({this.result});
+/// One tool call merged with its result into a single collapsed row. Success is
+/// just a green tick (no redundant "ok" text, output hidden); a failure turns
+/// the row red and shows its reason inline; diffs/output expand on tap.
+class _ToolRow extends StatefulWidget {
+  const _ToolRow({required this.tool, this.result});
 
+  final ToolCall tool;
   final ToolResult? result;
+
+  @override
+  State<_ToolRow> createState() => _ToolRowState();
+}
+
+class _ToolRowState extends State<_ToolRow> {
+  static const _green = Color(0xFF00C853);
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (result == null) {
+    final tool = widget.tool;
+    final result = widget.result;
+    final cls = _classifyTool(tool.name);
+
+    final running = result == null;
+    final ok = result?.ok ?? true;
+    final failed = result != null && !result.ok;
+
+    // The applied diff (on the result) is authoritative over the preview.
+    final diff =
+        (result?.diff?.isNotEmpty ?? false) ? result!.diff : tool.diff;
+    final output = result?.outputSummary;
+    final hasDiff = diff != null && diff.isNotEmpty;
+    // Errors surface their output inline; success hides trivial/empty output so
+    // the tick is the whole confirmation.
+    final hasOutput = !failed && output != null && output.trim().isNotEmpty;
+    final expandable = hasDiff || hasOutput;
+    final truncated = (result?.truncated ?? false) || tool.diffTruncated;
+
+    // A subtle collapsed size hint: the +N -M stat for edits, the match/line
+    // count otherwise, and a plain "truncated" when the payload was capped.
+    String? hint;
+    if (cls == _ToolClass.edit && hasDiff) {
+      final (a, d) = _diffStat(diff);
+      if (a > 0 || d > 0) hint = '+$a -$d';
+    } else if (cls == _ToolClass.search &&
+        output != null &&
+        !output.contains('\n') &&
+        output.trim().length <= 40) {
+      hint = output.trim();
+    } else if (hasDiff || hasOutput) {
+      final body = hasDiff ? diff : output!;
+      final n = '\n'.allMatches(body).length + 1;
+      if (n > 1) hint = '+$n lines';
+    }
+    if (truncated && hint == null) hint = 'truncated';
+
+    final p = _primaryFor(cls, tool);
+    final iconColor = failed ? scheme.error : scheme.primary;
+
+    final row = InkWell(
+      onTap: expandable ? () => setState(() => _expanded = !_expanded) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(p.icon, size: 15, color: iconColor),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                p.text,
+                maxLines: _expanded ? 4 : 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: p.mono ? AppTheme.monoFamily : null,
+                  fontSize: 12.5,
+                  height: 1.3,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+            if (hint != null) ...[
+              const SizedBox(width: 8),
+              Text(
+                hint,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.onSurfaceVariant,
+                  fontFamily: AppTheme.monoFamily,
+                ),
+              ),
+            ],
+            // Status marker on the right (trailing), like the previous
+            // rendering — the ✓/✗/spinner ends each row.
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: _StatusDot(running: running, ok: ok),
+            ),
+            if (expandable)
+              Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row,
+        // A failure shows its reason inline — no expand needed.
+        if (failed && output != null && output.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 23, bottom: 6),
+            child: Text(
+              output.trim(),
+              style: TextStyle(fontSize: 12, height: 1.3, color: scheme.error),
+            ),
+          ),
+        if (_expanded && expandable)
+          // Full-width from the ledger gutter — no extra left inset, so the
+          // details/output box doesn't start under the command text and waste
+          // the left space. (Right edge stays flush to the row.)
+          Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasDiff) _MiniDiff(diff: diff),
+                if (hasOutput) ...[
+                  if (hasDiff) const SizedBox(height: 8),
+                  _OutputBlock(text: output),
+                ],
+                if (truncated)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '… truncated',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontStyle: FontStyle.italic,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The leading status marker for a tool row: a spinner while running, a bare
+/// green tick on success (the confirmation in itself), a red mark on failure.
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({required this.running, required this.ok});
+
+  final bool running;
+  final bool ok;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (running) {
       return SizedBox(
         width: 14,
         height: 14,
@@ -1392,34 +2082,10 @@ class _ResultChip extends StatelessWidget {
         ),
       );
     }
-    final ok = result!.ok;
-    final green = const Color(0xFF00C853);
-    final color = ok ? green : scheme.error;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            ok ? Icons.check_circle : Icons.error_outline,
-            size: 13,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            ok ? 'ok' : 'fail',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-        ],
-      ),
+    return Icon(
+      ok ? Icons.check : Icons.error_outline,
+      size: 16,
+      color: ok ? _ToolRowState._green : scheme.error,
     );
   }
 }

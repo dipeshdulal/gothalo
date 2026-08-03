@@ -177,8 +177,11 @@ Field notes for the app:
   context being approved (e.g. the command).
 - **`blocked.options`** are tap targets. `selected:true` marks the default that a
   bare Enter accepts — so one-tap "Yes" is `POST /approve {agent, seq}` (Enter).
-  To pick a *non-default* option, type its number then Enter via
-  `POST /send {pane, text:"2\n"}`. `index` is that number (0 if unnumbered).
+  To pick a *non-default* numbered option, type its number then Enter via
+  `POST /send {pane, text:"2\n"}`. `index` is that number (0 if unnumbered — see
+  `key`). An option with no `index` but a `key` (e.g. `"esc"`) has no menu number
+  at all — it's Claude's single-choice approval form, where decline is only
+  reachable via a keystroke; dispatch it with `POST /send {pane, key:"esc"}`.
 - **`parsed:false`** means the agent kind has no dedicated parser yet, so
   `detail`/`transcript` are a best-effort raw recent-text dump. The card still
   renders; just don't rely on `blocked`. (claude is parsed today; codex and

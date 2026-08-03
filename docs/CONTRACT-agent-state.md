@@ -46,16 +46,18 @@ leak into the contract.
 | `blocked` | object \| absent | **Present only when `agent_status == "blocked"`.** See below. |
 | `blocked.question` | string | The prompt the agent is waiting on. |
 | `blocked.options` | array | Selectable choices in display order. May be empty for a free-form prompt. |
-| `blocked.options[].index` | int | The number the user types to pick it (1-based); `0` if unnumbered. |
+| `blocked.options[].index` | int | The number the user types to pick it (1-based); `0` if unnumbered (see `key`). |
 | `blocked.options[].label` | string | Choice text. |
 | `blocked.options[].selected` | bool | The highlighted default — the one a bare Enter (`/approve`) accepts. |
+| `blocked.options[].key` | string \| absent | Set **instead of** `index` for an option with no menu number, reachable only via a raw keystroke — e.g. `"esc"` for the decline action on Claude's single-choice approval form (`❯ 1. Yes` with no numbered "No", just an "Esc to cancel" footer hint). Omitted for numbered options. Dispatch with `POST /send { "pane": pane_id, "key": "esc" }` (see docs/API.md), not `/approve` or a typed index. |
 | `blocked.category` | string \| absent | Coarse semantic class of the block, from Herdr's own detection rule id (e.g. `tool_approval`, `question_panel`, `dangerous_command_approval`, `write_file_approval`, `generic_permission_prompt`). Filled via `agent.explain` — **no per-agent plugin** — and omitted when unavailable. Lets the app style/prioritise (e.g. flag a dangerous command). |
 | `transcript` | array\<string\> \| absent | Optional, best-effort recent plain-text lines. |
 | `parsed` | bool | `false` ⇒ no dedicated parser for this kind; `detail`/`transcript` are a raw recent-text fallback. |
 
-### How the app uses `blocked` (pairs with `POST /approve`)
+### How the app uses `blocked` (pairs with `POST /approve` and `POST /send`)
 - **One-tap "Yes"** (the `selected` default): `POST /approve { "agent": pane_id, "seq": state_change_seq }` — the bridge presses Enter only if the agent is still blocked at that `seq` (idempotent).
-- **Pick a non-default option**: `POST /send { "pane": pane_id, "text": "2\n" }` — type the option's `index` then newline.
+- **Pick a non-default numbered option**: `POST /send { "pane": pane_id, "text": "2\n" }` — type the option's `index` then newline.
+- **Pick a `key`-only option** (no `index`): `POST /send { "pane": pane_id, "key": "esc" }` — dispatches the raw keystroke instead of typing.
 - `state_change_seq` comes from `/snapshot` (or the push payload), not from this endpoint.
 
 ---

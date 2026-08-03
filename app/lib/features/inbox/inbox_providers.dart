@@ -40,6 +40,7 @@ class SnapshotController extends _$SnapshotController {
   int _lastSeq = -1;
   bool _disposed = false;
   Connection? _conn;
+  BridgeClient? _client;
 
   @override
   Future<Snapshot> build() async {
@@ -54,6 +55,10 @@ class SnapshotController extends _$SnapshotController {
       throw BridgeException('No bridge connection configured yet.');
     }
     _conn = client.connection;
+    _client = client;
+    // Best-effort: ask Herdr for its own attention-ordered agent-view for the
+    // life of this session; cleared in [_teardown]. Never blocks the seed.
+    unawaited(_installAgentView());
     try {
       return await _connectAndSeed();
     } catch (_) {
@@ -204,12 +209,28 @@ class SnapshotController extends _$SnapshotController {
     }
   }
 
+  /// Install Herdr's `attention`-ordered agent-view projection for this session.
+  /// Best-effort — a failure (older bridge, transient) just leaves the inbox on
+  /// its client-side sort.
+  Future<void> _installAgentView() async {
+    try {
+      await _client?.setAgentView();
+    } catch (_) {
+      // Non-fatal: the inbox still renders, just without Herdr's projection.
+    }
+  }
+
   void _teardown() {
     _disposed = true;
     _reconnectTimer?.cancel();
     _resnapTimer?.cancel();
     _sub?.cancel();
     _ch?.sink.close();
+    // Drop the projection we own. Fire-and-forget: the provider is disposing.
+    final client = _client;
+    if (client != null) {
+      unawaited(client.clearAgentView().catchError((_) {}));
+    }
   }
 }
 
