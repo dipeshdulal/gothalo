@@ -192,13 +192,93 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         _ => m,
       };
 
-  /// Act on a tapped option: the highlighted default is a bare Enter (accepts
-  /// the default); any other choice types its number. Sent as raw input (`\r`)
-  /// so it works even if the snapshot's seq is stale. Optimistically hide the
-  /// bar; the next poll confirms.
-  void _handleOption(BlockedOption opt) {
-    _client?.sendText(widget.pane, opt.selected ? '\r' : '${opt.index}\r');
+  /// Approve the highlighted default via idempotent `POST /approve {agent, seq}`
+  /// (the bridge picks the confirm key and no-ops a stale seq). The seq comes
+  /// from the live snapshot for this pane. Optimistically hide the card; the
+  /// next poll confirms.
+  Future<void> _approveDefault() async {
+    final client = _client;
+    if (client == null) return;
+    final agents =
+        ref.read(snapshotControllerProvider).asData?.value.agents ??
+            const <Agent>[];
+    var seq = 0;
+    for (final a in agents) {
+      if (a.paneId == widget.pane) {
+        seq = a.stateChangeSeq ?? 0;
+        break;
+      }
+    }
     setState(() => _agentState = null);
+    try {
+      final res = await client.approve(widget.pane, seq);
+      if (!res.applied && res.reason != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.reason!)),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
+      );
+    }
+  }
+
+  /// Pick a non-default option: type its number and submit via
+  /// `POST /send {pane, text:'<index>\n'}` (the bridge turns the trailing
+  /// newline into a real Enter). Optimistically hide the card.
+  void _handleOption(BlockedOption opt) {
+    _client?.sendText(widget.pane, '${opt.index}\n');
+    setState(() => _agentState = null);
+  }
+
+  /// The command / file context being approved — pulled from the most recent
+  /// tool_call still awaiting a result (the one blocking), falling back to the
+  /// parsed `/agent-state` detail. Lets the approval card show *what* it does.
+  String? _approvalContext() {
+    for (final e in _ordered.reversed) {
+      if (e.kind != EntryKind.toolCall || e.tool == null) continue;
+      final t = e.tool!;
+      if (_resultsByForId[t.id] != null) break; // resolved → not the pending one
+      final ctx = _firstText([t.command, t.file, t.inputSummary, t.title]);
+      if (ctx != null) return ctx;
+      break;
+    }
+    final d = _agentState?.detail.trim() ?? '';
+    return d.isEmpty ? null : d;
+  }
+
+  /// Filter app-injected pseudo-options (e.g. Herdr's "Chat about this") that
+  /// aren't real agent choices, so they never render as approval buttons.
+  bool _isAppInjectedOption(String label) {
+    final l = label.trim().toLowerCase();
+    return l == 'chat about this' || l.startsWith('chat about');
+  }
+
+  /// The status strip above the composer. A blocked agent with a real prompt
+  /// gets an actionable approval card; a blocked agent with no question (the
+  /// live-blocked-form fallback) gets a soft "waiting" cue — no red, no lock; a
+  /// working agent gets the thinking indicator; otherwise nothing.
+  Widget _bottomStatus() {
+    final s = _agentState;
+    if (s != null && s.isBlocked) {
+      final opts =
+          s.options.where((o) => !_isAppInjectedOption(o.label)).toList();
+      final hasPrompt =
+          (s.blockedQuestion?.trim().isNotEmpty ?? false) || opts.isNotEmpty;
+      return hasPrompt
+          ? _ApprovalCard(
+              state: s,
+              options: opts,
+              contextLine: _approvalContext(),
+              onApprove: _approveDefault,
+              onOption: _handleOption,
+            )
+          : const _WaitingCue();
+    }
+    if (s != null && s.isWorking) return const _ThinkingIndicator();
+    return const SizedBox.shrink();
   }
 
   /// The `wss?://…/agent-transcript?pane=&token=` URL, derived from the
@@ -535,15 +615,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
                 ],
               ),
             ),
-            // Blocked → show the pending question + options as tappable buttons.
-            if (_agentState?.isBlocked == true)
-              _ApprovalBar(
-                state: _agentState!,
-                onOption: _handleOption,
-              )
-            // Working → a live "thinking…" indicator so the chat feels alive.
-            else if (_agentState?.isWorking == true)
-              const _ThinkingIndicator(),
+            // Real approval → an actionable card; just-waiting → a soft cue;
+            // working → a live "thinking…" indicator (see _bottomStatus).
+            _bottomStatus(),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
@@ -657,27 +731,40 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       );
 }
 
-/// Dispatches one entry to the right bubble/card by kind.
-/// Shown above the composer while the agent is blocked: the pending question and
-/// its options as tappable buttons (the default is highlighted). Tapping the
-/// default approves via `/approve`; any other option types its number.
-class _ApprovalBar extends StatelessWidget {
-  const _ApprovalBar({required this.state, required this.onOption});
+/// First non-blank string in [xs] (trimmed), or null.
+String? _firstText(List<String?> xs) {
+  for (final x in xs) {
+    if (x != null && x.trim().isNotEmpty) return x.trim();
+  }
+  return null;
+}
+
+/// Shown above the composer when an agent is blocked on a **real prompt** — an
+/// approval or a question with choices. Renders the question, the command/
+/// context being approved, and the options as buttons: the highlighted default
+/// is a prominent Approve (→ `/approve`), other choices type their number
+/// (→ `/send`). Styled by `blocked.category` — red + lock only for
+/// dangerous_command_approval / tool_approval, softer for other permission
+/// grants, neutral for a plain question panel.
+class _ApprovalCard extends StatelessWidget {
+  const _ApprovalCard({
+    required this.state,
+    required this.options,
+    required this.contextLine,
+    required this.onApprove,
+    required this.onOption,
+  });
 
   final AgentState state;
+  final List<BlockedOption> options;
+  final String? contextLine;
+  final VoidCallback onApprove;
   final void Function(BlockedOption) onOption;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final maxW = MediaQuery.sizeOf(context).width * 0.82;
-    final question = (state.blockedQuestion?.isNotEmpty ?? false)
-        ? state.blockedQuestion!
-        : (state.headline.isNotEmpty ? state.headline : 'Waiting for you');
-
-    // Style off Herdr's block category (blocked.category), degrading cleanly
-    // when it's absent: a permission grant gets a lock and a red tint; a plain
-    // question panel stays neutral so we don't cry wolf on every choice.
     final severity = state.blockSeverity;
     final (Color bg, Color accent, IconData icon) = switch (severity) {
       BlockSeverity.danger => (
@@ -686,17 +773,21 @@ class _ApprovalBar extends StatelessWidget {
           Icons.lock_outline,
         ),
       BlockSeverity.permission => (
-          scheme.errorContainer.withValues(alpha: 0.32),
+          scheme.errorContainer.withValues(alpha: 0.3),
           scheme.error,
           Icons.lock_outline,
         ),
       BlockSeverity.question => (
-          scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-          scheme.onSurfaceVariant,
-          Icons.help_outline,
+          scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+          scheme.primary,
+          Icons.forum_outlined,
         ),
     };
     final categoryLabel = state.blockedCategoryLabel;
+    final question = (state.blockedQuestion?.trim().isNotEmpty ?? false)
+        ? state.blockedQuestion!.trim()
+        : (state.headline.isNotEmpty ? state.headline : 'Approve?');
+    final hasSelected = options.any((o) => o.selected);
 
     return Container(
       width: double.infinity,
@@ -720,7 +811,7 @@ class _ApprovalBar extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 2, right: 8),
-                child: Icon(icon, size: 15, color: accent),
+                child: Icon(icon, size: 16, color: accent),
               ),
               Expanded(
                 child: Text(
@@ -733,38 +824,119 @@ class _ApprovalBar extends StatelessWidget {
               ),
             ],
           ),
-          if (state.options.isNotEmpty) ...[
+          if (contextLine != null && contextLine!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: scheme.surface.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+              ),
+              child: Text(
+                contextLine!,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: AppTheme.monoFamily,
+                  fontSize: 12,
+                  height: 1.35,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+          ],
+          if (options.isNotEmpty) ...[
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final o in state.options)
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: maxW),
-                    child: o.selected
-                        ? FilledButton(
-                            onPressed: () => onOption(o),
-                            child: Text(o.label,
-                                maxLines: 2, overflow: TextOverflow.ellipsis),
-                          )
-                        : OutlinedButton(
-                            onPressed: () => onOption(o),
-                            child: Text(o.label,
-                                maxLines: 2, overflow: TextOverflow.ellipsis),
-                          ),
+                for (var i = 0; i < options.length; i++)
+                  _optionButton(
+                    options[i],
+                    scheme,
+                    severity,
+                    maxW,
+                    primary: options[i].selected || (!hasSelected && i == 0),
                   ),
               ],
             ),
-          ] else
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Type your answer below.',
-                style:
-                    TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
-              ),
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              'Type your answer below.',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
             ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _optionButton(
+    BlockedOption o,
+    ColorScheme scheme,
+    BlockSeverity severity,
+    double maxW, {
+    required bool primary,
+  }) {
+    final label = Text(o.label, maxLines: 2, overflow: TextOverflow.ellipsis);
+    if (!primary) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxW),
+        child: OutlinedButton(onPressed: () => onOption(o), child: label),
+      );
+    }
+    // The prominent action: the highlighted default approves via /approve;
+    // a primary-by-position option (nothing preselected) types its number.
+    final onPressed = o.selected ? onApprove : () => onOption(o);
+    final style = severity == BlockSeverity.danger
+        ? FilledButton.styleFrom(
+            backgroundColor: scheme.error,
+            foregroundColor: scheme.onError,
+          )
+        : null;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxW),
+      child: FilledButton.icon(
+        style: style,
+        onPressed: onPressed,
+        icon: const Icon(Icons.check, size: 18),
+        label: label,
+      ),
+    );
+  }
+}
+
+/// A soft, non-alarming cue that the agent is idle and waiting for the user's
+/// next message — shown instead of the approval card when the block carries no
+/// real question (the live-blocked-form fallback). No red, no lock.
+class _WaitingCue extends StatelessWidget {
+  const _WaitingCue();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      color: scheme.surfaceContainerHigh.withValues(alpha: 0.5),
+      child: Row(
+        children: [
+          Icon(Icons.reply_outlined, size: 15, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Text(
+            'Waiting for your reply',
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontSize: 12.5,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
         ],
       ),
     );
