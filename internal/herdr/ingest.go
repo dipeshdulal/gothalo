@@ -77,9 +77,10 @@ func (i *Ingester) Run(ctx context.Context) {
 			return
 		}
 		if err := i.session(ctx, first); err != nil {
-			log.Warn("herdr ingester: session ended", "err", err)
+			log.Warn("herdr ingester: session ended", "session", i.cli.SessionLabel(), "err", err)
 		}
-		i.bus.Publish(events.SourceGothalo, events.TypeHerdrDisconnected, map[string]any{"reason": "socket closed"})
+		i.bus.Publish(events.SourceGothalo, events.TypeHerdrDisconnected,
+			map[string]any{"reason": "socket closed", "session": i.cli.SessionLabel()})
 		first = false
 		select {
 		case <-ctx.Done():
@@ -111,12 +112,14 @@ func (i *Ingester) session(ctx context.Context, first bool) error {
 	if err := conn.Subscribe(subs); err != nil {
 		return err
 	}
-	log.Info("herdr ingester: subscribed", "socket", path, "subscriptions", len(subs))
+	log.Info("herdr ingester: subscribed", "session", i.cli.SessionLabel(), "socket", path, "subscriptions", len(subs))
 
-	i.bus.Publish(events.SourceGothalo, events.TypeHerdrConnected, map[string]any{"socket": path})
+	i.bus.Publish(events.SourceGothalo, events.TypeHerdrConnected,
+		map[string]any{"socket": path, "session": i.cli.SessionLabel()})
 	if !first {
 		// A reconnect may have missed events; tell clients to re-snapshot.
-		i.bus.Publish(events.SourceGothalo, events.TypeHerdrResync, map[string]any{"reason": "herdr reconnected"})
+		i.bus.Publish(events.SourceGothalo, events.TypeHerdrResync,
+			map[string]any{"reason": "herdr reconnected", "session": i.cli.SessionLabel()})
 	}
 
 	// Stop the read loop when ctx is cancelled by closing the connection. The
@@ -191,15 +194,30 @@ func (i *Ingester) handle(msg SocketMessage) {
 	}
 
 	if globalEventKinds[msg.Event] {
-		// Forward Herdr's event verbatim (its data object is the payload).
-		i.bus.Publish(events.SourceHerdr, msg.Event, msg.Data)
+		// Forward Herdr's event (its data object is the payload), session-tagged.
+		i.bus.Publish(events.SourceHerdr, msg.Event, i.tag(msg.Data))
 		i.deriveAgentStatus(msg)
 		return
 	}
 
 	// Any other (unexpected) event kind is still forwarded so nothing is silently
 	// dropped; the app can ignore types it doesn't know.
-	i.bus.Publish(events.SourceHerdr, msg.Event, msg.Data)
+	i.bus.Publish(events.SourceHerdr, msg.Event, i.tag(msg.Data))
+}
+
+// tag decodes a Herdr payload, qualifies its ids with this ingester's session,
+// and stamps the session label so bus consumers can tell sessions apart. On a
+// decode failure the payload is forwarded untouched.
+func (i *Ingester) tag(data json.RawMessage) any {
+	var v any
+	if json.Unmarshal(data, &v) != nil {
+		return data
+	}
+	QualifyIDs(v, i.cli.Session())
+	if obj, ok := v.(map[string]any); ok {
+		obj["session"] = i.cli.SessionLabel()
+	}
+	return v
 }
 
 // deriveAgentStatus extracts an agent status from the structural events that
@@ -254,9 +272,10 @@ func (i *Ingester) emitAgentStatus(pane, workspace, agent, status string) {
 	}
 	i.lastStatus[pane] = status
 	i.bus.Publish(events.SourceHerdr, events.TypePaneAgentStatusChanged, map[string]any{
-		"pane_id":      pane,
-		"workspace_id": workspace,
+		"pane_id":      Qualify(i.cli.Session(), pane),
+		"workspace_id": Qualify(i.cli.Session(), workspace),
 		"agent":        agent,
 		"agent_status": status,
+		"session":      i.cli.SessionLabel(),
 	})
 }

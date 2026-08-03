@@ -53,7 +53,6 @@ func runServe(configPath string) error {
 		log.Info("generated admin token", "config", cfg.ConfigPath())
 	}
 
-	h := herdr.New()
 	st, err := store.Open(cfg.DevicesPath())
 	if err != nil {
 		return err
@@ -68,17 +67,28 @@ func runServe(configPath string) error {
 		log.Info("FCM enabled", "project", p.ProjectID())
 	}
 
-	// The unified event bus and the single process-wide Herdr ingester. Every WS
-	// /events client is a bus subscriber; the ingester holds the one Herdr socket
-	// subscription and fans it out (never one Herdr connection per client).
+	// The unified event bus. Every WS /events client is a bus subscriber; each
+	// session's ingester holds that session's one Herdr socket subscription and
+	// fans it out (never one Herdr connection per client).
 	bus := events.New()
-	ing := herdr.NewIngester(h, bus)
-	go ing.Run(context.Background())
 
-	srv := server.New(cfg, h, pc, st, pm, web.FS(), bus)
+	// One ingester + watcher per running Herdr session, started (and stopped) by
+	// the session manager as sessions come and go. Pane ids from non-default
+	// sessions are qualified as "<session>/<pane>" everywhere they leave the bridge.
+	usePoll := os.Getenv("WATCHER") == "poll"
+	var srv *server.Server
+	mgr := herdr.NewManager(func(name string, c *herdr.Client) func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		go herdr.NewIngester(c, bus).Run(ctx)
+		w := watcher.New(c, func(paneID, status, title string, seq int) {
+			srv.Notify(herdr.Qualify(c.Session(), paneID), status, title, seq)
+		}, usePoll)
+		go w.Run(ctx)
+		return cancel
+	})
 
-	w := watcher.New(h, srv.Notify, os.Getenv("WATCHER") == "poll")
-	go w.Run()
+	srv = server.New(cfg, mgr, pc, st, pm, web.FS(), bus)
+	go mgr.Run(context.Background())
 
 	// The notification-clearer is the process-wide bus consumer that dismisses a
 	// stale "blocked" push once the pane leaves blocked or closes (from anywhere).

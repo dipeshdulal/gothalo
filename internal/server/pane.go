@@ -48,15 +48,26 @@ func (s *Server) handlePaneNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Both target forms may carry a session prefix; the new pane lands in (and is
+	// addressed back with) that session.
 	var (
-		pane herdr.Pane
-		err  error
+		pane    herdr.Pane
+		session string
+		err     error
 	)
 	switch {
 	case body.SplitFrom != "":
-		pane, err = s.herdr.SplitPane(body.SplitFrom, body.Direction, body.CWD)
+		var c *herdr.Client
+		var bare string
+		if c, session, bare, err = s.target(body.SplitFrom); err == nil {
+			pane, err = c.SplitPane(bare, body.Direction, body.CWD)
+		}
 	case body.WorkspaceID != "":
-		pane, err = s.herdr.CreateTab(body.WorkspaceID, body.CWD, body.Label)
+		var c *herdr.Client
+		var bare string
+		if c, session, bare, err = s.target(body.WorkspaceID); err == nil {
+			pane, err = c.CreateTab(bare, body.CWD, body.Label)
+		}
 	default:
 		http.Error(w, "want {split_from} or {workspace_id}", http.StatusBadRequest)
 		return
@@ -69,23 +80,27 @@ func (s *Server) handlePaneNew(w http.ResponseWriter, r *http.Request) {
 	// The pane exists now; a command failure must not lose its id (the app still
 	// wants to attach), so it is logged, not surfaced as an error.
 	if body.Command != "" {
-		if e := s.herdr.RunInPane(pane.PaneID, body.Command); e != nil {
+		c, _ := s.sessions.Client(session)
+		if e := c.RunInPane(pane.PaneID, body.Command); e != nil {
 			log.Error("pane/new: run command failed", "pane", pane.PaneID, "err", e)
 		}
 	}
 
-	log.Info("created pane", "pane", pane.PaneID, "tab", pane.TabID, "workspace", pane.Workspace)
+	paneID := herdr.Qualify(session, pane.PaneID)
+	tabID := herdr.Qualify(session, pane.TabID)
+	workspaceID := herdr.Qualify(session, pane.Workspace)
+	log.Info("created pane", "pane", paneID, "tab", tabID, "workspace", workspaceID)
 	// gothalo.pane_created marks an APP-initiated pane (distinct from Herdr's own
 	// pane_created, which fires for every pane however created).
 	s.publish(events.TypeGothaloPaneCreated, map[string]any{
-		"pane_id":      pane.PaneID,
-		"tab_id":       pane.TabID,
-		"workspace_id": pane.Workspace,
+		"pane_id":      paneID,
+		"tab_id":       tabID,
+		"workspace_id": workspaceID,
 	})
 	writeJSON(w, map[string]string{
-		"pane_id":      pane.PaneID,
-		"tab_id":       pane.TabID,
-		"workspace_id": pane.Workspace,
+		"pane_id":      paneID,
+		"tab_id":       tabID,
+		"workspace_id": workspaceID,
 	})
 }
 
@@ -102,7 +117,12 @@ func (s *Server) handlePaneClose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want {pane_id}", http.StatusBadRequest)
 		return
 	}
-	if err := s.herdr.ClosePane(body.PaneID); err != nil {
+	c, _, bare, err := s.target(body.PaneID)
+	if err != nil {
+		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
+	if err := c.ClosePane(bare); err != nil {
 		http.Error(w, err.Error(), herdrStatus(err))
 		return
 	}

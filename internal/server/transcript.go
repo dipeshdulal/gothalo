@@ -138,7 +138,12 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the agent (for kind/cwd/session) before upgrading, so a missing agent
 	// or transcript is a clean HTTP status, not a dropped socket.
-	agent, err := s.herdr.Get(pane)
+	c, _, bare, err := s.target(pane)
+	if err != nil {
+		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
+	agent, err := c.Get(bare)
 	if err != nil {
 		if errors.Is(err, herdr.ErrAgentNotFound) {
 			http.Error(w, "no such agent", http.StatusNotFound)

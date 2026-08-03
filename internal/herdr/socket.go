@@ -215,7 +215,9 @@ type serverStatus struct {
 // `herdr status server --json` (the authoritative source, which prints the
 // active `socket`).
 func (c *Client) ServerSocketPath() (string, error) {
-	if v := os.Getenv("HERDR_SOCK"); v != "" {
+	// HERDR_SOCK overrides only the default session; named sessions always
+	// resolve their own socket.
+	if v := os.Getenv("HERDR_SOCK"); v != "" && c.session == "" {
 		return v, nil
 	}
 	out, err := c.run("status", "server", "--json")

@@ -45,7 +45,7 @@ const (
 	samplerPaneAgentDetected = `{"agent":"claude","final_status":"idle","pane_id":"wN:pE","released":true,"type":"pane_agent_detected","workspace_id":"wN"}`
 )
 
-func TestForwardsGlobalEventVerbatim(t *testing.T) {
+func TestForwardsGlobalEventSessionTagged(t *testing.T) {
 	bus := events.New()
 	sub := bus.Subscribe(16)
 	defer sub.Close()
@@ -57,8 +57,38 @@ func TestForwardsGlobalEventVerbatim(t *testing.T) {
 	if e.Source != events.SourceHerdr || e.Type != events.TypePaneFocused {
 		t.Fatalf("got %s/%s, want herdr/pane_focused", e.Source, e.Type)
 	}
-	if string(e.Payload) != samplerPaneFocused {
-		t.Errorf("payload = %s, want verbatim data", e.Payload)
+	// Herdr's data object is forwarded with the session label stamped on; the
+	// default session's ids stay unqualified.
+	var p struct {
+		PaneID  string `json:"pane_id"`
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.PaneID != "wN:pC" || p.Session != "default" {
+		t.Errorf("payload = %s, want unqualified pane_id + session=default", e.Payload)
+	}
+}
+
+func TestForwardsGlobalEventQualifiedForNamedSession(t *testing.T) {
+	bus := events.New()
+	sub := bus.Subscribe(16)
+	defer sub.Close()
+	ing := NewIngester(NewForSession("acme"), bus)
+
+	ing.handle(msg("pane_focused", samplerPaneFocused))
+
+	e := collect(t, sub, 1)[0]
+	var p struct {
+		PaneID  string `json:"pane_id"`
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.PaneID != "acme/wN:pC" || p.Session != "acme" {
+		t.Errorf("payload = %s, want acme-qualified pane_id + session=acme", e.Payload)
 	}
 }
 

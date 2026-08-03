@@ -18,15 +18,45 @@ import (
 // on a zero exit code, so callers can map it to a 404 rather than a 502.
 var ErrAgentNotFound = errors.New("agent not found")
 
-// Client talks to the local herdr CLI.
+// Client talks to the local herdr CLI, scoped to one Herdr session.
 type Client struct {
-	bin string
+	bin     string
+	session string // "" targets the default session (no --session flag)
 }
 
-// New returns a Client that invokes `herdr` from PATH.
+// New returns a Client that invokes `herdr` from PATH against the default session.
 func New() *Client { return &Client{bin: "herdr"} }
 
+// NewForSession returns a Client scoped to the named Herdr session ("default"
+// and "" both mean the default session).
+func NewForSession(name string) *Client {
+	if name == defaultSessionName {
+		name = ""
+	}
+	return &Client{bin: "herdr", session: name}
+}
+
+// Session returns the session name this client targets ("" = default).
+func (c *Client) Session() string { return c.session }
+
+// SessionLabel returns the human session name, "default" for the default session.
+func (c *Client) SessionLabel() string {
+	if c.session == "" {
+		return defaultSessionName
+	}
+	return c.session
+}
+
+// args prepends the --session flag for non-default sessions.
+func (c *Client) args(a ...string) []string {
+	if c.session == "" {
+		return a
+	}
+	return append([]string{"--session", c.session}, a...)
+}
+
 func (c *Client) run(args ...string) ([]byte, error) {
+	args = c.args(args...)
 	out, err := exec.Command(c.bin, args...).CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("herdr %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
@@ -204,7 +234,7 @@ func (c *Client) SendKeys(pane string, keys ...string) error {
 // owned by the client. Only agent panes resolve here; non-agent panes stream
 // via ReadPane + Send instead (see Pane.IsAgent).
 func (c *Client) AttachCommand(target string) *exec.Cmd {
-	return exec.Command(c.bin, "agent", "attach", target)
+	return exec.Command(c.bin, c.args("agent", "attach", target)...)
 }
 
 // Pane is the subset of `herdr pane get` fields gothalo needs to route attach

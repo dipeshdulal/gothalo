@@ -6,6 +6,7 @@
 package watcher
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -32,28 +33,30 @@ func New(h *herdr.Client, notify NotifyFunc, usePoll bool) *Watcher {
 	return &Watcher{h: h, notify: notify, usePoll: usePoll}
 }
 
-// Run blocks, watching forever. Call it in its own goroutine.
-func (w *Watcher) Run() {
+// Run blocks, watching until ctx is cancelled. Call it in its own goroutine.
+func (w *Watcher) Run(ctx context.Context) {
 	if w.usePoll {
-		log.Info("watcher started", "mode", "poll")
-		w.pollLoop()
+		log.Info("watcher started", "session", w.h.SessionLabel(), "mode", "poll")
+		w.pollLoop(ctx)
 		return
 	}
-	log.Info("watcher started", "mode", "event-driven (herdr agent wait)")
-	w.waitLoop()
+	log.Info("watcher started", "session", w.h.SessionLabel(), "mode", "event-driven (herdr agent wait)")
+	w.waitLoop(ctx)
 }
 
 // waitLoop discovers agents from periodic snapshots and runs one event-driven
 // watchAgent goroutine per agent. Discovery never calls notify.
-func (w *Watcher) waitLoop() {
+func (w *Watcher) waitLoop(ctx context.Context) {
 	var mu sync.Mutex
 	watched := map[string]bool{}
 
 	for {
 		agents, err := w.h.Agents()
 		if err != nil {
-			log.Error("watcher discover failed", "err", err)
-			time.Sleep(5 * time.Second)
+			log.Error("watcher discover failed", "session", w.h.SessionLabel(), "err", err)
+			if !sleepCtx(ctx, 5*time.Second) {
+				return
+			}
 			continue
 		}
 		for _, a := range agents {
@@ -71,7 +74,19 @@ func (w *Watcher) waitLoop() {
 				mu.Unlock()
 			})
 		}
-		time.Sleep(10 * time.Second)
+		if !sleepCtx(ctx, 10*time.Second) {
+			return
+		}
+	}
+}
+
+// sleepCtx sleeps for d, returning false if ctx ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 
@@ -105,14 +120,16 @@ func (w *Watcher) watchAgent(pane, initialStatus string, done func()) {
 
 // pollLoop is the snapshot-poll fallback. It seeds a baseline on the first pass
 // so a (re)start doesn't re-notify every already-blocked/done agent.
-func (w *Watcher) pollLoop() {
+func (w *Watcher) pollLoop(ctx context.Context) {
 	seen := map[string]string{}
 	first := true
 	for {
 		agents, err := w.h.Agents()
 		if err != nil {
-			log.Error("watcher poll failed", "err", err)
-			time.Sleep(5 * time.Second)
+			log.Error("watcher poll failed", "session", w.h.SessionLabel(), "err", err)
+			if !sleepCtx(ctx, 5*time.Second) {
+				return
+			}
 			continue
 		}
 		for _, a := range agents {
@@ -123,6 +140,8 @@ func (w *Watcher) pollLoop() {
 			seen[a.PaneID] = a.Status
 		}
 		first = false
-		time.Sleep(3 * time.Second)
+		if !sleepCtx(ctx, 3*time.Second) {
+			return
+		}
 	}
 }

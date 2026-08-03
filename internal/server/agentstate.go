@@ -29,8 +29,13 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want ?pane=<pane_id>", http.StatusBadRequest)
 		return
 	}
+	c, _, bare, err := s.target(pane)
+	if err != nil {
+		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
 
-	agent, err := s.herdr.Get(pane)
+	agent, err := c.Get(bare)
 	if err != nil {
 		if errors.Is(err, herdr.ErrAgentNotFound) {
 			http.Error(w, "no such agent", http.StatusNotFound)
@@ -45,11 +50,11 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	// unwrapped recent transcript (best for the last assistant message). A read
 	// failure here is non-fatal: we still return a state from whatever we have,
 	// so a momentary read hiccup degrades instead of erroring.
-	detection, derr := s.herdr.ReadText(pane, "detection", 0)
+	detection, derr := c.ReadText(bare, "detection", 0)
 	if derr != nil {
 		log.Warn("agent-state: detection read failed", "pane", pane, "err", derr)
 	}
-	recent, rerr := s.herdr.ReadText(pane, "recent-unwrapped", 80)
+	recent, rerr := c.ReadText(bare, "recent-unwrapped", 80)
 	if rerr != nil {
 		log.Warn("agent-state: recent read failed", "pane", pane, "err", rerr)
 	}

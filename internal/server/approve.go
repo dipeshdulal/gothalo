@@ -68,7 +68,12 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		respondApprove(w, applied, reason)
 	}
 
-	agents, err := s.herdr.Agents()
+	c, _, pane, err := s.target(body.Agent)
+	if err != nil {
+		finish(false, "no such agent")
+		return
+	}
+	agents, err := c.Agents()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -76,7 +81,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 
 	var found bool
 	for _, a := range agents {
-		if a.PaneID != body.Agent {
+		if a.PaneID != pane {
 			continue
 		}
 		found = true
@@ -90,7 +95,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		key := confirmKeyFor(a.Kind)
-		if err := s.herdr.SendKeys(body.Agent, key); err != nil {
+		if err := c.SendKeys(pane, key); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
