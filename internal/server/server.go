@@ -182,9 +182,26 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), herdrStatus(err))
 		return
 	}
-	if err := c.Send(pane, body.Text); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+	// Split a trailing newline/CR "submit" off the text. The body is typed as a
+	// paste-safe send-text, but the Enter is delivered as a real key event:
+	// Claude enables bracketed-paste mode, which swallows a \r embedded in
+	// pasted text — leaving the message sitting unsubmitted in the input box
+	// (the "have to press Enter twice" bug). A key event submits regardless of
+	// paste mode, and only when the caller actually asked to submit.
+	text := body.Text
+	submit := strings.HasSuffix(text, "\r") || strings.HasSuffix(text, "\n")
+	content := strings.TrimRight(text, "\r\n")
+	if content != "" {
+		if err := c.Send(pane, content); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	if submit {
+		if err := c.SendKeys(pane, "Enter"); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
