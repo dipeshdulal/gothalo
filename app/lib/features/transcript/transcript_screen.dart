@@ -590,54 +590,28 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(agent?.displayTitle ?? widget.pane),
-        actions: [
-          // Claude permission mode: a tap cycles it (Shift+Tab). Shown only when
-          // /agent-state reports one (Claude panes).
-          if (_agentState?.permissionMode != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: ActionChip(
-                avatar: const Icon(Icons.tune, size: 15),
-                label: Text(_modeLabel(_agentState!.permissionMode!)),
-                labelStyle: const TextStyle(fontSize: 12),
-                visualDensity: VisualDensity.compact,
-                onPressed: _cycleMode,
-              ),
-            ),
-          IconButton(
-            tooltip: 'Raw terminal',
-            onPressed: () => context.push(
-              '/terminal/${Uri.encodeComponent(widget.pane)}',
-            ),
-            icon: const Icon(Icons.terminal),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12, left: 4),
-            child: Tooltip(
-              message: switch (_conn) {
-                _Conn.connected => 'Live',
-                _Conn.connecting => 'Connecting…',
-                _Conn.disconnected => 'Reconnecting…',
-                _Conn.closed => 'Closed',
-                _Conn.failed => 'Unavailable',
-              },
-              child: Icon(
-                _conn == _Conn.connected
-                    ? Icons.circle
-                    : Icons.circle_outlined,
-                size: 12,
-                color: switch (_conn) {
-                  _Conn.connected => scheme.primary,
-                  _Conn.connecting => scheme.onSurfaceVariant,
-                  _Conn.disconnected => scheme.error,
-                  _Conn.closed => scheme.onSurfaceVariant,
-                  _Conn.failed => scheme.error,
-                },
-              ),
-            ),
-          ),
-        ],
+        titleSpacing: 12,
+        title: _TranscriptTitle(
+          title: agent?.displayTitle ?? widget.pane,
+          subtitle: [
+            if (agent != null) agent.gitLabel,
+            if (agent != null) agent.agent,
+          ].where((s) => s.isNotEmpty).join(' · '),
+          connLabel: switch (_conn) {
+            _Conn.connected => 'Live',
+            _Conn.connecting => 'Connecting…',
+            _Conn.disconnected => 'Reconnecting…',
+            _Conn.closed => 'Closed',
+            _Conn.failed => 'Unavailable',
+          },
+          connColor: switch (_conn) {
+            _Conn.connected => scheme.primary,
+            _Conn.connecting => scheme.onSurfaceVariant,
+            _Conn.disconnected => scheme.error,
+            _Conn.closed => scheme.onSurfaceVariant,
+            _Conn.failed => scheme.error,
+          },
+        ),
       ),
       body: SafeArea(
         top: false,
@@ -662,11 +636,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Real approval → an actionable card; just-waiting → a soft cue;
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
+            // The permission-mode switcher and raw-terminal jump live down here
+            // with the composer, not the app bar — they're actions about *how
+            // you're about to talk to the agent*, so grouping them with the input
+            // reads better than a cluttered header.
+            _ComposerToolbar(
+              modeLabel: _agentState?.permissionMode != null
+                  ? _modeLabel(_agentState!.permissionMode!)
+                  : null,
+              onCycleMode: _cycleMode,
+              onOpenTerminal: () => context.push(
+                '/terminal/${Uri.encodeComponent(widget.pane)}',
+              ),
+            ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
               controller: _composer,
               onSend: _sendComposer,
+              hintText: _agentState?.isBlocked == true
+                  ? 'Type a number, or your own reply…'
+                  : null,
               enabled: _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
@@ -1109,6 +1099,56 @@ class _CategoryPill extends StatelessWidget {
   }
 }
 
+/// The app bar's title: the agent's headline title, plus a small muted
+/// subtitle line (git context + agent kind) and a live-connection dot+label —
+/// context that used to need a tooltip hover to discover, now just readable
+/// at a glance in the freed-up header space.
+class _TranscriptTitle extends StatelessWidget {
+  const _TranscriptTitle({
+    required this.title,
+    required this.subtitle,
+    required this.connLabel,
+    required this.connColor,
+  });
+
+  final String title;
+  final String subtitle;
+  final String connLabel;
+  final Color connColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle, size: 8, color: connColor),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                subtitle.isEmpty ? connLabel : '$subtitle · $connLabel',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 /// A live "thinking…" indicator shown above the composer while the agent is
 /// working — three pulsing dots, like a chat typing indicator.
 class _ThinkingIndicator extends StatefulWidget {
@@ -1184,57 +1224,211 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
   }
 }
 
+/// A slim strip above the composer for actions about *how* you're talking to
+/// the agent, rather than the chat itself: the Claude permission-mode switcher
+/// (tap to cycle Shift+Tab) and a jump to the raw terminal. Kept out of the
+/// app bar so the header stays just identity + navigation; these live with
+/// the input they modify. [modeLabel] is null (and the chip hidden) for a
+/// kind/pane with no permission mode to show.
+class _ComposerToolbar extends StatelessWidget {
+  const _ComposerToolbar({
+    required this.modeLabel,
+    required this.onCycleMode,
+    required this.onOpenTerminal,
+  });
+
+  final String? modeLabel;
+  final VoidCallback onCycleMode;
+  final VoidCallback onOpenTerminal;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 0),
+      child: Row(
+        children: [
+          if (modeLabel != null)
+            ActionChip(
+              avatar: const Icon(Icons.tune, size: 15),
+              label: Text(modeLabel!),
+              labelStyle: const TextStyle(fontSize: 12),
+              visualDensity: VisualDensity.compact,
+              onPressed: onCycleMode,
+            ),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Raw terminal',
+            onPressed: onOpenTerminal,
+            icon: const Icon(Icons.terminal, size: 20),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// The bottom input bar — type a prompt (or an option number for a blocked
 /// prompt) and send it to the agent. The send button submits with a trailing
 /// newline; an empty send is a bare Enter (accepts a default prompt).
-class _ComposerBar extends StatelessWidget {
+class _ComposerBar extends StatefulWidget {
   const _ComposerBar({
     required this.controller,
     required this.onSend,
     required this.enabled,
+    this.hintText,
   });
 
   final TextEditingController controller;
   final Future<void> Function() onSend;
   final bool enabled;
 
+  /// Overrides the default hint — e.g. while an approval card is up, to make
+  /// clear that typing here answers it just as well as tapping a button.
+  final String? hintText;
+
+  @override
+  State<_ComposerBar> createState() => _ComposerBarState();
+}
+
+class _ComposerBarState extends State<_ComposerBar> {
+  static const _green = Color(0xFF00C853);
+  final FocusNode _focus = FocusNode();
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocusChange);
+    widget.controller.addListener(_onTextChange);
+    _hasText = widget.controller.text.trim().isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    widget.controller.removeListener(_onTextChange);
+    super.dispose();
+  }
+
+  void _onFocusChange() => setState(() {});
+
+  void _onTextChange() {
+    final has = widget.controller.text.trim().isNotEmpty;
+    if (has != _hasText) setState(() => _hasText = has);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final enabled = widget.enabled;
+    final focused = _focus.hasFocus;
+
     return Container(
       color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // The input pill: the message text field.
           Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: enabled,
-              minLines: 1,
-              maxLines: 5,
-              keyboardType: TextInputType.multiline,
-              decoration: InputDecoration(
-                hintText: enabled ? 'Message the agent…' : 'Unavailable',
-                filled: true,
-                fillColor: scheme.surface,
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(22),
-                  borderSide: BorderSide.none,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(
+                  color: focused
+                      ? _green.withValues(alpha: 0.7)
+                      : scheme.outlineVariant.withValues(alpha: 0.5),
+                  width: focused ? 1.5 : 1,
+                ),
+              ),
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focus,
+                enabled: enabled,
+                minLines: 1,
+                maxLines: 5,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                style: const TextStyle(fontSize: 15, height: 1.3),
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  hintText: !enabled
+                      ? 'Unavailable'
+                      : (widget.hintText ?? 'Message the agent…'),
+                  hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 6),
-          IconButton.filled(
-            tooltip: 'Send',
-            onPressed: enabled ? onSend : null,
-            icon: const Icon(Icons.send, size: 20),
+          const SizedBox(width: 8),
+          // Prominent green paper-plane send.
+          _SendButton(
+            enabled: enabled,
+            active: _hasText,
+            onTap: enabled ? widget.onSend : null,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The circular green paper-plane send button. Full green when there's text to
+/// send, softer when the field is empty (a bare send is still valid — it accepts
+/// a blocked agent's default), muted when the composer is disabled.
+class _SendButton extends StatelessWidget {
+  const _SendButton({
+    required this.enabled,
+    required this.active,
+    required this.onTap,
+  });
+
+  static const _green = Color(0xFF00C853);
+  final bool enabled;
+  final bool active;
+  final Future<void> Function()? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Color bg = !enabled
+        ? scheme.surfaceContainerHighest
+        : (active ? _green : _green.withValues(alpha: 0.65));
+    final Color fg =
+        enabled ? Colors.white : scheme.onSurfaceVariant.withValues(alpha: 0.6);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap == null ? null : () => onTap!(),
+          child: Center(
+            child: Icon(Icons.send_rounded, size: 22, color: fg),
+          ),
+        ),
       ),
     );
   }
