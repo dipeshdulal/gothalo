@@ -49,6 +49,26 @@ class BlockedOption {
       );
 }
 
+/// Coarse visual severity for a blocked agent, derived from `blocked.category`
+/// (Herdr's own detection rule id, filled server-side via `agent.explain`).
+///
+/// The category is **optional** — an older bridge, an unrecognised prompt, or a
+/// failed `agent.explain` all leave it absent. We degrade to [permission] in
+/// that case: still clearly an approval (lock, elevated), but we never *upgrade*
+/// an unknown prompt to [danger].
+enum BlockSeverity {
+  /// Approving runs a command / grants a tool — the highest-stakes prompts.
+  /// `dangerous_command_approval`, `tool_approval`.
+  danger,
+
+  /// A permission grant that isn't a raw command: file writes, generic
+  /// permission prompts, or an absent/unknown category.
+  permission,
+
+  /// A plain choice with no permission stakes — `question_panel`.
+  question,
+}
+
 /// The parsed agent card from `GET /agent-state` — what the agent is doing and,
 /// when blocked, the exact question + options it's waiting on.
 class AgentState {
@@ -59,6 +79,7 @@ class AgentState {
     required this.headline,
     required this.detail,
     required this.blockedQuestion,
+    required this.blockedCategory,
     required this.options,
     required this.parsed,
     this.permissionMode,
@@ -72,6 +93,14 @@ class AgentState {
 
   /// The prompt the agent is waiting on — present only when blocked.
   final String? blockedQuestion;
+
+  /// Coarse semantic class of the block from Herdr's own detection
+  /// (`blocked.category`), e.g. `tool_approval`, `dangerous_command_approval`,
+  /// `question_panel`, `write_file_approval`, `generic_permission_prompt`.
+  /// **Optional** — absent on an older bridge or an unrecognised prompt. Style
+  /// off [blockSeverity] rather than matching the raw string, so a new rule id
+  /// degrades cleanly instead of falling through unstyled.
+  final String? blockedCategory;
 
   /// Selectable choices in display order — empty for a free-form prompt.
   final List<BlockedOption> options;
@@ -88,6 +117,24 @@ class AgentState {
   /// tool) — drives the chat's "thinking…" indicator.
   bool get isWorking => agentStatus == 'working';
 
+  /// Visual severity for the current block, mapped from [blockedCategory].
+  /// Absent/unknown → [BlockSeverity.permission] (never over-warns as danger).
+  BlockSeverity get blockSeverity => switch (blockedCategory) {
+        'dangerous_command_approval' || 'tool_approval' => BlockSeverity.danger,
+        'question_panel' => BlockSeverity.question,
+        _ => BlockSeverity.permission,
+      };
+
+  /// A short human label for the block category (for a badge/pill), or null
+  /// when there's nothing worth labelling (a plain question, or absent).
+  String? get blockedCategoryLabel => switch (blockedCategory) {
+        'dangerous_command_approval' => 'Dangerous command',
+        'tool_approval' => 'Tool permission',
+        'write_file_approval' => 'File write',
+        'generic_permission_prompt' => 'Permission',
+        _ => null,
+      };
+
   factory AgentState.fromJson(Map<String, dynamic> j) {
     final blocked = j['blocked'];
     final opts = (blocked is Map ? blocked['options'] : null);
@@ -98,6 +145,7 @@ class AgentState {
       headline: (j['headline'] as String?) ?? '',
       detail: (j['detail'] as String?) ?? '',
       blockedQuestion: blocked is Map ? blocked['question'] as String? : null,
+      blockedCategory: blocked is Map ? blocked['category'] as String? : null,
       options: opts is List
           ? opts
               .whereType<Map>()
@@ -311,6 +359,37 @@ class BridgeClient {
       }
       throw _asBridgeException(e);
     }
+  }
+
+  /// The projection `source` we own on Herdr's agent-view primitive. All our
+  /// `agent.view.*` calls carry this so we never clobber another client's view.
+  static const agentViewSource = 'gothalo';
+
+  /// `agent.view.set` — install Herdr's own filter+sort projection over the
+  /// agent list so the inbox reflects Herdr's `attention` priority ordering
+  /// rather than sorting purely client-side. Best-effort: the projection is
+  /// owned by [agentViewSource]; pair with [clearAgentView] on teardown.
+  ///
+  /// Note: this is a forward-compatible handshake. The bridge's `/herdr` proxy
+  /// is stateless (a fresh Herdr socket per request), so the projection is not
+  /// yet reflected in `/snapshot` or `agent.list` reads — the inbox keeps its
+  /// client-side attention sort as the visible order until the bridge exposes a
+  /// projected read. Installing the view now means the app benefits the moment
+  /// it does.
+  Future<void> setAgentView({
+    List<Map<String, dynamic>> sort = const [
+      {'field': 'attention', 'order': 'desc'},
+    ],
+  }) async {
+    await herdrCommand('agent.view.set', {
+      'source': agentViewSource,
+      if (sort.isNotEmpty) 'sort': sort,
+    });
+  }
+
+  /// `agent.view.clear` — drop the projection we own. Best-effort teardown.
+  Future<void> clearAgentView() async {
+    await herdrCommand('agent.view.clear', {'source': agentViewSource});
   }
 
   /// `POST /agent-mode/cycle {pane}` → advance a Claude pane's permission mode
