@@ -84,6 +84,10 @@ class AgentState {
 
   bool get isBlocked => agentStatus == 'blocked';
 
+  /// The agent is actively producing output (generating a reply, running a
+  /// tool) — drives the chat's "thinking…" indicator.
+  bool get isWorking => agentStatus == 'working';
+
   factory AgentState.fromJson(Map<String, dynamic> j) {
     final blocked = j['blocked'];
     final opts = (blocked is Map ? blocked['options'] : null);

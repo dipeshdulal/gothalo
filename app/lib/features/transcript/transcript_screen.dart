@@ -149,7 +149,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _agentStateTimer?.cancel();
     _pollAgentState();
     _agentStateTimer = Timer.periodic(
-      const Duration(seconds: 3),
+      const Duration(milliseconds: 1500),
       (_) => _pollAgentState(),
     );
   }
@@ -540,7 +540,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               _ApprovalBar(
                 state: _agentState!,
                 onOption: _handleOption,
-              ),
+              )
+            // Working → a live "thinking…" indicator so the chat feels alive.
+            else if (_agentState?.isWorking == true)
+              const _ThinkingIndicator(),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
@@ -731,6 +734,81 @@ class _ApprovalBar extends StatelessWidget {
                     TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A live "thinking…" indicator shown above the composer while the agent is
+/// working — three pulsing dots, like a chat typing indicator.
+class _ThinkingIndicator extends StatefulWidget {
+  const _ThinkingIndicator();
+
+  @override
+  State<_ThinkingIndicator> createState() => _ThinkingIndicatorState();
+}
+
+class _ThinkingIndicatorState extends State<_ThinkingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 30,
+            height: 8,
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) => Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(3, (i) {
+                  // Stagger each dot's pulse so they ripple left-to-right.
+                  final t = (_c.value - i * 0.2) % 1.0;
+                  final pulse = (1 - (t * 2 - 1).abs()).clamp(0.0, 1.0);
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Opacity(
+                      opacity: 0.35 + 0.65 * pulse,
+                      child: Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: scheme.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'thinking…',
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
+              fontSize: 13,
+            ),
+          ),
         ],
       ),
     );
