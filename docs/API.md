@@ -271,13 +271,17 @@ examples of each kind, the resolution rule, and all limits live in
 ## WS /attach — live terminal (any pane)
 `GET /attach?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**. Auth is
 via `?token=` (WS clients can't always set an `Authorization` header); the same
-bearer/admin token works. **It now attaches to ANY pane** — agent panes, plain
-shells, dev-servers, logs — not just agent ones. The **WS frame contract is
-unchanged**: binary frames of raw terminal bytes in both directions.
+bearer/admin token works. **It attaches to ANY pane** — agent panes, plain
+shells, dev-servers, logs — not just agent ones.
 - **terminal → WS**: server sends **binary** frames — raw terminal bytes; feed
   them straight into your terminal emulator (`xterm.dart`).
 - **WS → terminal**: send **binary** frames — raw keystrokes and control bytes
   (the accessory key row writes Esc `0x1b`, Ctrl-C `0x03`, arrows `\e[A`… here).
+- **WS → resize** (control): send a **text** frame `{"type":"resize","cols":C,"rows":R}`
+  to set the PTY geometry — send it on connect and on every viewport change, so
+  the agent's line-editing (autocomplete, wrapping, history) redraws at your
+  actual width. Agent panes apply it with `pty.Setsize`; plain panes own their
+  geometry via Herdr and ignore it. Unknown/malformed text frames are ignored.
 
 Two backends behind the one contract, picked automatically by pane kind — the
 client can't tell them apart:
@@ -289,12 +293,13 @@ client can't tell them apart:
   straight to the pane's PTY. This is a full-frame repaint stream, so a plain
   pane refreshes on a short interval rather than character-by-character.
 
-Frames MUST be binary; a text frame closes the connection (`1003`). The backend
-(PTY process or poller) is stopped when the socket closes (either side).
-Reconnect + re-fetch `/snapshot` is the resilience story (no mosh-style state
-sync). Resize is not yet wired — the PTY starts at 80×24 and Herdr repaints on
-attach. Errors before the upgrade: `404` if `pane` doesn't exist, `401` no/invalid
-token, `400` missing `pane`.
+Binary frames are raw terminal bytes; **text** frames are out-of-band control
+messages (today: `resize`). The backend (PTY process or poller) is stopped when
+the socket closes (either side). Reconnect + re-fetch `/snapshot` is the
+resilience story (no mosh-style state sync). The PTY starts at 80×24 and is
+resized to the client's geometry by the first `resize` frame. Errors before the
+upgrade: `404` if `pane` doesn't exist, `401` no/invalid token, `400` missing
+`pane`.
 
 ## WS /events — unified push event stream
 `GET /events?token=<bearer>` upgraded to a **WebSocket** carrying a single
