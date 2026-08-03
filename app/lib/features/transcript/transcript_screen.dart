@@ -906,17 +906,6 @@ class _ComposerBarState extends State<_ComposerBar> {
     if (has != _hasText) setState(() => _hasText = has);
   }
 
-  /// Stub for an affordance whose real behaviour lands in a later PR.
-  void _comingSoon(String what) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-        content: Text('$what — coming soon'),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -929,12 +918,12 @@ class _ComposerBarState extends State<_ComposerBar> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // The input pill: the text field with inline image + mic affordances.
+          // The input pill: the message text field.
           Expanded(
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeOut,
-              padding: const EdgeInsets.only(left: 16, right: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(
                 color: scheme.surface,
                 borderRadius: BorderRadius.circular(26),
@@ -945,44 +934,25 @@ class _ComposerBarState extends State<_ComposerBar> {
                   width: focused ? 1.5 : 1,
                 ),
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: widget.controller,
-                      focusNode: _focus,
-                      enabled: enabled,
-                      minLines: 1,
-                      maxLines: 5,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      style: const TextStyle(fontSize: 15, height: 1.3),
-                      decoration: InputDecoration(
-                        isCollapsed: true,
-                        contentPadding:
-                            const EdgeInsets.symmetric(vertical: 12),
-                        hintText:
-                            enabled ? 'Message the agent…' : 'Unavailable',
-                        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                      ),
-                    ),
-                  ),
-                  _AffordanceIcon(
-                    icon: Icons.image_outlined,
-                    tooltip: 'Attach image',
-                    onTap: enabled ? () => _comingSoon('Image attach') : null,
-                  ),
-                  _AffordanceIcon(
-                    icon: Icons.mic_none_rounded,
-                    tooltip: 'Voice input',
-                    onTap: enabled ? () => _comingSoon('Voice input') : null,
-                  ),
-                ],
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focus,
+                enabled: enabled,
+                minLines: 1,
+                maxLines: 5,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                style: const TextStyle(fontSize: 15, height: 1.3),
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  hintText: enabled ? 'Message the agent…' : 'Unavailable',
+                  hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                ),
               ),
             ),
           ),
@@ -995,33 +965,6 @@ class _ComposerBarState extends State<_ComposerBar> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// A compact, dimmed affordance icon inside the composer pill (image / mic).
-class _AffordanceIcon extends StatelessWidget {
-  const _AffordanceIcon({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return IconButton(
-      onPressed: onTap,
-      tooltip: tooltip,
-      icon: Icon(icon, size: 22),
-      color: scheme.onSurfaceVariant,
-      visualDensity: VisualDensity.compact,
-      padding: const EdgeInsets.all(8),
-      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
     );
   }
 }
