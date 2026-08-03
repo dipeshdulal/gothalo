@@ -863,7 +863,7 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
 /// The bottom input bar — type a prompt (or an option number for a blocked
 /// prompt) and send it to the agent. The send button submits with a trailing
 /// newline; an empty send is a bare Enter (accepts a default prompt).
-class _ComposerBar extends StatelessWidget {
+class _ComposerBar extends StatefulWidget {
   const _ComposerBar({
     required this.controller,
     required this.onSend,
@@ -875,42 +875,195 @@ class _ComposerBar extends StatelessWidget {
   final bool enabled;
 
   @override
+  State<_ComposerBar> createState() => _ComposerBarState();
+}
+
+class _ComposerBarState extends State<_ComposerBar> {
+  static const _green = Color(0xFF00C853);
+  final FocusNode _focus = FocusNode();
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocusChange);
+    widget.controller.addListener(_onTextChange);
+    _hasText = widget.controller.text.trim().isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    widget.controller.removeListener(_onTextChange);
+    super.dispose();
+  }
+
+  void _onFocusChange() => setState(() {});
+
+  void _onTextChange() {
+    final has = widget.controller.text.trim().isNotEmpty;
+    if (has != _hasText) setState(() => _hasText = has);
+  }
+
+  /// Stub for an affordance whose real behaviour lands in a later PR.
+  void _comingSoon(String what) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+        content: Text('$what — coming soon'),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final enabled = widget.enabled;
+    final focused = _focus.hasFocus;
+
     return Container(
       color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // The input pill: the text field with inline image + mic affordances.
           Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: enabled,
-              minLines: 1,
-              maxLines: 5,
-              keyboardType: TextInputType.multiline,
-              decoration: InputDecoration(
-                hintText: enabled ? 'Message the agent…' : 'Unavailable',
-                filled: true,
-                fillColor: scheme.surface,
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(22),
-                  borderSide: BorderSide.none,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.only(left: 16, right: 4),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(
+                  color: focused
+                      ? _green.withValues(alpha: 0.7)
+                      : scheme.outlineVariant.withValues(alpha: 0.5),
+                  width: focused ? 1.5 : 1,
                 ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: widget.controller,
+                      focusNode: _focus,
+                      enabled: enabled,
+                      minLines: 1,
+                      maxLines: 5,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      style: const TextStyle(fontSize: 15, height: 1.3),
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 12),
+                        hintText:
+                            enabled ? 'Message the agent…' : 'Unavailable',
+                        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                  _AffordanceIcon(
+                    icon: Icons.image_outlined,
+                    tooltip: 'Attach image',
+                    onTap: enabled ? () => _comingSoon('Image attach') : null,
+                  ),
+                  _AffordanceIcon(
+                    icon: Icons.mic_none_rounded,
+                    tooltip: 'Voice input',
+                    onTap: enabled ? () => _comingSoon('Voice input') : null,
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(width: 6),
-          IconButton.filled(
-            tooltip: 'Send',
-            onPressed: enabled ? onSend : null,
-            icon: const Icon(Icons.send, size: 20),
+          const SizedBox(width: 8),
+          // Prominent green paper-plane send.
+          _SendButton(
+            enabled: enabled,
+            active: _hasText,
+            onTap: enabled ? widget.onSend : null,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A compact, dimmed affordance icon inside the composer pill (image / mic).
+class _AffordanceIcon extends StatelessWidget {
+  const _AffordanceIcon({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      onPressed: onTap,
+      tooltip: tooltip,
+      icon: Icon(icon, size: 22),
+      color: scheme.onSurfaceVariant,
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.all(8),
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+    );
+  }
+}
+
+/// The circular green paper-plane send button. Full green when there's text to
+/// send, softer when the field is empty (a bare send is still valid — it accepts
+/// a blocked agent's default), muted when the composer is disabled.
+class _SendButton extends StatelessWidget {
+  const _SendButton({
+    required this.enabled,
+    required this.active,
+    required this.onTap,
+  });
+
+  static const _green = Color(0xFF00C853);
+  final bool enabled;
+  final bool active;
+  final Future<void> Function()? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Color bg = !enabled
+        ? scheme.surfaceContainerHighest
+        : (active ? _green : _green.withValues(alpha: 0.65));
+    final Color fg =
+        enabled ? Colors.white : scheme.onSurfaceVariant.withValues(alpha: 0.6);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap == null ? null : () => onTap!(),
+          child: Center(
+            child: Icon(Icons.send_rounded, size: 22, color: fg),
+          ),
+        ),
       ),
     );
   }
