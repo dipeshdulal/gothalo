@@ -64,6 +64,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _sawBacklogComplete = false; // latched: don't re-spin on reconnect
   bool _pinnedToBottom = true;
 
+  /// Set the first time the backlog finishes so the very next layout jumps to
+  /// the newest entry (standard chat open-at-bottom). Consumed once; after that
+  /// the ordinary pinned-to-bottom rule takes over.
+  bool _needInitialSettle = false;
+
+  /// True while the initial settle-to-bottom loop runs. Scroll events are
+  /// ignored during it, so the lazy list growing beneath us (which momentarily
+  /// looks like "scrolled up") can't clear [_pinnedToBottom] and abort the loop.
+  bool _settling = false;
+
   /// Pagination cursor (protocol 2): [_oldestSeq] is the oldest seq we hold —
   /// pass it as `load_older.before_seq` to page up; [_hasOlder] gates it.
   int _oldestSeq = 0;
@@ -282,7 +292,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     }
     if (touched && mounted) {
       setState(_rebuildOrdered);
-      _maybeAutoScroll();
+      if (_needInitialSettle) {
+        _needInitialSettle = false;
+        _settleToBottom(); // first paint after backlog → land on the newest
+      } else {
+        _maybeAutoScroll();
+      }
     }
   }
 
@@ -307,6 +322,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         _backlogComplete = true;
         _sawBacklogComplete = true;
         _pinnedToBottom = true; // jump to the live tail once backlog lands
+        _needInitialSettle = true; // open at the newest entry, like a chat
         return true;
       case TranscriptFrameType.entry:
         final entry = frame.entry;
@@ -388,6 +404,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
   void _onScroll() {
     if (!_scroll.hasClients) return;
+    // Ignore scroll churn while the initial settle is still re-jumping to the
+    // bottom — otherwise the list growing beneath us reads as "scrolled up".
+    if (_settling) return;
     final pos = _scroll.position;
     final pinned = pos.pixels >= pos.maxScrollExtent - 80;
     if (pinned != _pinnedToBottom) {
@@ -422,6 +441,32 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
       _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  /// Reliably land on the newest entry after the initial backlog. The list is
+  /// lazily built under a `center` anchor, so `maxScrollExtent` is only an
+  /// estimate until off-screen rows lay out — one jump undershoots. Re-jump
+  /// across a few frames until the position stops moving. Bails the moment the
+  /// user scrolls up (`_pinnedToBottom` clears), so it never fights paging or a
+  /// deliberate scroll into history.
+  void _settleToBottom({int tries = 6}) {
+    if (!_pinnedToBottom || _disposed) return;
+    _settling = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed || !_scroll.hasClients) {
+        _settling = false;
+        return;
+      }
+      final max = _scroll.position.maxScrollExtent;
+      if ((_scroll.position.pixels - max).abs() > 1.5) {
+        _scroll.jumpTo(max);
+      }
+      if (tries > 1) {
+        _settleToBottom(tries: tries - 1);
+      } else {
+        _settling = false; // done — hand control back to _onScroll
+      }
     });
   }
 
