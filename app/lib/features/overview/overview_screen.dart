@@ -8,6 +8,7 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
+import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../inbox/widgets/agent_avatar.dart';
 import '../inbox/widgets/status_badge.dart';
@@ -30,13 +31,15 @@ class OverviewScreen extends ConsumerWidget {
     // Title = project; for a worktree space, show the branch beneath it.
     var title = workspaceId == null ? 'Overview' : 'Space';
     String? branch;
+    String spaceCwd = '';
     if (workspaceId != null) {
       final snap = snapshot.asData?.value;
       final ws = snap?.workspaces.where((w) => w.workspaceId == workspaceId);
       final panes =
           snap?.panes.where((p) => p.workspaceId == workspaceId).toList() ??
               const [];
-      final git = gitContextForCwd(panes.isEmpty ? '' : panes.first.cwd);
+      spaceCwd = panes.isEmpty ? '' : panes.first.cwd;
+      final git = gitContextForCwd(spaceCwd);
       branch = git.worktree;
       title = git.project.isNotEmpty
           ? git.project
@@ -87,6 +90,52 @@ class OverviewScreen extends ConsumerWidget {
                 tooltip: 'New terminal',
                 onPressed: () => _newTerminal(context, ref, workspaceId!),
                 icon: const Icon(Icons.add),
+              ),
+            if (workspaceId != null)
+              PopupMenuButton<String>(
+                tooltip: 'Space actions',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (v) {
+                  switch (v) {
+                    case 'tab':
+                      newTab(context, ref, workspaceId!);
+                    case 'worktree':
+                      newWorktreeDialog(context, ref,
+                          cwd: spaceCwd, repoLabel: title);
+                    case 'remove':
+                      removeWorktree(
+                          context, ref, workspaceId!, branch ?? title);
+                  }
+                },
+                itemBuilder: (ctx) => [
+                  const PopupMenuItem(
+                    value: 'tab',
+                    child: ListTile(
+                      leading: Icon(Icons.tab_outlined),
+                      title: Text('New tab'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  if (spaceCwd.isNotEmpty)
+                    const PopupMenuItem(
+                      value: 'worktree',
+                      child: ListTile(
+                        leading: Icon(Icons.call_split),
+                        title: Text('New worktree'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  if (branch != null)
+                    PopupMenuItem(
+                      value: 'remove',
+                      child: ListTile(
+                        leading: Icon(Icons.delete_outline,
+                            color: Theme.of(ctx).colorScheme.error),
+                        title: const Text('Remove worktree'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                ],
               ),
             IconButton(
               tooltip: 'Refresh',
@@ -164,25 +213,30 @@ class _SpaceTabbedView extends ConsumerWidget {
                 for (final t in tabs)
                   Tab(
                     height: 44,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (t.focused)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 6),
-                            child: Icon(Icons.my_location, size: 14),
+                    // Long-press a tab to close it (Herdr parity via /herdr).
+                    child: GestureDetector(
+                      onLongPress: () => closeTab(context, ref, t.tabId),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (t.focused)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 6),
+                              child: Icon(Icons.my_location, size: 14),
+                            ),
+                          Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${t.paneCount}',
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontSize: 12,
+                            ),
                           ),
-                        Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${t.paneCount}',
-                          style: TextStyle(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
               ],
@@ -509,6 +563,41 @@ class _PaneCard extends ConsumerWidget {
                         ),
                       ),
                     ],
+                    // Split / close this pane (Herdr parity via /herdr).
+                    PopupMenuButton<String>(
+                      tooltip: 'Pane actions',
+                      padding: EdgeInsets.zero,
+                      iconSize: 18,
+                      icon: Icon(Icons.more_horiz,
+                          color: scheme.onSurfaceVariant),
+                      onSelected: (v) {
+                        switch (v) {
+                          case 'split':
+                            splitPane(context, ref, pane.paneId);
+                          case 'close':
+                            closePane(context, ref, pane.paneId);
+                        }
+                      },
+                      itemBuilder: (ctx) => [
+                        const PopupMenuItem(
+                          value: 'split',
+                          child: ListTile(
+                            leading: Icon(Icons.splitscreen_outlined),
+                            title: Text('Split'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'close',
+                          child: ListTile(
+                            leading: Icon(Icons.close,
+                                color: Theme.of(ctx).colorScheme.error),
+                            title: const Text('Close pane'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
