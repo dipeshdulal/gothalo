@@ -52,6 +52,38 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   bool _disposed = false;
   _Conn _conn = _Conn.connecting;
 
+  /// Terminal glyph size. Fixed so we can compute a plain pane's pixel width for
+  /// horizontal scrolling (below); agent panes ignore it and auto-fit.
+  static const double _termFontSize = 13;
+
+  /// A non-agent pane can't be resized on the host (Herdr owns its geometry and
+  /// exposes no attach/winsize for it), so the bridge streams logical lines at
+  /// the *desktop* width. Rather than re-wrap them mid-word to the phone, we
+  /// render a plain pane at this fixed column count and let it scroll sideways —
+  /// a faithful mirror where the input line + completions keep their real shape.
+  static const int _plainPaneCols = 200;
+
+  /// The horizontal scroll for the plain-pane mirror.
+  final _hScroll = ScrollController();
+
+  /// Width of one monospace cell at [_termFontSize] — measured once so the
+  /// plain-pane canvas is exactly [_plainPaneCols] columns wide.
+  late final double _cellWidth = _measureCellWidth();
+
+  double _measureCellWidth() {
+    final tp = TextPainter(
+      text: const TextSpan(
+        text: 'M',
+        style: TextStyle(
+          fontFamily: AppTheme.monoFamily,
+          fontSize: _termFontSize,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return tp.width;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +101,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close(ws_status.normalClosure);
+    _hScroll.dispose();
     super.dispose();
   }
 
@@ -210,6 +243,37 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     channel.sink.add(jsonEncode({'type': 'resize', 'cols': cols, 'rows': rows}));
   }
 
+  /// The terminal surface. Agent panes auto-fit the phone (their PTY resizes to
+  /// match — see [_sendResize]). Plain panes can't be resized on the host, so we
+  /// render them at a fixed [_plainPaneCols]-wide canvas inside a horizontal
+  /// scroll view — no mid-word re-wrapping; scroll sideways to read wide output.
+  Widget _buildTerminal(bool isPlainPane) {
+    final view = TerminalView(
+      terminal,
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(
+        fontFamily: AppTheme.monoFamily,
+        fontSize: _termFontSize,
+      ),
+      padding: const EdgeInsets.all(8),
+    );
+    if (!isPlainPane) return view;
+    return Scrollbar(
+      controller: _hScroll,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _hScroll,
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          // +16 covers the view's horizontal padding so the last column isn't
+          // clipped at the right edge.
+          width: _plainPaneCols * _cellWidth + 16,
+          child: view,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Connect once a bridge client is available (activeConnection resolves
@@ -226,9 +290,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
 
     // The agent behind this pane, for the app-bar approve affordance.
-    final agents =
-        ref.watch(snapshotControllerProvider).asData?.value.agents ??
-        const <Agent>[];
+    final snap = ref.watch(snapshotControllerProvider).asData?.value;
+    final agents = snap?.agents ?? const <Agent>[];
     Agent? agent;
     for (final a in agents) {
       if (a.paneId == widget.pane) {
@@ -236,6 +299,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         break;
       }
     }
+    // A confirmed non-agent pane (known to the snapshot, no agent hosted) gets
+    // the horizontal-scroll mirror. We require the pane to be present so an
+    // agent pane never briefly renders as "plain" before the snapshot loads.
+    final paneKnown = snap?.panes.any((p) => p.paneId == widget.pane) ?? false;
+    final isPlainPane = paneKnown && agent == null;
     // Non-null (and final) only when this pane's agent is blocked — safe to
     // capture in the button's callback.
     final approvable =
@@ -298,13 +366,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             child: Stack(
               children: [
                 Positioned.fill(
-                  child: TerminalView(
-                    terminal,
-                    theme: TerminalThemes.defaultTheme,
-                    textStyle:
-                        const TerminalStyle(fontFamily: AppTheme.monoFamily),
-                    padding: const EdgeInsets.all(8),
-                  ),
+                  child: _buildTerminal(isPlainPane),
                 ),
                 // The pane is gone — dim the last frame and offer a way out
                 // rather than sitting on a stale terminal.
