@@ -27,9 +27,10 @@ enum _Conn { connecting, connected, disconnected, closed, failed }
 /// lifecycle): a text-JSON stream of a `hello` frame, the ordered backlog, a
 /// `backlog_complete` boundary, then the live tail. Entries are ordered and
 /// de-duped on `seq`; a `tool_call` is merged with its `tool_result`
-/// (correlated on `tool.id == result.for_id`) into one tool card. A permanent
-/// pre-upgrade error (e.g. codex/opencode → 404 "transcript not supported")
-/// shows a message instead of reconnecting forever.
+/// (correlated on `tool.id == result.for_id`) into one collapsed row, and runs
+/// of consecutive tool calls group into an indented ledger under the assistant
+/// message. A permanent pre-upgrade error (e.g. codex/opencode → 404
+/// "transcript not supported") shows a message instead of reconnecting forever.
 class TranscriptScreen extends ConsumerStatefulWidget {
   const TranscriptScreen({super.key, required this.pane});
 
@@ -599,11 +600,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     // Split at the fixed anchor: the first page onward (+ live tail + pending)
     // renders BELOW the center; older pages loaded on scroll-up render ABOVE it.
     // Prepending above the center never shifts the viewport — no scroll math.
-    final below = <TranscriptEntry>[];
-    final above = <TranscriptEntry>[];
+    final belowEntries = <TranscriptEntry>[];
+    final aboveEntries = <TranscriptEntry>[];
     for (final e in visible) {
-      (e.seq < _anchorSeq ? above : below).add(e);
+      (e.seq < _anchorSeq ? aboveEntries : belowEntries).add(e);
     }
+    // Collapse each run of consecutive tool_calls into one indented ledger, so
+    // the chat reads as prose + a compact tool ledger rather than a wall of
+    // cards. Grouping happens per-segment; a run that straddles the page anchor
+    // just renders as two adjacent ledgers (harmless, and rare).
+    final below = _toBlocks(belowEntries);
+    final above = _toBlocks(aboveEntries);
 
     return CustomScrollView(
       controller: _scroll,
@@ -630,7 +637,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
-              (context, i) => _entryTile(above[above.length - 1 - i]),
+              (context, i) => _blockWidget(above[above.length - 1 - i]),
               childCount: above.length,
             ),
           ),
@@ -641,7 +648,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, i) => i < below.length
-                  ? _entryTile(below[i])
+                  ? _blockWidget(below[i])
                   : _PendingBubble(text: _pending[i - below.length]),
               childCount: below.length + _pending.length,
             ),
@@ -651,10 +658,54 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     );
   }
 
-  Widget _entryTile(TranscriptEntry entry) => _EntryTile(
-        entry: entry,
-        result: entry.tool != null ? _resultsByForId[entry.tool!.id] : null,
-      );
+  /// Group a flat entry list into render blocks: a run of consecutive
+  /// `tool_call` entries becomes one [_ToolGroupBlock]; everything else stays a
+  /// standalone [_EntryBlock].
+  List<_Block> _toBlocks(List<TranscriptEntry> entries) {
+    final blocks = <_Block>[];
+    List<TranscriptEntry>? run;
+    void flush() {
+      if (run != null) {
+        blocks.add(_ToolGroupBlock(run!));
+        run = null;
+      }
+    }
+
+    for (final e in entries) {
+      if (e.kind == EntryKind.toolCall) {
+        (run ??= <TranscriptEntry>[]).add(e);
+      } else {
+        flush();
+        blocks.add(_EntryBlock(e));
+      }
+    }
+    flush();
+    return blocks;
+  }
+
+  Widget _blockWidget(_Block block) => switch (block) {
+        _EntryBlock(:final entry) => _EntryTile(entry: entry),
+        _ToolGroupBlock(:final calls) => _ToolLedger(
+            calls: calls,
+            resultFor: (id) => _resultsByForId[id],
+          ),
+      };
+}
+
+/// A unit of the rendered transcript: either a standalone entry or a grouped
+/// run of tool calls.
+sealed class _Block {
+  const _Block();
+}
+
+class _EntryBlock extends _Block {
+  const _EntryBlock(this.entry);
+  final TranscriptEntry entry;
+}
+
+class _ToolGroupBlock extends _Block {
+  const _ToolGroupBlock(this.calls);
+  final List<TranscriptEntry> calls;
 }
 
 /// Dispatches one entry to the right bubble/card by kind.
@@ -872,10 +923,9 @@ class _ComposerBar extends StatelessWidget {
 }
 
 class _EntryTile extends StatelessWidget {
-  const _EntryTile({required this.entry, this.result});
+  const _EntryTile({required this.entry});
 
   final TranscriptEntry entry;
-  final ToolResult? result;
 
   @override
   Widget build(BuildContext context) {
@@ -885,9 +935,11 @@ class _EntryTile extends StatelessWidget {
     return switch (entry.kind) {
       EntryKind.message => _MessageBubble(entry: entry),
       EntryKind.thinking => _ThinkingBlock(entry: entry),
-      EntryKind.toolCall => _ToolCard(entry: entry, result: result),
+      // Tool calls/results are grouped into a _ToolLedger upstream; if one ever
+      // reaches here standalone, drop it rather than double-render.
+      EntryKind.toolCall => const SizedBox.shrink(),
       EntryKind.attachment => _AttachmentChip(entry: entry),
-      EntryKind.toolResult => const SizedBox.shrink(), // handled by its call
+      EntryKind.toolResult => const SizedBox.shrink(),
       EntryKind.unknown => _RawEntry(entry: entry),
     };
   }
@@ -1187,196 +1239,307 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
 
 /// A `tool_call` merged with its `tool_result`: header (icon + label + ok/fail
 /// chip) and an expandable body with the output summary and a tinted mini-diff.
-class _ToolCard extends StatefulWidget {
-  const _ToolCard({required this.entry, this.result});
+/// Per-tool compact treatment. Classifies by raw name; unknown kinds fall to
+/// [other] (input_summary), so a new tool never renders blank.
+enum _ToolClass { bash, edit, read, search, web, task, other }
 
-  final TranscriptEntry entry;
-  final ToolResult? result;
+_ToolClass _classifyTool(String name) => switch (name.toLowerCase()) {
+      'bash' => _ToolClass.bash,
+      'edit' || 'write' || 'multiedit' || 'notebookedit' => _ToolClass.edit,
+      'read' => _ToolClass.read,
+      'grep' || 'glob' => _ToolClass.search,
+      'webfetch' || 'websearch' => _ToolClass.web,
+      'task' => _ToolClass.task,
+      _ => _ToolClass.other,
+    };
 
-  @override
-  State<_ToolCard> createState() => _ToolCardState();
+/// The one-line primary content for a tool row: an icon, the text, and whether
+/// to render the text monospaced.
+class _Primary {
+  const _Primary(this.icon, this.text, {this.mono = false});
+  final IconData icon;
+  final String text;
+  final bool mono;
 }
 
-class _ToolCardState extends State<_ToolCard> {
-  bool _expanded = false;
+/// Build the compact primary line for a tool, keyed off its class. Always uses
+/// existing structured fields and falls back to `input_summary`/name, so it
+/// never crashes on a missing field.
+_Primary _primaryFor(_ToolClass cls, ToolCall tool) {
+  switch (cls) {
+    case _ToolClass.bash:
+      final cmd = _firstNonEmpty(
+              [tool.command, tool.inputSummary, tool.subtitle, tool.title]) ??
+          tool.name;
+      return _Primary(Icons.terminal, '\$ $cmd', mono: true);
+    case _ToolClass.edit:
+      final file = _firstNonEmpty(
+              [tool.file, _basename(tool.inputSummary), tool.title]) ??
+          tool.name;
+      return _Primary(Icons.edit_outlined, file, mono: true);
+    case _ToolClass.read:
+      final file = _firstNonEmpty(
+              [tool.file, _basename(tool.inputSummary), tool.subtitle]) ??
+          tool.name;
+      return _Primary(Icons.description_outlined, file, mono: true);
+    case _ToolClass.search:
+      final pattern = _firstNonEmpty(
+              [tool.command, tool.subtitle, tool.inputSummary, tool.title]) ??
+          tool.name;
+      return _Primary(Icons.search, pattern, mono: true);
+    case _ToolClass.web:
+      final u =
+          _firstNonEmpty([tool.subtitle, tool.inputSummary, tool.title]) ??
+              tool.name;
+      return _Primary(Icons.public, u);
+    case _ToolClass.task:
+      final t =
+          _firstNonEmpty([tool.title, tool.subtitle, tool.inputSummary]) ??
+              tool.name;
+      return _Primary(Icons.smart_toy_outlined, t);
+    case _ToolClass.other:
+      final t =
+          _firstNonEmpty([tool.inputSummary, tool.subtitle, tool.title]) ??
+              tool.name;
+      return _Primary(Icons.build_outlined, t);
+  }
+}
 
-  IconData _iconFor(String name) {
-    switch (name.toLowerCase()) {
-      case 'bash':
-        return Icons.terminal;
-      case 'edit':
-      case 'write':
-      case 'multiedit':
-      case 'notebookedit':
-        return Icons.edit_outlined;
-      case 'read':
-        return Icons.description_outlined;
-      case 'webfetch':
-      case 'websearch':
-        return Icons.public;
-      case 'grep':
-      case 'glob':
-        return Icons.search;
-      case 'task':
-        return Icons.smart_toy_outlined;
-      default:
-        return Icons.build_outlined;
+String? _firstNonEmpty(List<String?> xs) {
+  for (final x in xs) {
+    if (x != null && x.trim().isNotEmpty) return x.trim();
+  }
+  return null;
+}
+
+String _basename(String? path) {
+  if (path == null || path.isEmpty) return '';
+  final parts = path.split('/').where((s) => s.isNotEmpty).toList();
+  return parts.isEmpty ? path : parts.last;
+}
+
+/// Count added/removed lines in a unified diff (ignoring the `+++`/`---`
+/// headers) — the `+N -M` collapsed stat for an edit.
+(int, int) _diffStat(String diff) {
+  var added = 0, removed = 0;
+  for (final l in const LineSplitter().convert(diff)) {
+    if (l.startsWith('+') && !l.startsWith('+++')) {
+      added++;
+    } else if (l.startsWith('-') && !l.startsWith('---')) {
+      removed++;
     }
   }
+  return (added, removed);
+}
+
+/// A run of tool calls, indented under the assistant message that spawned them
+/// with a left rail — so the chat reads as prose plus a compact tool ledger.
+class _ToolLedger extends StatelessWidget {
+  const _ToolLedger({required this.calls, required this.resultFor});
+
+  final List<TranscriptEntry> calls;
+  final ToolResult? Function(String id) resultFor;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final tool = widget.entry.tool;
-    final result = widget.result;
-    if (tool == null) return const SizedBox.shrink();
+    final rows = <Widget>[];
+    for (final c in calls) {
+      final tool = c.tool;
+      if (tool == null) continue;
+      rows.add(_ToolRow(tool: tool, result: resultFor(tool.id)));
+    }
+    if (rows.isEmpty) return const SizedBox.shrink();
 
-    // The primary label under the header: a command / subtitle / file, mono.
-    final mono = tool.command ?? tool.subtitle ?? tool.file ??
-        tool.inputSummary;
-    // The applied diff (on the result) is authoritative over the preview.
-    final diff = result?.diff ?? tool.diff;
-    final output = result?.outputSummary;
-    final hasBody = (diff != null && diff.isNotEmpty) ||
-        (output != null && output.isNotEmpty);
-    final truncated = (result?.truncated ?? false) || tool.diffTruncated;
-
-    return Align(
-      alignment: Alignment.centerLeft,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 2, 2, 8),
       child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.92,
-        ),
-        margin: const EdgeInsets.symmetric(vertical: 5),
+        padding: const EdgeInsets.only(left: 10),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainer,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+          border: Border(
+            left: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.6),
+              width: 2,
+            ),
+          ),
         ),
-        clipBehavior: Clip.antiAlias,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            InkWell(
-              onTap: hasBody ? () => setState(() => _expanded = !_expanded) : null,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      _iconFor(tool.name),
-                      size: 18,
-                      color: scheme.primary,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(
-                                tool.title?.isNotEmpty == true
-                                    ? tool.title!
-                                    : tool.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              if (tool.file != null) ...[
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    tool.file!,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: AppTheme.monoFamily,
-                                      fontSize: 12,
-                                      color: scheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          if (mono != null && mono.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              mono,
-                              maxLines: _expanded ? 6 : 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontFamily: AppTheme.monoFamily,
-                                fontSize: 12,
-                                height: 1.3,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _ResultChip(result: result),
-                    if (hasBody)
-                      Icon(
-                        _expanded ? Icons.expand_less : Icons.expand_more,
-                        size: 18,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            if (_expanded && hasBody)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (diff != null && diff.isNotEmpty)
-                      _MiniDiff(diff: diff),
-                    if (output != null && output.isNotEmpty) ...[
-                      if (diff != null && diff.isNotEmpty)
-                        const SizedBox(height: 8),
-                      _OutputBlock(text: output),
-                    ],
-                    if (truncated)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          '… truncated',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontStyle: FontStyle.italic,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-          ],
+          children: rows,
         ),
       ),
     );
   }
 }
 
-/// An ok / fail pill from the tool result. Absent while a live call has no
-/// result yet — that reads as "still running".
-class _ResultChip extends StatelessWidget {
-  const _ResultChip({this.result});
+/// One tool call merged with its result into a single collapsed row. Success is
+/// just a green tick (no redundant "ok" text, output hidden); a failure turns
+/// the row red and shows its reason inline; diffs/output expand on tap.
+class _ToolRow extends StatefulWidget {
+  const _ToolRow({required this.tool, this.result});
 
+  final ToolCall tool;
   final ToolResult? result;
+
+  @override
+  State<_ToolRow> createState() => _ToolRowState();
+}
+
+class _ToolRowState extends State<_ToolRow> {
+  static const _green = Color(0xFF00C853);
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (result == null) {
+    final tool = widget.tool;
+    final result = widget.result;
+    final cls = _classifyTool(tool.name);
+
+    final running = result == null;
+    final ok = result?.ok ?? true;
+    final failed = result != null && !result.ok;
+
+    // The applied diff (on the result) is authoritative over the preview.
+    final diff =
+        (result?.diff?.isNotEmpty ?? false) ? result!.diff : tool.diff;
+    final output = result?.outputSummary;
+    final hasDiff = diff != null && diff.isNotEmpty;
+    // Errors surface their output inline; success hides trivial/empty output so
+    // the tick is the whole confirmation.
+    final hasOutput = !failed && output != null && output.trim().isNotEmpty;
+    final expandable = hasDiff || hasOutput;
+    final truncated = (result?.truncated ?? false) || tool.diffTruncated;
+
+    // A subtle collapsed size hint: the +N -M stat for edits, the match/line
+    // count otherwise, and a plain "truncated" when the payload was capped.
+    String? hint;
+    if (cls == _ToolClass.edit && hasDiff) {
+      final (a, d) = _diffStat(diff);
+      if (a > 0 || d > 0) hint = '+$a -$d';
+    } else if (cls == _ToolClass.search &&
+        output != null &&
+        !output.contains('\n') &&
+        output.trim().length <= 40) {
+      hint = output.trim();
+    } else if (hasDiff || hasOutput) {
+      final body = hasDiff ? diff : output!;
+      final n = '\n'.allMatches(body).length + 1;
+      if (n > 1) hint = '+$n lines';
+    }
+    if (truncated && hint == null) hint = 'truncated';
+
+    final p = _primaryFor(cls, tool);
+    final iconColor = failed ? scheme.error : scheme.primary;
+
+    final row = InkWell(
+      onTap: expandable ? () => setState(() => _expanded = !_expanded) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _StatusDot(running: running, ok: ok),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(p.icon, size: 15, color: iconColor),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                p.text,
+                maxLines: _expanded ? 4 : 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: p.mono ? AppTheme.monoFamily : null,
+                  fontSize: 12.5,
+                  height: 1.3,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+            if (hint != null) ...[
+              const SizedBox(width: 8),
+              Text(
+                hint,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.onSurfaceVariant,
+                  fontFamily: AppTheme.monoFamily,
+                ),
+              ),
+            ],
+            if (expandable)
+              Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row,
+        // A failure shows its reason inline — no expand needed.
+        if (failed && output != null && output.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 23, bottom: 6),
+            child: Text(
+              output.trim(),
+              style: TextStyle(fontSize: 12, height: 1.3, color: scheme.error),
+            ),
+          ),
+        if (_expanded && expandable)
+          Padding(
+            padding: const EdgeInsets.only(left: 23, top: 2, bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasDiff) _MiniDiff(diff: diff),
+                if (hasOutput) ...[
+                  if (hasDiff) const SizedBox(height: 8),
+                  _OutputBlock(text: output),
+                ],
+                if (truncated)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '… truncated',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontStyle: FontStyle.italic,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The leading status marker for a tool row: a spinner while running, a bare
+/// green tick on success (the confirmation in itself), a red mark on failure.
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({required this.running, required this.ok});
+
+  final bool running;
+  final bool ok;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (running) {
       return SizedBox(
         width: 14,
         height: 14,
@@ -1386,34 +1549,10 @@ class _ResultChip extends StatelessWidget {
         ),
       );
     }
-    final ok = result!.ok;
-    final green = const Color(0xFF00C853);
-    final color = ok ? green : scheme.error;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            ok ? Icons.check_circle : Icons.error_outline,
-            size: 13,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            ok ? 'ok' : 'fail',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-        ],
-      ),
+    return Icon(
+      ok ? Icons.check : Icons.error_outline,
+      size: 16,
+      color: ok ? _ToolRowState._green : scheme.error,
     );
   }
 }
