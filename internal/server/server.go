@@ -165,6 +165,11 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /send {"pane":"wN:p2","text":"yes\n"} -> types into that pane.
+// POST /send {"pane":"wN:p2","key":"esc"} -> sends a raw keystroke instead of
+// typing text — for a Blocked.Options[] entry that has no numbered index and
+// is only reachable via a keystroke (e.g. Claude's single-choice approval
+// form, where "No" is only reachable via Esc). Mutually exclusive with text;
+// key wins if both are set.
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -172,6 +177,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Pane string `json:"pane"`
 		Text string `json:"text"`
+		Key  string `json:"key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Pane == "" {
 		http.Error(w, "want {pane,text}", http.StatusBadRequest)
@@ -180,6 +186,14 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	c, _, pane, err := s.target(body.Pane)
 	if err != nil {
 		http.Error(w, err.Error(), herdrStatus(err))
+		return
+	}
+	if body.Key != "" {
+		if err := c.SendKeys(pane, body.Key); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
 		return
 	}
 	// Split a trailing newline/CR "submit" off the text. The body is typed as a
