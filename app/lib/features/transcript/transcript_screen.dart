@@ -1508,8 +1508,11 @@ class _ToolRowState extends State<_ToolRow> {
             ),
           ),
         if (_expanded && expandable)
+          // Full-width from the ledger gutter — no extra left inset, so the
+          // details/output box doesn't start under the command text and waste
+          // the left space. (Right edge stays flush to the row.)
           Padding(
-            padding: const EdgeInsets.only(left: 23, top: 2, bottom: 8),
+            padding: const EdgeInsets.only(top: 2, bottom: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
