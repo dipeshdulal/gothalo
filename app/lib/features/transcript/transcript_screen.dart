@@ -1351,10 +1351,15 @@ class _ToolLedger extends StatelessWidget {
     }
     if (rows.isEmpty) return const SizedBox.shrink();
 
+    // The rail's left edge sits on the same gutter as the assistant message
+    // text above it (both are inside the body's horizontal:12 sliver, and the
+    // message adds left:4) — so there's no left-margin jog switching between a
+    // paragraph and its tool rows. The rail spans the whole group's height; the
+    // row content is a small, consistent inset to its right.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 2, 2, 8),
+      padding: const EdgeInsets.fromLTRB(4, 2, 2, 8),
       child: Container(
-        padding: const EdgeInsets.only(left: 10),
+        padding: const EdgeInsets.only(left: 8),
         decoration: BoxDecoration(
           border: Border(
             left: BorderSide(
