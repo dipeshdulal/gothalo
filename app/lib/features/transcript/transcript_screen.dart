@@ -1439,8 +1439,6 @@ class _ToolRowState extends State<_ToolRow> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _StatusDot(running: running, ok: ok),
-            const SizedBox(width: 8),
             Padding(
               padding: const EdgeInsets.only(top: 1),
               child: Icon(p.icon, size: 15, color: iconColor),
@@ -1470,6 +1468,13 @@ class _ToolRowState extends State<_ToolRow> {
                 ),
               ),
             ],
+            // Status marker on the right (trailing), like the previous
+            // rendering — the ✓/✗/spinner ends each row.
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: _StatusDot(running: running, ok: ok),
+            ),
             if (expandable)
               Padding(
                 padding: const EdgeInsets.only(left: 2),
