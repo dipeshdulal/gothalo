@@ -1,0 +1,23 @@
+⏺ Done — created /tmp/gothalo_approval_demo.txt.
+
+✻ Sautéed for 7s
+
+❯ block this agent
+
+⏺ I'm not sure what you'd like me to do — "block this agent" is ambiguous in this context. Could you clarify which of these you mean?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Intent
+
+What do you mean by "block this agent"?
+
+❯ 1. Stop current work
+     Halt what I'm doing right now and take no further actions in this session.
+  2. Block a background task
+     Stop or cancel a specific running background agent/task (I'd need to know which one).
+  3. Adjust permissions
+     Change what this agent is allowed to do (e.g., restrict tools or commands via settings).
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

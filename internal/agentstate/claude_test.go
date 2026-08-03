@@ -163,6 +163,85 @@ func TestClaudeBlockedOptions(t *testing.T) {
 	}
 }
 
+// TestClaudeBlockedSingleYesEsc drives a captured live pane where Claude's
+// newer single-choice approval form shows only "❯ 1. Yes" with no numbered
+// decline — "No" is only reachable via the "Esc to cancel" footer hint. Before
+// the fix, the app got a one-button "Yes" card with no way to decline.
+func TestClaudeBlockedSingleYesEsc(t *testing.T) {
+	st := Build(Input{
+		PaneID:    "wX:p4",
+		Kind:      "claude",
+		Status:    "blocked",
+		Detection: read(t, "claude_blocked_single_yes_detection.txt"),
+	})
+
+	if st.Blocked == nil {
+		t.Fatal("Blocked is nil for a blocked pane")
+	}
+	if !strings.Contains(st.Blocked.Question, "Do you want to proceed?") {
+		t.Errorf("Question = %q, want it to contain the proceed prompt", st.Blocked.Question)
+	}
+	if len(st.Blocked.Options) != 2 {
+		t.Fatalf("got %d options, want 2 (Yes + esc-keyed No): %+v", len(st.Blocked.Options), st.Blocked.Options)
+	}
+	yes := st.Blocked.Options[0]
+	if yes.Index != 1 || !yes.Selected || !strings.Contains(yes.Label, "Yes") {
+		t.Errorf("option 0 = %+v, want index 1 selected Yes", yes)
+	}
+	no := st.Blocked.Options[1]
+	if no.Key != "esc" || no.Label != "No" {
+		t.Errorf("option 1 = %+v, want Key=esc Label=No", no)
+	}
+}
+
+// TestClaudeBlockedLiveFormAllOptions drives a captured live pane where
+// Claude's disambiguation menu boxes options 1-4, then appends a trailing "5.
+// Chat about this" below a second rule. Before the fix, the parser (anchored
+// on "the region after the last rule") only saw that trailing "5." line and an
+// empty question — the app got a bare "Chat about this" cue with nothing to
+// act on. It must now recover the real question and all five options.
+func TestClaudeBlockedLiveFormAllOptions(t *testing.T) {
+	st := Build(Input{
+		PaneID:    "wX:p5",
+		Kind:      "claude",
+		Status:    "blocked",
+		Detection: read(t, "claude_blocked_live_form_detection.txt"),
+	})
+
+	if st.Blocked == nil {
+		t.Fatal("Blocked is nil for a blocked pane")
+	}
+	if !strings.Contains(st.Blocked.Question, `block this agent`) {
+		t.Errorf("Question = %q, want it to contain the disambiguation prompt", st.Blocked.Question)
+	}
+	if len(st.Blocked.Options) != 5 {
+		t.Fatalf("got %d options, want 5: %+v", len(st.Blocked.Options), st.Blocked.Options)
+	}
+	want := []struct {
+		index    int
+		selected bool
+		labelHas string
+	}{
+		{1, true, "Stop current work"},
+		{2, false, "Block a background task"},
+		{3, false, "Adjust permissions"},
+		{4, false, "Type something"},
+		{5, false, "Chat about this"},
+	}
+	for i, w := range want {
+		got := st.Blocked.Options[i]
+		if got.Index != w.index {
+			t.Errorf("option %d Index = %d, want %d", i, got.Index, w.index)
+		}
+		if got.Selected != w.selected {
+			t.Errorf("option %d Selected = %v, want %v", i, got.Selected, w.selected)
+		}
+		if !strings.Contains(got.Label, w.labelHas) {
+			t.Errorf("option %d Label = %q, want it to contain %q", i, got.Label, w.labelHas)
+		}
+	}
+}
+
 // TestUnknownKindFallsBack verifies the unknown-safe contract: an unregistered
 // agent kind routes to the generic parser (Parsed=false) and still returns a
 // renderable card rather than erroring.
