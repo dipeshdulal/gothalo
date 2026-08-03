@@ -47,6 +47,10 @@ var herdrProxyAllowlist = map[string]bool{
 	"pane.close":       true, // DESTRUCTIVE: close a pane (in-app confirm)
 	"pane.focus":       true, // focus a pane
 	"agent.focus":      true, // focus an agent's pane
+
+	// ---- mobile agent-list projection (Herdr's own filter+sort for the phone) ----
+	"agent.view.set":   true, // install a filter+sort projection (e.g. sort by "attention")
+	"agent.view.clear": true, // clear the projection
 }
 
 // herdrProxyRequest is the POST /herdr body: a Herdr socket method plus its

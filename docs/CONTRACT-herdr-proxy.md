@@ -85,6 +85,8 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 | `pane.close` | `{ "pane_id": "wN:pM" }` | `ok` | **DESTRUCTIVE** — in-app confirm; closing a tab's last pane closes the tab |
 | `pane.focus` | `{ "pane_id": "wN:pM" }` | `ok` | |
 | `agent.focus` | `{ "target": "<pane id / agent>" }` | `ok` | focus an agent's pane |
+| `agent.view.set` | `{ "source": "gothalo", "label"?, "filter"?, "sort"?: [{ "field": "attention"\|"status"\|"state_change_seq"\|"seen"\|"*_order", "order"?: "asc"\|"desc" }] }` | `agent_view` | install a filter+sort projection over the agent list — Herdr's own mobile-agents-list primitive (sort by `attention` for a priority inbox). `source` owns the projection |
+| `agent.view.clear` | `{ "source": "gothalo" }` | `agent_view` | clear the projection owned by `source` |
 
 `focus` defaults to **`false`** everywhere, so app-created panes/tabs do not steal
 the operator's foreground pane on the host. Pass `"focus": true` to override.
