@@ -53,6 +53,12 @@ type Blocked struct {
 	// Options are the selectable choices, in display order. May be empty when the
 	// agent is blocked on free-form input rather than a menu.
 	Options []Option `json:"options"`
+	// Category is a coarse semantic class of the block, taken from Herdr's own
+	// detection rule id (e.g. "tool_approval", "question_panel",
+	// "dangerous_command_approval", "write_file_approval"). Set by the server via
+	// agent.explain — no per-agent plugin needed — and OMITTED when unavailable.
+	// Lets the app style/prioritise (e.g. flag a dangerous command in red).
+	Category string `json:"category,omitempty"`
 }
 
 // Option is one selectable choice in a blocked prompt.
