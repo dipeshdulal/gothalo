@@ -281,6 +281,34 @@ class BridgeClient {
     }
   }
 
+  /// `POST /herdr {method, params}` — the allowlisted generic proxy onto Herdr's
+  /// command surface (worktree/tab/pane create+close, plus reads). Returns the
+  /// `result` object verbatim. A disallowed method (`403`), unknown target
+  /// (`404`), or Herdr error (`502`) throws a [BridgeException] carrying the
+  /// proxy's `{error}` message.
+  Future<Map<String, dynamic>> herdrCommand(
+    String method, [
+    Map<String, dynamic> params = const {},
+  ]) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/herdr',
+        data: {'method': method, 'params': params},
+      );
+      final result = (res.data ?? const {})['result'];
+      return result is Map ? Map<String, dynamic>.from(result) : {};
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map && data['error'] is String) {
+        throw BridgeException(
+          data['error'] as String,
+          statusCode: e.response?.statusCode,
+        );
+      }
+      throw _asBridgeException(e);
+    }
+  }
+
   /// `POST /agent-mode/cycle {pane}` → advance a Claude pane's permission mode
   /// by one Shift+Tab. Returns the new mode (best-effort read-back; null if it
   /// didn't settle in time). Throws `409` for a non-Claude pane.
