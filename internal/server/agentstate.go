@@ -68,5 +68,20 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		Recent:    recent,
 	})
 
+	// Enrich a block with Herdr's own detection category (agent.explain): the
+	// semantic class — tool_approval / question_panel / dangerous_command_approval
+	// / write_file_approval — with NO per-agent plugin, for any agent Herdr
+	// detects. Best-effort: a failure just omits the category.
+	if state.AgentStatus == "blocked" {
+		if det, eerr := c.Explain(bare); eerr != nil {
+			log.Warn("agent-state: explain failed", "pane", pane, "err", eerr)
+		} else if det != nil && det.RuleID != "" {
+			if state.Blocked == nil {
+				state.Blocked = &agentstate.Blocked{}
+			}
+			state.Blocked.Category = det.RuleID
+		}
+	}
+
 	writeJSON(w, state)
 }

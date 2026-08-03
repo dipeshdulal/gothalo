@@ -49,6 +49,7 @@ leak into the contract.
 | `blocked.options[].index` | int | The number the user types to pick it (1-based); `0` if unnumbered. |
 | `blocked.options[].label` | string | Choice text. |
 | `blocked.options[].selected` | bool | The highlighted default — the one a bare Enter (`/approve`) accepts. |
+| `blocked.category` | string \| absent | Coarse semantic class of the block, from Herdr's own detection rule id (e.g. `tool_approval`, `question_panel`, `dangerous_command_approval`, `write_file_approval`, `generic_permission_prompt`). Filled via `agent.explain` — **no per-agent plugin** — and omitted when unavailable. Lets the app style/prioritise (e.g. flag a dangerous command). |
 | `transcript` | array\<string\> \| absent | Optional, best-effort recent plain-text lines. |
 | `parsed` | bool | `false` ⇒ no dedicated parser for this kind; `detail`/`transcript` are a raw recent-text fallback. |
 
