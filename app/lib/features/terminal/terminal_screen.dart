@@ -58,6 +58,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     // Keystrokes typed into the TerminalView flow here → out to the bridge as
     // binary. No local echo: the PTY stream is the single source of truth.
     terminal.onOutput = _send;
+    // Viewport changes (first layout, rotation, keyboard show/hide) flow here →
+    // out as a resize control frame so the remote PTY matches the phone's width.
+    terminal.onResize = _sendResize;
   }
 
   @override
@@ -105,6 +108,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       }
       _attempts = 0;
       if (mounted) setState(() => _conn = _Conn.connected);
+      // Send our real geometry up front — onResize only fires on *change*, and
+      // the viewport is usually already sized by the time the socket is ready,
+      // so without this the PTY would stay at its default 80×24.
+      _sendResize(terminal.viewWidth, terminal.viewHeight, 0, 0);
 
       _sub = channel.stream.listen(
         (message) {
@@ -189,6 +196,18 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       setState(() => _stickyCtrl = false);
     }
     channel.sink.add(Uint8List.fromList(utf8.encode(out)));
+  }
+
+  /// Sends the terminal geometry to the bridge as a **text** control frame
+  /// (`{"type":"resize","cols":C,"rows":R}`) — distinct from the binary PTY
+  /// byte stream. The bridge resizes the remote PTY so line-editing redraws
+  /// (autocomplete, history recall, wrapping) stay aligned with the phone's
+  /// viewport. Fired on first layout and on every later resize.
+  void _sendResize(int cols, int rows, int pixelWidth, int pixelHeight) {
+    final channel = _channel;
+    if (channel == null || _conn != _Conn.connected) return;
+    if (cols <= 0 || rows <= 0) return;
+    channel.sink.add(jsonEncode({'type': 'resize', 'cols': cols, 'rows': rows}));
   }
 
   @override

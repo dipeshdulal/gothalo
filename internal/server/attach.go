@@ -3,8 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
-	"io"
+	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -23,18 +24,21 @@ const paneReadInterval = 200 * time.Millisecond
 //	terminal bytes ──▶ WS  (binary frames the client renders)
 //	WS             ──▶ terminal stdin  (keystrokes/control bytes the client sends)
 //
-// Two backends, chosen by pane kind, behind one unchanged WS contract:
+// Two backends, chosen by pane kind, behind one WS contract:
 //
 //   - Agent panes keep the high-fidelity path: `herdr agent attach <pane>` under
-//     a PTY, copied byte-for-byte both ways (identical to before).
+//     a PTY, bridging raw bytes both ways.
 //   - Plain panes have no agent to attach, so the bridge polls
 //     `herdr pane read` and repaints the socket, and forwards inbound bytes to
 //     `herdr pane send-text` (which passes raw bytes — Enter, arrows, Ctrl-C —
 //     straight to the pane's PTY).
 //
-// Clients MUST send binary frames (raw terminal bytes — the accessory key row
-// writes control bytes straight into this stream, D6); a non-binary frame tears
-// the connection down. The backend process/poller is stopped when the WS closes.
+// Frame types: **binary** frames are raw terminal bytes (the accessory key row
+// writes control bytes straight into this stream, D6). **text** frames are
+// out-of-band control messages; today the only one is
+// `{"type":"resize","cols":C,"rows":R}`, which sizes the PTY so the client's
+// line-editing (autocomplete, wrapping) stays aligned with its viewport. The
+// backend process/poller is stopped when the WS closes.
 //
 // Auth uses the same authorize() path as every other endpoint, and accepts
 // ?token= because WS clients can't always set an Authorization header.
@@ -71,6 +75,9 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	// Match the old NetConn behaviour: don't cap a single inbound message (a
+	// large paste arrives as one binary frame). Control frames are tiny anyway.
+	conn.SetReadLimit(-1)
 
 	if info.IsAgent() {
 		attachAgentPTY(conn, c, bare)
@@ -80,10 +87,12 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 }
 
 // attachAgentPTY streams an agent pane via `herdr agent attach` under a PTY,
-// copying raw bytes both ways. This is the original attach behaviour, unchanged.
+// bridging raw bytes both ways. Binary frames from the client are stdin; text
+// frames are control messages (resize), applied with pty.Setsize.
 func attachAgentPTY(conn *websocket.Conn, c *herdr.Client, pane string) {
 	cmd := c.AttachCommand(pane)
-	// A sane default geometry; the client re-renders from Herdr's own repaint.
+	// A sane default geometry; the client sends its real size on connect (and on
+	// every later resize) as a text control frame, which we apply below.
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
 		log.Error("attach: pty start failed", "pane", pane, "err", err)
@@ -98,19 +107,50 @@ func attachAgentPTY(conn *websocket.Conn, c *herdr.Client, pane string) {
 		_ = cmd.Wait()
 	}()
 
-	// A background-derived context bounds the net.Conn's lifetime independent of
-	// the (hijacked) request context; cancelling it unblocks both copy loops.
+	// A background-derived context bounds the socket's lifetime independent of
+	// the (hijacked) request context; cancelling it unblocks both loops.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	nc := websocket.NetConn(ctx, conn, websocket.MessageBinary)
 
 	log.Info("attach: streaming agent", "pane", pane)
 
 	// Bridge both directions. Whichever side ends first (client disconnects, or
 	// the attach process exits) unblocks the other via the deferred teardown.
+	// coder/websocket allows one concurrent reader + one concurrent writer.
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(nc, ptmx); done <- struct{}{} }() // pty -> WS
-	go func() { _, _ = io.Copy(ptmx, nc); done <- struct{}{} }() // WS -> pty
+	// pty -> WS: raw terminal bytes as binary frames.
+	go func() {
+		defer func() { done <- struct{}{} }()
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := ptmx.Read(buf)
+			if n > 0 {
+				if werr := conn.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	// WS -> pty: binary frames are stdin; text frames are control (resize).
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			typ, data, rerr := conn.Read(ctx)
+			if rerr != nil {
+				return
+			}
+			if typ == websocket.MessageText {
+				applyResize(ptmx, data, pane)
+				continue
+			}
+			if _, werr := ptmx.Write(data); werr != nil {
+				return
+			}
+		}
+	}()
 	<-done
 
 	log.Info("attach: closed", "pane", pane)
@@ -118,32 +158,34 @@ func attachAgentPTY(conn *websocket.Conn, c *herdr.Client, pane string) {
 }
 
 // attachPaneStream bridges a non-agent pane: it repaints the pane's visible
-// frame to the WS on change, and forwards inbound WS bytes to the pane verbatim
-// via `herdr pane send-text` (which delivers raw bytes to the pane's PTY, so
-// Enter/arrows/Ctrl-C all work). The WS contract is identical to the agent
-// path — binary frames of raw terminal bytes in both directions.
+// frame to the WS on change, and forwards inbound binary bytes to the pane
+// verbatim via `herdr pane send-text`. Text frames (resize) are swallowed — a
+// plain pane's geometry is owned by Herdr, so we neither resize it nor inject
+// the control JSON as keystrokes.
 func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	nc := websocket.NetConn(ctx, conn, websocket.MessageBinary)
 
 	log.Info("attach: streaming pane", "pane", pane)
 
 	done := make(chan struct{}, 2)
 
-	// WS -> pane: raw keystrokes/control bytes forwarded to the pane's PTY.
+	// WS -> pane: binary frames are raw keystrokes; text frames are control
+	// messages we ignore for a plain pane (so the JSON never reaches the shell).
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buf := make([]byte, 4096)
 		for {
-			n, err := nc.Read(buf)
-			if n > 0 {
-				if e := c.Send(pane, string(buf[:n])); e != nil {
-					log.Error("attach: send-text failed", "pane", pane, "err", e)
-				}
-			}
+			typ, data, err := conn.Read(ctx)
 			if err != nil {
 				return
+			}
+			if typ == websocket.MessageText {
+				continue
+			}
+			if len(data) > 0 {
+				if e := c.Send(pane, string(data)); e != nil {
+					log.Error("attach: send-text failed", "pane", pane, "err", e)
+				}
 			}
 		}
 	}()
@@ -162,7 +204,7 @@ func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 			}
 			if !bytes.Equal(frame, last) {
 				last = append(last[:0], frame...)
-				if _, e := nc.Write(repaint(frame)); e != nil {
+				if e := conn.Write(ctx, websocket.MessageBinary, repaint(frame)); e != nil {
 					return
 				}
 			}
@@ -178,6 +220,26 @@ func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 	cancel()
 	log.Info("attach: closed", "pane", pane)
 	conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// applyResize parses a {"type":"resize","cols":C,"rows":R} control frame and
+// resizes the PTY so the agent's TUI redraws for the client's real viewport.
+// Malformed or out-of-range frames are ignored rather than fatal.
+func applyResize(ptmx *os.File, data []byte, pane string) {
+	var msg struct {
+		Type string `json:"type"`
+		Cols int    `json:"cols"`
+		Rows int    `json:"rows"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "resize" {
+		return
+	}
+	if msg.Cols <= 0 || msg.Rows <= 0 || msg.Cols > 1000 || msg.Rows > 1000 {
+		return
+	}
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(msg.Rows), Cols: uint16(msg.Cols)}); err != nil {
+		log.Error("attach: resize failed", "pane", pane, "err", err)
+	}
 }
 
 // repaint frames a full-screen redraw for the terminal emulator: cursor home +
