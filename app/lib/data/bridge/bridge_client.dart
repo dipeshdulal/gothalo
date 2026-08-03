@@ -33,19 +33,29 @@ class BlockedOption {
     required this.index,
     required this.label,
     required this.selected,
+    this.key,
   });
 
-  /// The number to type to pick it (1-based); 0 if unnumbered.
+  /// The number to type to pick it (1-based); 0 if unnumbered (see [key]).
   final int index;
   final String label;
 
   /// The highlighted default — the one a bare Enter (`/approve`) accepts.
   final bool selected;
 
+  /// Set instead of a usable [index] for a choice with no menu number, only
+  /// reachable via a raw keystroke — e.g. `"esc"` for the decline action on
+  /// Claude's single-choice approval form (`❯ 1. Yes` with no numbered "No").
+  /// Dispatch via [BridgeClient.sendKey], not [BridgeClient.sendText].
+  final String? key;
+
+  bool get isKeyed => key != null && key!.isNotEmpty;
+
   factory BlockedOption.fromJson(Map<String, dynamic> j) => BlockedOption(
         index: (j['index'] as num?)?.toInt() ?? 0,
         label: (j['label'] as String?) ?? '',
         selected: j['selected'] == true,
+        key: j['key'] as String?,
       );
 }
 
@@ -234,6 +244,18 @@ class BridgeClient {
   Future<void> sendText(String pane, String text) async {
     try {
       await _dio.post<dynamic>('/send', data: {'pane': pane, 'text': text});
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /send {pane, key}` → sends a raw keystroke instead of typed text —
+  /// for a [BlockedOption] that has no [BlockedOption.index] and is only
+  /// reachable via a keystroke (e.g. `"esc"` to decline a single-choice
+  /// approval form).
+  Future<void> sendKey(String pane, String key) async {
+    try {
+      await _dio.post<dynamic>('/send', data: {'pane': pane, 'key': key});
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }

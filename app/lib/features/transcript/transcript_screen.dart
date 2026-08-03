@@ -225,11 +225,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     }
   }
 
-  /// Pick a non-default option: type its number and submit via
-  /// `POST /send {pane, text:'<index>\n'}` (the bridge turns the trailing
-  /// newline into a real Enter). Optimistically hide the card.
+  /// Pick a non-default option. A keyed option (no menu number, e.g. Esc to
+  /// decline) sends that raw keystroke; a numbered one types its number and
+  /// submits via `POST /send {pane, text:'<index>\n'}` (the bridge turns the
+  /// trailing newline into a real Enter). Optimistically hide the card.
   void _handleOption(BlockedOption opt) {
-    _client?.sendText(widget.pane, '${opt.index}\n');
+    if (opt.isKeyed) {
+      _client?.sendKey(widget.pane, opt.key!);
+    } else {
+      _client?.sendText(widget.pane, '${opt.index}\n');
+    }
     setState(() => _agentState = null);
   }
 
@@ -249,13 +254,6 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return d.isEmpty ? null : d;
   }
 
-  /// Filter app-injected pseudo-options (e.g. Herdr's "Chat about this") that
-  /// aren't real agent choices, so they never render as approval buttons.
-  bool _isAppInjectedOption(String label) {
-    final l = label.trim().toLowerCase();
-    return l == 'chat about this' || l.startsWith('chat about');
-  }
-
   /// The status strip above the composer. Only a blocked agent with a **real
   /// prompt** gets an actionable approval card; a working agent gets the
   /// thinking indicator. Everything else (just-waiting, idle, done) shows
@@ -264,8 +262,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   Widget _bottomStatus() {
     final s = _agentState;
     if (s != null && s.isBlocked) {
-      final opts =
-          s.options.where((o) => !_isAppInjectedOption(o.label)).toList();
+      final opts = s.options;
       final hasPrompt =
           (s.blockedQuestion?.trim().isNotEmpty ?? false) || opts.isNotEmpty;
       if (hasPrompt) {
@@ -765,7 +762,6 @@ class _ApprovalCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final maxW = MediaQuery.sizeOf(context).width * 0.82;
     final severity = state.blockSeverity;
     final (Color bg, Color accent, IconData icon) = switch (severity) {
       BlockSeverity.danger => (
@@ -852,20 +848,22 @@ class _ApprovalCard extends StatelessWidget {
           ],
           if (options.isNotEmpty) ...[
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (var i = 0; i < options.length; i++)
-                  _optionButton(
-                    options[i],
-                    scheme,
-                    severity,
-                    maxW,
-                    primary: options[i].selected || (!hasSelected && i == 0),
-                  ),
-              ],
-            ),
+            for (var i = 0; i < options.length; i++) ...[
+              if (i > 0) const SizedBox(height: 6),
+              _OptionRow(
+                option: options[i],
+                primary: options[i].selected || (!hasSelected && i == 0),
+                danger: severity == BlockSeverity.danger,
+                onTap: () {
+                  final o = options[i];
+                  if (o.selected) {
+                    onApprove();
+                  } else {
+                    onOption(o);
+                  }
+                },
+              ),
+            ],
           ] else ...[
             const SizedBox(height: 6),
             Text(
@@ -877,37 +875,89 @@ class _ApprovalCard extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _optionButton(
-    BlockedOption o,
-    ColorScheme scheme,
-    BlockSeverity severity,
-    double maxW, {
-    required bool primary,
-  }) {
-    final label = Text(o.label, maxLines: 2, overflow: TextOverflow.ellipsis);
-    if (!primary) {
-      return ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxW),
-        child: OutlinedButton(onPressed: () => onOption(o), child: label),
-      );
-    }
-    // The prominent action: the highlighted default approves via /approve;
-    // a primary-by-position option (nothing preselected) types its number.
-    final onPressed = o.selected ? onApprove : () => onOption(o);
-    final style = severity == BlockSeverity.danger
-        ? FilledButton.styleFrom(
-            backgroundColor: scheme.error,
-            foregroundColor: scheme.onError,
-          )
-        : null;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxW),
-      child: FilledButton.icon(
-        style: style,
-        onPressed: onPressed,
-        icon: const Icon(Icons.check, size: 18),
-        label: label,
+/// One row in the approval card's option list — a full-width tappable choice,
+/// stacked vertically rather than wrapped as chips so long labels (a real
+/// menu can have several, e.g. Claude's disambiguation prompts) read cleanly
+/// instead of crowding into a chip cloud of mismatched widths. The default
+/// (`primary`) is filled and accent-coloured with a check; every other choice
+/// is a plain outlined row, each fronted by a small badge — the number to
+/// type, or the raw key name (e.g. "ESC") for a [BlockedOption.isKeyed] choice
+/// that has no menu number at all.
+class _OptionRow extends StatelessWidget {
+  const _OptionRow({
+    required this.option,
+    required this.primary,
+    required this.danger,
+    required this.onTap,
+  });
+
+  final BlockedOption option;
+  final bool primary;
+  final bool danger;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = danger ? scheme.error : scheme.primary;
+    final bg = primary ? accent : scheme.surface.withValues(alpha: 0.6);
+    final fg = primary ? (danger ? scheme.onError : scheme.onPrimary) : scheme.onSurface;
+    final badgeText = option.isKeyed ? option.key!.toUpperCase() : '${option.index}';
+
+    return Material(
+      color: bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: primary
+            ? BorderSide.none
+            : BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: primary
+                      ? fg.withValues(alpha: 0.18)
+                      : scheme.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  badgeText,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: fg,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  option.label,
+                  style: TextStyle(
+                    color: fg,
+                    fontWeight: primary ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+              if (primary) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.check, size: 18, color: fg),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
