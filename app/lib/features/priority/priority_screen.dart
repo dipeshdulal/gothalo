@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/connection/connection_providers.dart';
+import '../../core/widgets/live_activity_line.dart';
+import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/widgets/agent_avatar.dart';
 import '../inbox/widgets/status_badge.dart';
@@ -60,6 +62,7 @@ class PriorityScreen extends ConsumerWidget {
                     server: h.server,
                     agent: h.agent,
                     starred: h.starred,
+                    client: h.client,
                     onTap: () => _open(context, ref, h.server, h.agent),
                     onStar: () => ref
                         .read(starredAgentsProvider.notifier)
@@ -88,6 +91,7 @@ class PriorityScreen extends ConsumerWidget {
                           server: sa.server,
                           agent: agent,
                           starred: starred,
+                          client: sa.client,
                           showServer: false,
                           onTap: () => _open(context, ref, sa.server, agent),
                           onStar: () => ref
@@ -112,6 +116,7 @@ class _AgentRow extends StatelessWidget {
     required this.starred,
     required this.onTap,
     required this.onStar,
+    this.client,
     this.showServer = true,
   });
 
@@ -120,6 +125,10 @@ class _AgentRow extends StatelessWidget {
   final bool starred;
   final VoidCallback onTap;
   final VoidCallback onStar;
+
+  /// The server's client, for [LiveActivityLine] — null when that server
+  /// couldn't be reached (no line to show either way).
+  final BridgeClient? client;
   final bool showServer;
 
   @override
@@ -134,13 +143,21 @@ class _AgentRow extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
-      subtitle: Text(
-        showServer
-            ? '${server.name}  ·  ${agent.gitLabel}'
-            : agent.gitLabel,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: scheme.onSurfaceVariant),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            showServer
+                ? '${server.name}  ·  ${agent.gitLabel}'
+                : agent.gitLabel,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
+          if (agent.agentStatus == AgentStatus.working && client != null)
+            LiveActivityLine(paneId: agent.paneId, client: client),
+        ],
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
