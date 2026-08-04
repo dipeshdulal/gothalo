@@ -157,9 +157,16 @@ struct: what the agent is doing, its last message, and — when blocked — the 
 question and choices it's waiting on (which pair with `POST /approve`). Use it for
 agent panes; keep raw `/attach` for non-agent panes.
 ```
-GET /agent-state?pane=<pane_id>
+GET /agent-state?pane=<pane_id>[&recent=1]
 Authorization: Bearer <bearer>          // same auth as everything; ?token= also works
 ```
+The card is built from the pane's **current screen**. `?recent=1` additionally
+reads the pane's **scrollback** for a richer `detail`/`transcript` — but Herdr can
+only capture an alternate-screen pane's history by physically **scrolling the
+pane**, which whoever is watching it on the desktop sees as a jump, once per
+call. It is therefore **off by default** and should only be requested by a caller
+that has no other source of history and has accepted that trade. `blocked`
+(question + options) comes from the current screen and is identical either way.
 Response `200` — the **stable contract** (kind-agnostic; the same shape for every
 agent kind):
 ```jsonc

@@ -22,7 +22,9 @@ import (
 // Parsing never 500s — an unrecognised agent kind degrades to Parsed=false with a
 // best-effort raw text dump. Same auth as every other endpoint.
 //
-// `?recent=0` suppresses the scrollback read — see wantRecent.
+// The card is built from the pane's CURRENT SCREEN. `?recent=1` additionally
+// reads scrollback for a richer Detail/Transcript, at the cost of scrolling the
+// operator's pane — see wantRecent.
 func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -57,14 +59,8 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	if derr != nil {
 		log.Warn("agent-state: detection read failed", "pane", pane, "err", derr)
 	}
-	// `recent-unwrapped` comes from SCROLLBACK, and Herdr can only capture an
-	// alternate-screen pane's history by physically scrolling it — which the
-	// operator sees as the pane jumping on their desktop, once per poll. A caller
-	// that already has the agent's real transcript (the chat screen streams it
-	// from /agent-transcript) gains nothing from it, so it can opt out with
-	// ?recent=0 and leave the pane alone. Blocked prompts come from `detection`,
-	// which reads the current screen and never scrolls, so opting out costs only
-	// some richness in Detail/Transcript.
+	// Off unless asked for — `recent-unwrapped` scrolls the operator's pane. See
+	// wantRecent.
 	recent, rerr := "", error(nil)
 	if wantRecent(r) {
 		recent, rerr = c.ReadText(bare, "recent-unwrapped", 80)
@@ -108,15 +104,25 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 }
 
 // wantRecent reports whether this request wants the scrollback-backed
-// `recent-unwrapped` read. It defaults to true — the historical behaviour, and
-// what a card with no other source of history needs. `?recent=0` opts out, which
-// callers that already stream the real transcript should do: the read scrolls
-// the operator's pane, and on a repeatedly-polling screen that shows up as the
-// pane visibly jumping.
+// `recent-unwrapped` read. It defaults to FALSE and must be asked for with
+// `?recent=1`.
+//
+// The read has a side effect on the operator's machine: Herdr can only capture
+// an alternate-screen pane's history by physically scrolling the pane, so every
+// call makes that pane jump for whoever is watching it. A polling client turns
+// that into continuous movement. Something that disturbs the user's terminal is
+// the wrong default — it should be requested deliberately, by a caller that has
+// no other way to get history and has decided the trade is worth it.
+//
+// Nothing in the app asks for it: the chat screen streams the real transcript
+// from /agent-transcript, and the activity line wants current state rather than
+// history. The blocked question and options come from `detection`, which reads
+// the current screen and never scrolls, so the approval path is unaffected
+// either way. Opting in costs only extra richness in Detail/Transcript.
 func wantRecent(r *http.Request) bool {
 	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("recent"))) {
-	case "0", "false", "no":
-		return false
+	case "1", "true", "yes":
+		return true
 	}
-	return true
+	return false
 }
