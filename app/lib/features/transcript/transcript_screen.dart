@@ -270,8 +270,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     for (final e in _ordered.reversed) {
       if (e.kind != EntryKind.toolCall || e.tool == null) continue;
       final t = e.tool!;
-      if (_resultsByForId[t.id] != null)
+      if (_resultsByForId[t.id] != null) {
         break; // resolved → not the pending one
+      }
       final ctx = _firstText([t.command, t.file, t.inputSummary, t.title]);
       if (ctx != null) return ctx;
       break;
@@ -534,11 +535,15 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
   /// Keep the view pinned to the newest entry unless the user scrolled up.
   void _maybeAutoScroll() {
-    if (!_pinnedToBottom) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
-    });
+    if (!_pinnedToBottom || _settling) return;
+    // Delegate to the same settler the initial backlog uses instead of a single
+    // blind jump: on this lazily-built, center-anchored list maxScrollExtent is
+    // only an estimate until off-screen rows lay out, so one jump undershoots
+    // and the next frame jumps again — which, on a fast-streaming agent, reads
+    // as the view "blinking"/jittering. The settler only jumps when actually
+    // off the bottom and re-checks across a few frames until it settles; the
+    // _settling guard coalesces bursts of frames into one settle sequence.
+    _settleToBottom(tries: 3);
   }
 
   /// Reliably land on the newest entry after the initial backlog. The list is
