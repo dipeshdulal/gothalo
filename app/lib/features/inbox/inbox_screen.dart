@@ -376,12 +376,19 @@ class _AgentTile extends ConsumerWidget {
             ),
             // "What's it doing right now" — only for a working agent; an
             // idle/blocked/done one has nothing that changes to poll for.
-            // Full row width (below the status column, not squeezed beside
-            // it) — a status badge can be wide enough to truncate an
-            // already-short activity line down to nothing useful.
+            // On its own row below the title/status Row (not squeezed beside
+            // the status badge, which can be wide enough to truncate it to
+            // nothing), but indented to line up under the title text rather
+            // than running back under the avatar — the avatar column is the
+            // row's visual gutter, so this reads as "part of this agent" only
+            // when it aligns with the agent's text, not the artwork.
             if (agent.agentStatus == AgentStatus.working) ...[
               const SizedBox(height: 6),
-              LiveActivityLine(paneId: agent.paneId),
+              Padding(
+                // avatar diameter (radius 20 * 2) + the 12px gap to the title.
+                padding: const EdgeInsets.only(left: 52),
+                child: LiveActivityLine(paneId: agent.paneId),
+              ),
             ],
           ],
         ),
