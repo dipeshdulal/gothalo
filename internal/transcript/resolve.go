@@ -59,10 +59,18 @@ func claudeProjectsRoot() (string, error) {
 //  2. Harden against encoding drift: if that misses but a sessionID is known, glob
 //     ~/.claude/projects/*/<sessionID>.jsonl (the session id is globally unique),
 //     which finds the file regardless of how the dir name was encoded.
-//  3. Fallback: if the session id is unknown or unmatched, pick the
+//  3. Fallback: ONLY when the session id is unknown, pick the
 //     most-recently-modified *.jsonl in the project dir whose own recorded cwd
-//     equals the pane's cwd — so a stale/rotated session id still resolves to the
-//     right conversation.
+//     equals the pane's cwd.
+//
+// A KNOWN session id that misses both lookups stops at ErrNoTranscript — it is
+// never handed to the fallback. Claude writes a session's .jsonl lazily, so a
+// pane whose agent has not spoken yet has a real session id and no file. The
+// fallback would then return the newest *other* transcript in the same project
+// dir — i.e. a different pane's conversation. Two agents in one directory is
+// ordinary, so that misfire is the common case, not a corner: it showed pane A's
+// chat under pane B in the mobile app. "Not written yet" must read as absent,
+// not as license to guess.
 //
 // codex/opencode return ErrUnsupportedKind (their layouts aren't wired up yet).
 func Locate(kind, cwd, sessionID string) (string, error) {
@@ -93,9 +101,13 @@ func locateClaude(cwd, sessionID string) (string, error) {
 		if matches, _ := filepath.Glob(filepath.Join(root, "*", sessionID+".jsonl")); len(matches) > 0 {
 			return matches[0], nil
 		}
+		// Both lookups missed for a session we can name: the file does not exist
+		// yet. Stop here rather than fall through — see the note on Locate.
+		return "", ErrNoTranscript
 	}
 
-	// 3. Fallback: newest *.jsonl in the project dir whose recorded cwd matches.
+	// 3. Fallback (session id unknown only): newest *.jsonl in the project dir
+	// whose recorded cwd matches.
 	if p := newestMatchingSession(dir, cwd); p != "" {
 		return p, nil
 	}
