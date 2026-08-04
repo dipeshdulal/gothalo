@@ -115,8 +115,9 @@ type backlogCompleteFrame struct {
 // stable cursor across pages.
 //
 // The bridge resolves the pane's transcript file (transcript.Locate: session id,
-// then newest-matching fallback), reads each page with a bounded ring buffer (the
-// whole file is never held), then tails the file by short poll. It is READ-ONLY:
+// then title match, then newest-matching fallback), reads each page with a
+// bounded ring buffer (the whole file is never held), then tails the file by
+// short poll. It is READ-ONLY:
 // it never writes to the pane (prompts/approvals stay on POST /send and POST
 // /approve). Per-connection state is only the tailer's byte offset + the seq
 // counter; the socket closing stops the poll.
@@ -153,7 +154,7 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, err := transcript.Locate(agent.Kind, agent.Cwd, agent.SessionID())
+	path, err := transcript.Locate(agent.Kind, agent.Cwd, agent.SessionID(), agent.Title)
 	if err != nil {
 		log.Warn("agent-transcript: locate failed", "pane", pane, "kind", agent.Kind, "err", err)
 		http.Error(w, err.Error(), http.StatusNotFound)

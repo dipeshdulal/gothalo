@@ -2,8 +2,10 @@ package transcript
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,16 +61,19 @@ func claudeProjectsRoot() (string, error) {
 //  2. Harden against encoding drift: if that misses but a sessionID is known, glob
 //     ~/.claude/projects/*/<sessionID>.jsonl (the session id is globally unique),
 //     which finds the file regardless of how the dir name was encoded.
-//  3. Fallback: if the session id is unknown or unmatched, pick the
-//     most-recently-modified *.jsonl in the project dir whose own recorded cwd
-//     equals the pane's cwd — so a stale/rotated session id still resolves to the
-//     right conversation.
+//  3. Title match: pick the transcript whose latest ai-title entry equals the
+//     pane's terminal title. Claude Code mirrors the conversation title into the
+//     terminal title, so this pins a pane to its own conversation when several
+//     agents share one project dir (where cwd alone is ambiguous).
+//  4. Fallback: pick the most-recently-modified *.jsonl in the project dir whose
+//     own recorded cwd equals the pane's cwd — so a stale/rotated session id
+//     still resolves to the right conversation.
 //
 // codex/opencode return ErrUnsupportedKind (their layouts aren't wired up yet).
-func Locate(kind, cwd, sessionID string) (string, error) {
+func Locate(kind, cwd, sessionID, title string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "claude":
-		return locateClaude(cwd, sessionID)
+		return locateClaude(cwd, sessionID, title)
 	case "codex", "opencode":
 		return "", ErrUnsupportedKind
 	default:
@@ -76,7 +81,7 @@ func Locate(kind, cwd, sessionID string) (string, error) {
 	}
 }
 
-func locateClaude(cwd, sessionID string) (string, error) {
+func locateClaude(cwd, sessionID, title string) (string, error) {
 	root, err := claudeProjectsRoot()
 	if err != nil {
 		return "", err
@@ -95,8 +100,16 @@ func locateClaude(cwd, sessionID string) (string, error) {
 		}
 	}
 
-	// 3. Fallback: newest *.jsonl in the project dir whose recorded cwd matches.
-	if p := newestMatchingSession(dir, cwd); p != "" {
+	// 3. Title match: the pane's terminal title against each transcript's latest
+	// ai-title.
+	if title != "" {
+		if p := newestSession(dir, func(p string) bool { return lastAITitle(p) == title }); p != "" {
+			return p, nil
+		}
+	}
+
+	// 4. Fallback: newest *.jsonl in the project dir whose recorded cwd matches.
+	if p := newestSession(dir, func(p string) bool { return cwd == "" || firstLineCwd(p) == cwd }); p != "" {
 		return p, nil
 	}
 	return "", ErrNoTranscript
@@ -107,10 +120,9 @@ func isFile(p string) bool {
 	return err == nil && !fi.IsDir()
 }
 
-// newestMatchingSession returns the most-recently-modified *.jsonl in dir whose
-// first recorded cwd equals cwd, or "" when none match. Matching on cwd guards
-// against picking another project's session that happens to share the dir.
-func newestMatchingSession(dir, cwd string) string {
+// newestSession returns the most-recently-modified *.jsonl in dir accepted by
+// match, or "" when none match.
+func newestSession(dir string, match func(path string) bool) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
@@ -129,7 +141,7 @@ func newestMatchingSession(dir, cwd string) string {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		if cwd != "" && firstLineCwd(path) != cwd {
+		if !match(path) {
 			continue
 		}
 		cands = append(cands, cand{path: path, modUnix: info.ModTime().UnixNano()})
@@ -139,6 +151,49 @@ func newestMatchingSession(dir, cwd string) string {
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].modUnix > cands[j].modUnix })
 	return cands[0].path
+}
+
+// lastAITitle returns the transcript's most recent ai-title entry, or "" when
+// none is found near the end of the file. Claude Code re-emits ai-title as the
+// conversation progresses, so probing the tail is enough — the whole file is
+// never read.
+func lastAITitle(path string) string {
+	const tailProbeBytes = 256 * 1024
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	off := max(fi.Size()-tailProbeBytes, 0)
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(f, tailProbeBytes))
+	if err != nil {
+		return ""
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	if off > 0 && len(lines) > 0 {
+		lines = lines[1:] // the seek may have landed mid-line; drop the fragment
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 || !bytes.Contains(line, []byte(`"ai-title"`)) {
+			continue
+		}
+		var probe struct {
+			Type    string `json:"type"`
+			AITitle string `json:"aiTitle"`
+		}
+		if json.Unmarshal(line, &probe) == nil && probe.Type == "ai-title" && probe.AITitle != "" {
+			return probe.AITitle
+		}
+	}
+	return ""
 }
 
 // firstLineCwd returns the transcript's first recorded `cwd`, or "" if none is

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestEncodeProjectDir(t *testing.T) {
@@ -47,7 +48,7 @@ func TestLocateClaude(t *testing.T) {
 	write("00000000-0000-0000-0000-000000000000.jsonl", cwd)
 
 	// 1. Direct session-id hit.
-	got, err := Locate("claude", cwd, sess)
+	got, err := Locate("claude", cwd, sess, "")
 	if err != nil {
 		t.Fatalf("Locate direct: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestLocateClaude(t *testing.T) {
 	}
 
 	// 2. Unknown session id -> newest-matching-cwd fallback (a real file, not error).
-	got, err = Locate("claude", cwd, "nonexistent-session")
+	got, err = Locate("claude", cwd, "nonexistent-session", "")
 	if err != nil {
 		t.Fatalf("Locate fallback: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestLocateClaude(t *testing.T) {
 	}
 
 	// 3. A cwd with no project dir at all -> ErrNoTranscript.
-	if _, err := Locate("claude", "/Users/dev/projects/nope", ""); err == nil {
+	if _, err := Locate("claude", "/Users/dev/projects/nope", "", ""); err == nil {
 		t.Error("Locate for missing project dir: want error, got nil")
 	}
 }
@@ -92,7 +93,7 @@ func TestLocateClaudeMetadataPreamble(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Locate("claude", cwd, "")
+	got, err := Locate("claude", cwd, "", "")
 	if err != nil {
 		t.Fatalf("Locate with metadata preamble: %v", err)
 	}
@@ -101,9 +102,57 @@ func TestLocateClaudeMetadataPreamble(t *testing.T) {
 	}
 }
 
+// TestLocateClaudeTitleDisambiguation covers two agents sharing one project dir
+// with no session ids: the pane's terminal title must pin it to the transcript
+// whose latest ai-title matches, beating the newest-mtime fallback.
+func TestLocateClaudeTitleDisambiguation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/Users/dev/projects/demo"
+	dir := filepath.Join(home, ".claude", "projects", EncodeProjectDir(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, title string, mod time.Time) string {
+		p := filepath.Join(dir, name)
+		content := `{"type":"user","cwd":"` + cwd + `","message":{"role":"user","content":"hi"}}
+{"type":"ai-title","aiTitle":"` + title + `","sessionId":"` + name + `"}
+`
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	now := time.Now()
+	older := write("aaaaaaaa-0000-0000-0000-000000000000.jsonl", "Fix login bug", now.Add(-time.Hour))
+	newer := write("bbbbbbbb-0000-0000-0000-000000000000.jsonl", "Refactor tests", now)
+
+	// Title match wins over mtime: the older transcript is this pane's.
+	got, err := Locate("claude", cwd, "", "Fix login bug")
+	if err != nil {
+		t.Fatalf("Locate by title: %v", err)
+	}
+	if got != older {
+		t.Errorf("title match = %q, want %q", got, older)
+	}
+
+	// Unknown title -> newest-cwd fallback still applies.
+	got, err = Locate("claude", cwd, "", "No Such Title")
+	if err != nil {
+		t.Fatalf("Locate fallback: %v", err)
+	}
+	if got != newer {
+		t.Errorf("fallback = %q, want newest %q", got, newer)
+	}
+}
+
 func TestLocateUnsupportedKind(t *testing.T) {
 	for _, k := range []string{"codex", "opencode", "some-future-agent"} {
-		if _, err := Locate(k, "/tmp/x", "sid"); err == nil {
+		if _, err := Locate(k, "/tmp/x", "sid", ""); err == nil {
 			t.Errorf("Locate(%q) err = nil, want ErrUnsupportedKind", k)
 		}
 	}
