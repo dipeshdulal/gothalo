@@ -27,6 +27,65 @@ class NewPaneResult {
   final String workspaceId;
 }
 
+/// One changed file from `GET /diff` — a unified diff for this file alone,
+/// plus enough metadata to render a file-list row without parsing the diff.
+class DiffFile {
+  const DiffFile({
+    required this.path,
+    required this.status,
+    required this.additions,
+    required this.deletions,
+    required this.diff,
+    this.oldPath,
+  });
+
+  final String path;
+
+  /// Set only for a rename/copy — the path it moved from.
+  final String? oldPath;
+
+  /// `"modified"` | `"added"` | `"deleted"` | `"renamed"` | `"untracked"`.
+  final String status;
+  final int additions;
+  final int deletions;
+
+  /// A unified diff for this file alone. For an untracked file this is a
+  /// synthetic "every line added" diff (see CONTRACT-diff.md) — the app
+  /// renders every entry the same way regardless of status.
+  final String diff;
+
+  factory DiffFile.fromJson(Map<String, dynamic> j) => DiffFile(
+        path: (j['path'] as String?) ?? '',
+        oldPath: j['old_path'] as String?,
+        status: (j['status'] as String?) ?? 'modified',
+        additions: (j['additions'] as num?)?.toInt() ?? 0,
+        deletions: (j['deletions'] as num?)?.toInt() ?? 0,
+        diff: (j['diff'] as String?) ?? '',
+      );
+}
+
+/// The full `GET /diff` payload — an agent pane's working-tree changes.
+class DiffResult {
+  const DiffResult({required this.branch, required this.files});
+
+  /// Best-effort; "" on a detached HEAD or if git couldn't resolve one.
+  final String branch;
+  final List<DiffFile> files;
+
+  factory DiffResult.fromJson(Map<String, dynamic> j) {
+    final files = j['files'];
+    return DiffResult(
+      branch: (j['branch'] as String?) ?? '',
+      files: files is List
+          ? files
+              .whereType<Map>()
+              .map((f) => DiffFile.fromJson(Map<String, dynamic>.from(f)))
+              .toList()
+          : const [],
+    );
+  }
+}
+
 /// One selectable choice on a blocked agent's prompt (from `/agent-state`).
 class BlockedOption {
   const BlockedOption({
@@ -340,6 +399,23 @@ class BridgeClient {
       final body = res.data;
       if (body == null) throw BridgeException('Empty agent-state response');
       return AgentState.fromJson(body);
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /diff?pane=<id>` → an agent pane's working-tree changes (branch +
+  /// one unified diff per changed file). Agent panes only — a non-agent pane
+  /// throws (404). See CONTRACT-diff.md.
+  Future<DiffResult> getDiff(String pane) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/diff',
+        queryParameters: {'pane': pane},
+      );
+      final body = res.data;
+      if (body == null) throw BridgeException('Empty diff response');
+      return DiffResult.fromJson(body);
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
