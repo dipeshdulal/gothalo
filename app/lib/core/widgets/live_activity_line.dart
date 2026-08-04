@@ -62,13 +62,12 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
     final client = widget.client ?? ref.read(bridgeClientProvider);
     if (client == null) return;
     try {
-      // recent: false — this line answers "what is it doing RIGHT NOW", which
-      // lives on the current screen, not in history. Asking for history would
-      // make the bridge read the pane's scrollback, which Herdr can only capture
-      // by physically scrolling the pane — visible as a jump to whoever is
-      // watching it on the desktop, and once per tile per poll across a whole
-      // list of working agents.
-      final state = await client.getAgentState(widget.paneId, recent: false);
+      // This line answers "what is it doing RIGHT NOW", which lives on the
+      // pane's current screen — the card's default source. It deliberately does
+      // not ask for scrollback history (see BridgeClient.getAgentState): that
+      // would scroll the pane on the operator's desktop, once per tile per poll
+      // across a whole list of working agents.
+      final state = await client.getAgentState(widget.paneId);
       if (!mounted) return;
       final detail = state.detail.trim();
       final firstLine =
