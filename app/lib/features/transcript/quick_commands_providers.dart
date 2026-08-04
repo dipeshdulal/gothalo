@@ -34,13 +34,11 @@ class QuickCommand {
       );
 }
 
-/// The starter set shown before the user has customized anything — common
-/// nudges for a coding agent, plus one raw-key example (interrupt) so it's
-/// obvious the row isn't limited to typed text.
+/// The starter set shown before the user has customized anything. Kept to
+/// just the one thing that's actually hard to do otherwise — Esc has no
+/// on-screen key on a phone keyboard — rather than guessing at generically
+/// useful prompts; those are exactly what "+ Add" is for.
 const _defaultQuickCommands = [
-  QuickCommand(label: 'Continue', text: 'continue'),
-  QuickCommand(label: 'Run tests', text: 'run the tests'),
-  QuickCommand(label: 'Explain error', text: 'explain the last error'),
   QuickCommand(label: 'Interrupt', key: 'esc'),
 ];
 

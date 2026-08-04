@@ -664,11 +664,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Real approval → an actionable card; just-waiting → a soft cue;
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
-            // The permission-mode switcher and raw-terminal jump live down here
-            // with the composer, not the app bar — they're actions about *how
-            // you're about to talk to the agent*, so grouping them with the input
-            // reads better than a cluttered header.
-            _ComposerToolbar(
+            // Everything about *how* you're talking to the agent (mode,
+            // quick commands, raw terminal) lives down here with the
+            // composer as ONE scrollable chip row, not the app bar — a
+            // cluttered header, and a fragmented "chip pinned left / icon
+            // pinned right / second row below" layout, both read worse than
+            // one consistent strip.
+            _ComposerActionsRow(
               modeLabel: _agentState?.permissionMode != null
                   ? _modeLabel(_agentState!.permissionMode!)
                   : null,
@@ -676,9 +678,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               onOpenTerminal: () => context.push(
                 '/terminal/${Uri.encodeComponent(widget.pane)}',
               ),
-            ),
-            _QuickCommandsRow(
-              onTap: _handleQuickCommand,
+              onQuickCommand: _handleQuickCommand,
               enabled: _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
@@ -1208,48 +1208,81 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
   }
 }
 
-/// A horizontally scrollable row of reusable prompts/keystrokes ("Continue",
-/// "Run tests", an Esc interrupt, …) right above the composer — the
-/// Termius/Blink "snippets" table stake gothalo lacked (see
-/// docs/RESEARCH-feature-ideas.md, #7). A trailing "+" chip adds a custom one;
-/// long-press an existing chip to remove it. Hidden entirely while the list
-/// is empty (or still loading/errored) rather than showing an empty strip.
-class _QuickCommandsRow extends ConsumerWidget {
-  const _QuickCommandsRow({required this.onTap, required this.enabled});
+/// A single horizontally scrollable chip row above the composer for
+/// everything that's an action about *how* you're talking to the agent
+/// rather than the chat itself: the Claude permission-mode switcher, quick-
+/// command snippets (see docs/RESEARCH-feature-ideas.md, #7), a jump to the
+/// raw terminal, and "+" to add a custom quick command. One row, one layout
+/// rule (left-to-right, scrollable, every item chip-styled) — deliberately
+/// not split into a "chip pinned left / icon pinned right" strip plus a
+/// second scrollable strip below it, which read as two different, unrelated
+/// layouts for what's conceptually one toolbar.
+class _ComposerActionsRow extends ConsumerWidget {
+  const _ComposerActionsRow({
+    required this.modeLabel,
+    required this.onCycleMode,
+    required this.onOpenTerminal,
+    required this.onQuickCommand,
+    required this.enabled,
+  });
 
-  final void Function(QuickCommand) onTap;
+  final String? modeLabel;
+  final VoidCallback onCycleMode;
+  final VoidCallback onOpenTerminal;
+  final void Function(QuickCommand) onQuickCommand;
   final bool enabled;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final commands = ref.watch(quickCommandsProvider).asData?.value;
-    if (commands == null) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
+    final commands = ref.watch(quickCommandsProvider).asData?.value ?? const [];
 
     return Container(
-      color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       child: SizedBox(
         height: 34,
         child: ListView(
           scrollDirection: Axis.horizontal,
           children: [
+            if (modeLabel != null) ...[
+              ActionChip(
+                avatar: const Icon(Icons.tune, size: 15),
+                label: Text(modeLabel!),
+                labelStyle: const TextStyle(fontSize: 12),
+                visualDensity: VisualDensity.compact,
+                onPressed: onCycleMode,
+              ),
+              const SizedBox(width: 6),
+            ],
             for (var i = 0; i < commands.length; i++) ...[
-              if (i > 0) const SizedBox(width: 6),
               _QuickCommandChip(
                 command: commands[i],
                 enabled: enabled,
-                onTap: () => onTap(commands[i]),
+                onTap: () => onQuickCommand(commands[i]),
                 onRemove: () =>
                     ref.read(quickCommandsProvider.notifier).removeAt(i),
               ),
+              const SizedBox(width: 6),
             ],
-            const SizedBox(width: 6),
             ActionChip(
               avatar: const Icon(Icons.add, size: 16),
               label: const Text('Add'),
               visualDensity: VisualDensity.compact,
               onPressed: () => _showAddQuickCommand(context, ref),
+            ),
+            const SizedBox(width: 6),
+            ActionChip(
+              avatar: const Icon(Icons.terminal, size: 15),
+              label: const Text('Terminal'),
+              labelStyle: const TextStyle(fontSize: 12),
+              visualDensity: VisualDensity.compact,
+              onPressed: onOpenTerminal,
             ),
           ],
         ),
@@ -1401,57 +1434,6 @@ class _AddQuickCommandDialogState extends State<_AddQuickCommandDialog> {
           child: const Text('Add'),
         ),
       ],
-    );
-  }
-}
-
-/// A slim strip above the composer for actions about *how* you're talking to
-/// the agent, rather than the chat itself: the Claude permission-mode switcher
-/// (tap to cycle Shift+Tab) and a jump to the raw terminal. Kept out of the
-/// app bar so the header stays just identity + navigation; these live with
-/// the input they modify. [modeLabel] is null (and the chip hidden) for a
-/// kind/pane with no permission mode to show.
-class _ComposerToolbar extends StatelessWidget {
-  const _ComposerToolbar({
-    required this.modeLabel,
-    required this.onCycleMode,
-    required this.onOpenTerminal,
-  });
-
-  final String? modeLabel;
-  final VoidCallback onCycleMode;
-  final VoidCallback onOpenTerminal;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh,
-        border: Border(
-          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(10, 6, 6, 0),
-      child: Row(
-        children: [
-          if (modeLabel != null)
-            ActionChip(
-              avatar: const Icon(Icons.tune, size: 15),
-              label: Text(modeLabel!),
-              labelStyle: const TextStyle(fontSize: 12),
-              visualDensity: VisualDensity.compact,
-              onPressed: onCycleMode,
-            ),
-          const Spacer(),
-          IconButton(
-            tooltip: 'Raw terminal',
-            onPressed: onOpenTerminal,
-            icon: const Icon(Icons.terminal, size: 20),
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
     );
   }
 }
