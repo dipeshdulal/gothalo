@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/charmbracelet/log"
 
@@ -20,6 +21,8 @@ import (
 // registry (claude today; codex/opencode next), and returns the common contract.
 // Parsing never 500s — an unrecognised agent kind degrades to Parsed=false with a
 // best-effort raw text dump. Same auth as every other endpoint.
+//
+// `?recent=0` suppresses the scrollback read — see wantRecent.
 func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -54,7 +57,18 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	if derr != nil {
 		log.Warn("agent-state: detection read failed", "pane", pane, "err", derr)
 	}
-	recent, rerr := c.ReadText(bare, "recent-unwrapped", 80)
+	// `recent-unwrapped` comes from SCROLLBACK, and Herdr can only capture an
+	// alternate-screen pane's history by physically scrolling it — which the
+	// operator sees as the pane jumping on their desktop, once per poll. A caller
+	// that already has the agent's real transcript (the chat screen streams it
+	// from /agent-transcript) gains nothing from it, so it can opt out with
+	// ?recent=0 and leave the pane alone. Blocked prompts come from `detection`,
+	// which reads the current screen and never scrolls, so opting out costs only
+	// some richness in Detail/Transcript.
+	recent, rerr := "", error(nil)
+	if wantRecent(r) {
+		recent, rerr = c.ReadText(bare, "recent-unwrapped", 80)
+	}
 	if errors.Is(rerr, herdr.ErrAgentNotIdle) {
 		// Expected on a working pane: the unwrapped transcript comes from
 		// scrollback, which Herdr will only capture while the agent is idle. Take
@@ -91,4 +105,18 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, state)
+}
+
+// wantRecent reports whether this request wants the scrollback-backed
+// `recent-unwrapped` read. It defaults to true — the historical behaviour, and
+// what a card with no other source of history needs. `?recent=0` opts out, which
+// callers that already stream the real transcript should do: the read scrolls
+// the operator's pane, and on a repeatedly-polling screen that shows up as the
+// pane visibly jumping.
+func wantRecent(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("recent"))) {
+	case "0", "false", "no":
+		return false
+	}
+	return true
 }

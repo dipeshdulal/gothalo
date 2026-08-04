@@ -172,7 +172,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     final client = _client;
     if (client == null || _disposed) return;
     try {
-      final s = await client.getAgentState(widget.pane);
+      // recent: false — this screen streams the agent's real transcript over
+      // /agent-transcript, so the card's scrollback-derived history is redundant
+      // here, and fetching it scrolls the pane on the operator's desktop once
+      // per poll. All this screen needs from the card is the live status and the
+      // blocked prompt, both of which come from the current screen.
+      final s = await client.getAgentState(widget.pane, recent: false);
       if (mounted) setState(() => _agentState = s);
     } catch (_) {
       // Non-agent / gone / transient — no bar.

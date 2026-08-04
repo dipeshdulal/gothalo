@@ -26,7 +26,8 @@ func newOpencodeDB(t *testing.T) (dir, sessionID string) {
 		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
 		                      time_created INTEGER NOT NULL, data TEXT NOT NULL);
 		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
-		                   time_created INTEGER NOT NULL, data TEXT NOT NULL);`); err != nil {
+		                   time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+		                   data TEXT NOT NULL);`); err != nil {
 		t.Fatal(err)
 	}
 	sessionID = "ses_test0000000000000000001"
@@ -53,7 +54,16 @@ func addMessage(t *testing.T, dir, sessionID, msgID, role string, created int64)
 	}
 }
 
+// addPart inserts a part that is already settled (updated well in the past), so
+// the live tail will pick it up on the next Poll.
 func addPart(t *testing.T, dir, sessionID, partID, msgID, data string) {
+	t.Helper()
+	addPartAt(t, dir, sessionID, partID, msgID, data, 1)
+}
+
+// addPartAt inserts a part with an explicit time_updated, for exercising the
+// settle window.
+func addPartAt(t *testing.T, dir, sessionID, partID, msgID, data string, updated int64) {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "opencode.db"))
 	if err != nil {
@@ -61,8 +71,24 @@ func addPart(t *testing.T, dir, sessionID, partID, msgID, data string) {
 	}
 	defer db.Close()
 	if _, err := db.Exec(
-		`INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?,?,?,?,?)`,
-		partID, msgID, sessionID, 1, data); err != nil {
+		`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+		 VALUES (?,?,?,?,?,?)`,
+		partID, msgID, sessionID, 1, updated, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// updatePart rewrites a part's content and bumps time_updated, the way opencode
+// does while streaming a response into it.
+func updatePart(t *testing.T, dir, partID, data string, updated int64) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(
+		`UPDATE part SET data = ?, time_updated = ? WHERE id = ?`, data, updated, partID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -182,13 +208,79 @@ func TestOpencodeSourceEndToEnd(t *testing.T) {
 	if ents, err := src.Poll(); err != nil || len(ents) != 0 {
 		t.Fatalf("Poll before insert = %d, err %v", len(ents), err)
 	}
-	addPart(t, dir, sess, "prt_011", "msg_002", `{"type":"text","text":"more"}`)
+	// time_updated must advance past the watermark Backlog armed, and be old
+	// enough to count as settled — which any small value is against a real clock.
+	addPartAt(t, dir, sess, "prt_011", "msg_002", `{"type":"text","text":"more"}`, 2)
 	ents, err := src.Poll()
 	if err != nil || len(ents) != 1 {
 		t.Fatalf("Poll after insert = %d, err %v; want 1", len(ents), err)
 	}
 	if ents2, _ := src.Poll(); len(ents2) != 0 {
 		t.Errorf("second Poll = %d, want 0 (no replay)", len(ents2))
+	}
+}
+
+// TestOpencodeStreamingPart is the regression for "new messages never appeared".
+//
+// opencode INSERTs a part and then UPDATEs it as content streams in, so a part
+// read the instant it appears is empty and normalizes to nothing. A cursor that
+// only moved past new ids saw each part exactly once — while empty — and never
+// again, so the message was lost permanently. The tail must instead wait for the
+// part to stop changing, then stream it once, with its final content.
+func TestOpencodeStreamingPart(t *testing.T) {
+	dir, sess := newOpencodeDB(t)
+	addMessage(t, dir, sess, "msg_001", "assistant", 1700000000000)
+
+	// Pin the clock so the settle window is deterministic.
+	now := int64(1_000_000)
+	orig := nowMillis
+	nowMillis = func() int64 { return now }
+	t.Cleanup(func() { nowMillis = orig })
+
+	src, err := Open("opencode", "", sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if _, err := src.Backlog(50); err != nil {
+		t.Fatal(err)
+	}
+
+	// opencode creates the part empty, then streams into it.
+	addPartAt(t, dir, sess, "prt_001", "msg_001", `{"type":"text","text":""}`, now)
+	if ents, err := src.Poll(); err != nil || len(ents) != 0 {
+		t.Fatalf("Poll while still streaming = %d entries, err %v; want 0", len(ents), err)
+	}
+	now += 300
+	updatePart(t, dir, "prt_001", `{"type":"text","text":"partial"}`, now)
+	if ents, err := src.Poll(); err != nil || len(ents) != 0 {
+		t.Fatalf("Poll mid-stream = %d entries, err %v; want 0 (not settled)", len(ents), err)
+	}
+	now += 300
+	updatePart(t, dir, "prt_001", `{"type":"text","text":"the complete answer"}`, now)
+
+	// Once it has been quiet for the settle window it streams, with FINAL content.
+	now += opencodeSettle.Milliseconds() + 1
+	ents, err := src.Poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 {
+		t.Fatalf("Poll after settle = %d entries, want 1", len(ents))
+	}
+	if ents[0].Text != "the complete answer" {
+		t.Errorf("Text = %q, want the final streamed content", ents[0].Text)
+	}
+
+	// And never a second time, even after a late touch.
+	if again, _ := src.Poll(); len(again) != 0 {
+		t.Errorf("repeat Poll = %d entries, want 0", len(again))
+	}
+	now += 100
+	updatePart(t, dir, "prt_001", `{"type":"text","text":"the complete answer"}`, now)
+	now += opencodeSettle.Milliseconds() + 1
+	if again, _ := src.Poll(); len(again) != 0 {
+		t.Errorf("Poll after a late update = %d entries, want 0 (already delivered)", len(again))
 	}
 }
 

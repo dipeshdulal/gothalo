@@ -390,11 +390,18 @@ class BridgeClient {
   /// `GET /agent-state?pane=<id>` → the parsed agent card (status, headline, and
   /// when blocked the question + options). Agent panes only; a non-agent or
   /// unsupported pane throws.
-  Future<AgentState> getAgentState(String pane) async {
+  ///
+  /// Pass [recent] `false` when the caller already has the agent's real
+  /// transcript. The bridge builds the card's history by reading the pane's
+  /// SCROLLBACK, which Herdr can only capture by physically scrolling the pane —
+  /// visible to whoever is watching that pane on the desktop as it jumps, once
+  /// per poll. The blocked question and options come from the current screen and
+  /// are unaffected, so opting out costs only some richness in detail.
+  Future<AgentState> getAgentState(String pane, {bool recent = true}) async {
     try {
       final res = await _dio.get<Map<String, dynamic>>(
         '/agent-state',
-        queryParameters: {'pane': pane},
+        queryParameters: {'pane': pane, if (!recent) 'recent': '0'},
       );
       final body = res.data;
       if (body == null) throw BridgeException('Empty agent-state response');
