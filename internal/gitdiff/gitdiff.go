@@ -38,6 +38,26 @@ type Result struct {
 	Files  []FileChange `json:"files"`
 }
 
+// Branch returns the current git branch for cwd, best-effort: "" when cwd
+// isn't a git work tree, git is missing/errors, or HEAD is detached. It's a
+// single `git rev-parse` — light enough to call per-agent while assembling a
+// snapshot, unlike [Collect] which also diffs the working tree.
+func Branch(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	out, err := gitString(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(out)
+	if branch == "HEAD" {
+		// Detached HEAD — no branch to show.
+		return ""
+	}
+	return branch
+}
+
 // Collect runs git against cwd and returns its pending changes. A cwd that
 // isn't a git repository (or has no changes) returns a zero-value Result, not
 // an error — only a git invocation that fails outright (e.g. git missing)

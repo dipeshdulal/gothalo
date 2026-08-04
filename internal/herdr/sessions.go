@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+
+	"github.com/dipeshdulal/gothalo/internal/gitdiff"
 )
 
 // defaultSessionName is how Herdr names its default session.
@@ -327,8 +329,73 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 	}
 	merged["sessions"] = sessions
 
+	enrichAgentBranches(merged["agents"])
+
 	return json.Marshal(map[string]any{
 		"id":     "gothalo:snapshot",
 		"result": map[string]any{"snapshot": merged},
 	})
+}
+
+// enrichAgentBranches fills a `branch` field on every agent in the snapshot,
+// computed by running git in the pane's live cwd — the authoritative branch,
+// not one inferred from the path (which only works for herdr worktrees) or
+// read from the transcript (which records the session's start cwd). It prefers
+// `foreground_cwd` (the pane's current dir, tracking a shell `cd`) over the
+// launch `cwd`. The field is always set — "" when the pane isn't in a git work
+// tree (e.g. a home dir) or on a detached HEAD — so the app can render "no
+// branch" rather than a misleading folder name.
+//
+// git runs once per *unique* cwd (agents in the same repo dir share one call)
+// and those calls run concurrently, so enrichment costs one git round-trip of
+// wall time regardless of agent count.
+func enrichAgentBranches(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok || len(agents) == 0 {
+		return
+	}
+
+	cwdFor := func(obj map[string]any) string {
+		if fg, ok := obj["foreground_cwd"].(string); ok && fg != "" {
+			return fg
+		}
+		if cwd, ok := obj["cwd"].(string); ok {
+			return cwd
+		}
+		return ""
+	}
+
+	// Unique cwds → resolve each branch once, concurrently.
+	seen := map[string]struct{}{}
+	var uniq []string
+	for _, it := range agents {
+		if obj, ok := it.(map[string]any); ok {
+			cwd := cwdFor(obj)
+			if _, dup := seen[cwd]; !dup {
+				seen[cwd] = struct{}{}
+				uniq = append(uniq, cwd)
+			}
+		}
+	}
+
+	branches := make(map[string]string, len(uniq))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, cwd := range uniq {
+		wg.Add(1)
+		go func(cwd string) {
+			defer wg.Done()
+			b := gitdiff.Branch(cwd)
+			mu.Lock()
+			branches[cwd] = b
+			mu.Unlock()
+		}(cwd)
+	}
+	wg.Wait()
+
+	for _, it := range agents {
+		if obj, ok := it.(map[string]any); ok {
+			obj["branch"] = branches[cwdFor(obj)]
+		}
+	}
 }
