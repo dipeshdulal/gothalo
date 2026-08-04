@@ -48,11 +48,21 @@ class StarredAgents extends AsyncNotifier<Set<String>> {
 
 /// One server's live agents (or an error reaching it).
 class ServerAgents {
-  ServerAgents({required this.server, this.agents = const [], this.error});
+  ServerAgents({
+    required this.server,
+    this.agents = const [],
+    this.error,
+    this.client,
+  });
 
   final ServerSummary server;
   final List<Agent> agents;
   final Object? error;
+
+  /// The client used to fetch [agents] — kept so a row can poll that same
+  /// server directly (e.g. [LiveActivityLine]) without re-resolving its
+  /// bearer. Null only alongside [error].
+  final BridgeClient? client;
 
   bool get ok => error == null;
 }
@@ -75,7 +85,7 @@ final allServersAgentsProvider = FutureProvider<List<ServerAgents>>((ref) async 
           Connection(id: s.id, name: s.name, baseUrl: s.baseUrl, bearer: bearer),
         );
         final snap = await client.getSnapshot();
-        return ServerAgents(server: s, agents: snap.agents);
+        return ServerAgents(server: s, agents: snap.agents, client: client);
       } catch (e) {
         return ServerAgents(server: s, error: e);
       }
@@ -92,12 +102,17 @@ class PriorityHit {
     required this.agent,
     required this.starred,
     required this.reachable,
+    this.client,
   });
 
   final ServerSummary server;
   final Agent agent;
   final bool starred;
   final bool reachable;
+
+  /// The client that fetched [agent] — lets a row poll this same server
+  /// directly (e.g. [LiveActivityLine]) without re-resolving its bearer.
+  final BridgeClient? client;
 
   /// Blocked = actively waiting on you. (Done is surfaced too, but it isn't
   /// "needs you".)
@@ -123,6 +138,7 @@ final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
           agent: agent,
           starred: starred,
           reachable: sa.ok,
+          client: sa.client,
         ));
       }
     }

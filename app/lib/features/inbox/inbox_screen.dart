@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/live_activity_line.dart';
 import '../alerts/alerts_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -328,6 +329,11 @@ class _AgentTile extends ConsumerWidget {
                       color: dim,
                     ),
                   ],
+                  // "What's it doing right now" — only for a working agent;
+                  // an idle/blocked/done one has nothing that changes to poll
+                  // for.
+                  if (agent.agentStatus == AgentStatus.working)
+                    LiveActivityLine(paneId: agent.paneId),
                 ],
               ),
             ),
