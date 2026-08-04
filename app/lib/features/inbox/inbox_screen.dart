@@ -70,24 +70,38 @@ class InboxScreen extends ConsumerWidget {
                   child: const Icon(Icons.notifications_none),
                 ),
               ),
-              IconButton(
-                tooltip: 'Overview',
-                onPressed: () => context.push('/overview'),
-                icon: const Icon(Icons.dashboard_outlined),
+              // Overview + per-server settings are occasional visits, not
+              // every-open actions — folded into one overflow menu so the bar
+              // isn't five same-weight icons deep. Refresh dropped outright
+              // (not just relocated): both tabs already pull-to-refresh, so
+              // the button was a redundant affordance, not a demoted one.
+              PopupMenuButton<_FlockMenuAction>(
+                tooltip: 'More',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (action) => switch (action) {
+                  _FlockMenuAction.overview => context.push('/overview'),
+                  _FlockMenuAction.editServer => connection == null
+                      ? null
+                      : context.push('/servers/${connection.id}/edit'),
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: _FlockMenuAction.overview,
+                    child: _MenuRow(
+                      icon: Icons.dashboard_outlined,
+                      label: 'Overview',
+                    ),
+                  ),
+                  if (connection != null)
+                    const PopupMenuItem(
+                      value: _FlockMenuAction.editServer,
+                      child: _MenuRow(
+                        icon: Icons.settings_outlined,
+                        label: 'Edit this server',
+                      ),
+                    ),
+                ],
               ),
-              IconButton(
-                tooltip: 'Refresh',
-                onPressed: () =>
-                    ref.read(snapshotControllerProvider.notifier).refresh(),
-                icon: const Icon(Icons.refresh),
-              ),
-              if (connection != null)
-                IconButton(
-                  tooltip: 'Edit this server',
-                  onPressed: () =>
-                      context.push('/servers/${connection.id}/edit'),
-                  icon: const Icon(Icons.settings_outlined),
-                ),
             ],
             bottom: TabBar(
               tabs: [
@@ -128,6 +142,29 @@ class InboxScreen extends ConsumerWidget {
   String _countSuffix(AsyncValue<Snapshot> snap, int Function(Snapshot) count) {
     final s = snap.asData?.value;
     return s == null ? '' : '  ${count(s)}';
+  }
+}
+
+/// The choices in the Flock header's overflow menu.
+enum _FlockMenuAction { overview, editServer }
+
+/// One row in the overflow menu: icon + label, laid out tighter than the
+/// default [ListTile] so a two-item menu doesn't feel oversized.
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    );
   }
 }
 
@@ -222,18 +259,30 @@ class _SpaceTile extends StatelessWidget {
               ? space.label
               : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
     final blocked = space.agentStatus == AgentStatus.blocked;
+    // The old list was over-bold (w600); dropping to w500 is the real fix for
+    // that. A worktree name additionally gets teal + mono (it's a branch ref);
+    // a plain project name stays in the UI font — all-mono everywhere read as
+    // too much.
+    final nameColor = isWt ? scheme.primary : scheme.onSurface;
     return ListTile(
-      onTap: () =>
-          context.push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
-      contentPadding: EdgeInsets.only(left: isWt ? 32 : 16, right: 16),
-      leading: CircleAvatar(
-        backgroundColor: space.focused
-            ? scheme.primary
-            : scheme.surfaceContainerHighest,
-        child: Icon(
-          isWt ? Icons.call_split : Icons.workspaces_outline,
+      onTap: () => context
+          .push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
+      contentPadding: EdgeInsets.only(left: isWt ? 28 : 16, right: 12),
+      leading: Container(
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
           color: space.focused
-              ? scheme.onPrimary
+              ? scheme.primary.withValues(alpha: 0.18)
+              : scheme.surfaceContainerHighest,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          isWt ? Icons.call_split : Icons.folder_outlined,
+          size: 18,
+          color: space.focused
+              ? scheme.primary
               : (isWt ? scheme.primary : scheme.onSurfaceVariant),
         ),
       ),
@@ -245,12 +294,24 @@ class _SpaceTile extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontWeight: FontWeight.w600,
+                // Mono only for a worktree name — it's literally a branch, and
+                // the teal-mono pairing reads as "this is a git ref". A project
+                // name is just a directory label, so it stays in the UI font;
+                // all-mono everywhere felt off. Weight is the lighter fix for
+                // the "too bold" complaint, not the font.
                 fontFamily: isWt ? AppTheme.monoFamily : null,
-                color: isWt ? scheme.primary : null,
+                fontWeight: FontWeight.w500,
+                fontSize: isWt ? 14.5 : 15,
+                color: nameColor,
               ),
             ),
           ),
+          // The focused space on the host — the "you are here" marker, matching
+          // the overview's own focused indicator.
+          if (space.focused) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.my_location, size: 13, color: scheme.primary),
+          ],
           if (blocked) ...[
             const SizedBox(width: 8),
             Container(
@@ -264,13 +325,19 @@ class _SpaceTile extends StatelessWidget {
           ],
         ],
       ),
-      subtitle: Text(
-        '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'}  ·  ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: scheme.onSurfaceVariant),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'} · ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12.5,
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
     );
   }
 }

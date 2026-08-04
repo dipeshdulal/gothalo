@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/alerts/alerts_screen.dart';
+import '../features/diff/diff_screen.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/overview/overview_screen.dart';
 import '../features/pairing/pairing_screen.dart';
@@ -68,6 +69,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/transcript/:pane',
         builder: (context, state) => TranscriptScreen(
+          pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
+        ),
+      ),
+      GoRoute(
+        path: '/diff/:pane',
+        builder: (context, state) => DiffScreen(
           pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
         ),
       ),

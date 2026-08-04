@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../alerts/alerts_providers.dart';
 import '../inbox/widgets/agent_avatar.dart';
@@ -83,7 +84,15 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
       asset: Backgrounds.servers,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('gothalo'),
+          titleSpacing: 12,
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              AppMark(radius: 14),
+              SizedBox(width: 10),
+              Text('gothalo'),
+            ],
+          ),
           actions: [
             IconButton(
               tooltip: 'Alerts',
