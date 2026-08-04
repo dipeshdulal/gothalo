@@ -1,6 +1,10 @@
 package transcript
 
-import "sync"
+import (
+	"errors"
+	"io/fs"
+	"sync"
+)
 
 // fileSource is the Source for agents that append a line-oriented transcript
 // file (Claude Code's JSONL today). It is a thin adapter over the functions in
@@ -29,8 +33,19 @@ func newFileSource(path string, r Reader) *fileSource {
 
 // Backlog reads the newest page and arms the tailer at the offset where that
 // page ended, so Poll resumes exactly where the backlog stopped.
+//
+// A file that does not exist yet is an empty transcript, not an error: an agent
+// that has not spoken has nothing to show, and Claude only creates the .jsonl on
+// its first message. The tailer is armed at offset 0 so entries stream in as
+// soon as the file appears.
 func (s *fileSource) Backlog(cap int) (Backlog, error) {
 	b, offset, err := ReadBacklog(s.path, s.reader, cap)
+	if errors.Is(err, fs.ErrNotExist) {
+		s.mu.Lock()
+		s.tailer = NewTailer(s.path, s.reader, 0)
+		s.mu.Unlock()
+		return Backlog{}, nil
+	}
 	if err != nil {
 		return Backlog{}, err
 	}
@@ -41,12 +56,20 @@ func (s *fileSource) Backlog(cap int) (Backlog, error) {
 }
 
 func (s *fileSource) Older(beforeSeq, limit int) (OlderPage, error) {
-	return ReadOlder(s.path, s.reader, beforeSeq, limit)
+	page, err := ReadOlder(s.path, s.reader, beforeSeq, limit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return OlderPage{}, nil // nothing written yet, so nothing older
+	}
+	return page, err
 }
 
 // Poll returns entries appended since the last call. It is a no-op before
 // Backlog has armed the tailer, so a caller that polls early gets nothing rather
 // than a nil dereference.
+//
+// A missing file yields nothing rather than an error — the transcript may not
+// have been created yet (a pane whose agent has not spoken), and the next poll
+// will pick it up the moment it is.
 func (s *fileSource) Poll() ([]Entry, error) {
 	s.mu.Lock()
 	t := s.tailer
@@ -56,7 +79,11 @@ func (s *fileSource) Poll() ([]Entry, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return t.Poll()
+	ents, err := t.Poll()
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return ents, err
 }
 
 // Close is a no-op: the tailer holds no handle between polls (it opens, reads,
