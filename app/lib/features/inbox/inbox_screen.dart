@@ -209,17 +209,30 @@ class _SpaceTile extends StatelessWidget {
             ? space.label
             : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
     final blocked = space.agentStatus == AgentStatus.blocked;
+    // Both project and worktree names are git identifiers, so both render in
+    // mono — a project in heavy sans next to a teal-mono branch below it read
+    // as two unrelated type systems. One family, a medium (not bold) weight,
+    // and colour (teal) carries the worktree distinction instead.
+    final nameColor = isWt ? scheme.primary : scheme.onSurface;
     return ListTile(
       onTap: () => context
           .push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
-      contentPadding: EdgeInsets.only(left: isWt ? 32 : 16, right: 16),
-      leading: CircleAvatar(
-        backgroundColor:
-            space.focused ? scheme.primary : scheme.surfaceContainerHighest,
-        child: Icon(
-          isWt ? Icons.call_split : Icons.workspaces_outline,
+      contentPadding: EdgeInsets.only(left: isWt ? 28 : 16, right: 12),
+      leading: Container(
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
           color: space.focused
-              ? scheme.onPrimary
+              ? scheme.primary.withValues(alpha: 0.18)
+              : scheme.surfaceContainerHighest,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          isWt ? Icons.call_split : Icons.folder_outlined,
+          size: 18,
+          color: space.focused
+              ? scheme.primary
               : (isWt ? scheme.primary : scheme.onSurfaceVariant),
         ),
       ),
@@ -231,12 +244,19 @@ class _SpaceTile extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontFamily: isWt ? AppTheme.monoFamily : null,
-                color: isWt ? scheme.primary : null,
+                fontFamily: AppTheme.monoFamily,
+                fontWeight: FontWeight.w500,
+                fontSize: 14.5,
+                color: nameColor,
               ),
             ),
           ),
+          // The focused space on the host — the "you are here" marker, matching
+          // the overview's own focused indicator.
+          if (space.focused) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.my_location, size: 13, color: scheme.primary),
+          ],
           if (blocked) ...[
             const SizedBox(width: 8),
             Container(
@@ -248,13 +268,20 @@ class _SpaceTile extends StatelessWidget {
           ],
         ],
       ),
-      subtitle: Text(
-        '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'}  ·  ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: scheme.onSurfaceVariant),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'} · ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: AppTheme.monoFamily,
+            fontSize: 11.5,
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
     );
   }
 }
