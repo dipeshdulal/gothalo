@@ -1,0 +1,43 @@
+  ┃
+  ┃  umm..
+  ┃
+
+     + Thought: 441ms
+
+     Need something? Happy to revert the README change, fire another blocked question, or pick up a
+     task.
+
+     ▣  Build · Big Pickle · 6.0s
+
+  ┃
+  ┃  i see
+  ┃
+
+     Ready when you are.
+
+     ▣  Build · Big Pickle · 2.4s
+
+  ┃
+  ┃  can you ask me more thing ?
+  ┃
+
+     + Thought: 682ms
+
+     → Asked 3 questions
+
+  ┃
+  ┃  askagain
+  ┃
+
+     + Thought: 725ms
+
+     → Asked 1 question
+
+     ▣  Build · Big Pickle
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Big Pickle OpenCode Zen
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /Users/alex/projects/gothalo                                     41.6K (21%)  ctrl+p commands
