@@ -153,20 +153,24 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, err := transcript.Locate(agent.Kind, agent.Cwd, agent.SessionID())
+	// Open the pane's transcript through the per-kind Source registry. What backs
+	// it — a JSONL file for Claude, a SQLite database for Hermes — is the source's
+	// business; everything below here is storage-agnostic.
+	src, err := transcript.Open(agent.Kind, agent.Cwd, agent.SessionID())
 	if err != nil {
-		log.Warn("agent-transcript: locate failed", "pane", pane, "kind", agent.Kind, "err", err)
+		log.Warn("agent-transcript: open failed", "pane", pane, "kind", agent.Kind, "err", err)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	reader := transcript.ReaderFor(agent.Kind)
+	defer src.Close()
 
-	// Read the newest page before the upgrade so a read failure is a clean 500 and
-	// we know the resume offset for the tail. Entries come back with their absolute
-	// seq stamped, so the page's oldest seq is a real cursor into the file.
-	backlog, offset, err := transcript.ReadBacklog(path, reader, transcriptNewestPage)
+	// Read the newest page before the upgrade so a read failure is a clean 500.
+	// This also arms the source's read cursor, so the live tail below resumes
+	// exactly where this page ended. Entries carry their absolute seq, so the
+	// page's oldest seq is a real cursor into the session.
+	backlog, err := src.Backlog(transcriptNewestPage)
 	if err != nil {
-		log.Error("agent-transcript: backlog read failed", "pane", pane, "path", path, "err", err)
+		log.Error("agent-transcript: backlog read failed", "pane", pane, "kind", agent.Kind, "err", err)
 		http.Error(w, "read transcript failed", http.StatusInternalServerError)
 		return
 	}
@@ -217,7 +221,7 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 				cancel()
 				return
 			}
-			if err := serveOlder(ctx, reader, path, pane, ctrl, send); err != nil {
+			if err := serveOlder(ctx, src, pane, ctrl, send); err != nil {
 				cancel()
 				return
 			}
@@ -251,11 +255,10 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Live tail: poll for appended lines, stream each new normalized entry. seq
-	// continues from Total (the newest file entry's absolute seq), so appended
-	// entries keep the same absolute cursor as the backlog page.
+	// Live tail: poll the source, stream each new normalized entry. seq continues
+	// from Total (the newest entry's absolute seq), so new entries keep the same
+	// absolute cursor as the backlog page.
 	seq := backlog.Total
-	tailer := transcript.NewTailer(path, reader, offset)
 	ticker := time.NewTicker(transcriptPollInterval)
 	defer ticker.Stop()
 	for {
@@ -265,9 +268,10 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 			conn.Close(websocket.StatusNormalClosure, "")
 			return
 		case <-ticker.C:
-			ents, err := tailer.Poll()
+			ents, err := src.Poll()
 			if err != nil {
-				// Transient (file briefly unavailable during a rotation); keep polling.
+				// Transient (store briefly unavailable, e.g. a file rotation or a
+				// locked database); keep polling.
 				log.Warn("agent-transcript: poll failed", "pane", pane, "err", err)
 				continue
 			}
@@ -288,7 +292,7 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 // new oldest_loaded_seq + has_older. A read failure is non-fatal to the socket —
 // it is logged and reported as an empty page — so a bad cursor never tears down
 // the live tail. It returns a non-nil error only when a socket write fails.
-func serveOlder(ctx context.Context, reader transcript.Reader, path, pane string, req loadOlderFrame, send func(any) error) error {
+func serveOlder(ctx context.Context, src transcript.Source, pane string, req loadOlderFrame, send func(any) error) error {
 	limit := req.Limit
 	if limit <= 0 {
 		limit = transcriptDefaultOlderLimit
@@ -297,7 +301,7 @@ func serveOlder(ctx context.Context, reader transcript.Reader, path, pane string
 		limit = transcriptMaxOlderLimit
 	}
 
-	page, err := transcript.ReadOlder(path, reader, req.BeforeSeq, limit)
+	page, err := src.Older(req.BeforeSeq, limit)
 	if err != nil {
 		log.Warn("agent-transcript: load_older read failed", "pane", pane, "before_seq", req.BeforeSeq, "err", err)
 		page = transcript.OlderPage{} // empty page; keep the socket alive

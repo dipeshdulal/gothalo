@@ -270,14 +270,23 @@ The live tail keeps running while a page loads. Any other/garbage inbound frame
 closes the socket cleanly (`1000`). Every page is read with a bounded ring buffer —
 the whole file is never held in memory.
 
-The transcript file is resolved from the pane's `cwd` + `agent_session.value`
-(Claude's session id == the filename). The newest-matching-`cwd` fallback applies
-**only when `agent_session.value` is absent** — a known session id with no file on
-disk yet returns `404` rather than falling back, since the fallback would return a
+The transcript is resolved per agent kind from the pane's `cwd` +
+`agent_session.value`. **Where** it lives varies by agent and the wire protocol
+does not change with it: `claude` appends a JSONL file
+(`~/.claude/projects/<encoded-cwd>/<session>.jsonl`, session id == the filename);
+`hermes` keeps every session in a SQLite database (`~/.hermes/state.db`, resolved
+by session id alone — Hermes sessions are not keyed by cwd).
+
+For the file-backed kinds the newest-matching-`cwd` fallback applies **only when
+`agent_session.value` is absent** — a known session id with no file on disk yet
+returns `404` rather than falling back, since the fallback would return a
 neighbouring pane's transcript. Install the Herdr agent integration (see the
-README) so that id is always present. This is READ-ONLY — prompts/approvals still go through `POST /send` / `POST /approve`.
-`claude` is implemented; `codex`/`opencode` are recognized but not yet wired (→
-`404`). Errors before the upgrade: `400` missing `pane` · `401` bad token · `404`
+README) so that id is always present; for `hermes` it is required, as there is no
+cwd fallback to resolve with.
+
+This is READ-ONLY — prompts/approvals still go through `POST /send` /
+`POST /approve`. `claude` and `hermes` are implemented; `codex`/`opencode` are
+recognized but not yet wired (→ `404`). Errors before the upgrade: `400` missing `pane` · `401` bad token · `404`
 no agent / no transcript / unsupported kind · `500` read failed · `502` herdr
 failed. Close code `1000` on normal teardown.
 

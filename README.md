@@ -101,7 +101,7 @@ optional** — without it the transcript view will not work:
 
 ```bash
 herdr integration status          # what's installed, and whether it's current
-herdr integration install claude  # likewise: codex, opencode, copilot, …
+herdr integration install claude  # likewise: hermes, codex, opencode, copilot, …
 ```
 
 The integration installs a `SessionStart` hook (for Claude, into
@@ -128,6 +128,15 @@ Two things to know about the hook:
 
 Verify with `herdr api snapshot` — every agent should carry a non-null
 `agent_session`.
+
+Where each agent keeps its transcript, and therefore what the session id is
+looked up against:
+
+| Agent | Store | Resolved by |
+|---|---|---|
+| `claude` | `~/.claude/projects/<encoded-cwd>/<session>.jsonl` | cwd + session id |
+| `hermes` | `~/.hermes/state.db` (SQLite; `$HERMES_DIR` overrides) | session id |
+| `codex`, `opencode` | recognized, not yet wired | — |
 
 ## Quick start (on the Herdr host)
 
