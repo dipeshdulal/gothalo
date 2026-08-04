@@ -2,7 +2,9 @@ package transcript
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -30,10 +32,36 @@ func (claudeOpener) Kind() string { return "claude" }
 
 func (claudeOpener) Open(cwd, sessionID string) (Source, error) {
 	path, err := Locate("claude", cwd, sessionID)
-	if err != nil {
+	if err == nil {
+		return newFileSource(path, claudeReader{}), nil
+	}
+	if !errors.Is(err, ErrNoTranscript) || sessionID == "" {
 		return nil, err
 	}
-	return newFileSource(path, claudeReader{}), nil
+
+	// A session we can NAME but whose file is not on disk yet is a real, healthy
+	// agent that simply has not spoken — Claude writes the .jsonl lazily, on the
+	// first message. Failing here would 404 a brand-new pane, which the app can
+	// only render as an error.
+	//
+	// Point a source at where the file WILL be instead. It reports an empty
+	// transcript now and streams entries the moment Claude creates it, so opening
+	// a fresh agent and typing to it just works, with no reconnect.
+	//
+	// The other ErrNoTranscript cases — unknown session id, unsupported layout —
+	// still fail, because for those there is no path worth waiting on.
+	return newFileSource(pendingClaudePath(cwd, sessionID), claudeReader{}), nil
+}
+
+// pendingClaudePath is where Claude will write this session once it has
+// something to record: the same encoded-cwd + session-id location Locate looks
+// for first.
+func pendingClaudePath(cwd, sessionID string) string {
+	root, err := claudeProjectsRoot()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, EncodeProjectDir(cwd), sessionID+".jsonl")
 }
 
 // claudeIgnored are entry types that are pure session metadata / plumbing — not

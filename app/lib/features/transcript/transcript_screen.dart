@@ -52,6 +52,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   StreamSubscription<dynamic>? _sub;
   Timer? _reconnectTimer;
   int _attempts = 0;
+
+  /// How many failed handshakes to sit behind the spinner before saying so.
+  /// Reconnect backoff is 1s, 2s, 3s…, so this surfaces after ~15s of silence
+  /// rather than spinning indefinitely on an error we cannot classify.
+  static const _maxSilentAttempts = 5;
   bool _disposed = false;
   _Conn _conn = _Conn.connecting;
 
@@ -760,13 +765,33 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       );
     }
     if (!_backlogComplete) {
+      // Give up spinning after a few failed handshakes. Dart's WebSocket client
+      // reports a rejected upgrade as a bare "not upgraded to websocket" with no
+      // HTTP status, so _permanentFailureMessage cannot recognise a 404 and the
+      // reconnect loop would otherwise sit behind this spinner forever.
+      if (_attempts >= _maxSilentAttempts) {
+        return _CenteredNotice(
+          icon: Icons.chat_bubble_outline,
+          title: 'Transcript unavailable',
+          message:
+              'Could not open a transcript for this pane after several tries. '
+              'This agent kind may not support a chat view yet — open the raw '
+              'terminal instead.',
+          onTerminal: () =>
+              context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
     if (_ordered.isEmpty) {
+      // A connected socket with an empty backlog means the agent is live but
+      // hasn't spoken — a brand-new pane, before its first message. The tail is
+      // running, so anything typed below appears here without reconnecting.
       return const _CenteredNotice(
         icon: Icons.chat_bubble_outline,
-        title: 'Nothing here yet',
-        message: 'No conversation entries for this pane.',
+        title: 'No messages yet',
+        message: 'This agent hasn\'t said anything so far. '
+            'Send it a prompt below to get started.',
       );
     }
 
