@@ -76,8 +76,46 @@ func (p opencodeParser) Parse(in Input) State {
 // opencodeGutter is the heavy bar opencode fronts a block with.
 const opencodeGutter = "┃"
 
-// opencodeFooterRE matches the key-hint footer inside a prompt block.
-var opencodeFooterRE = regexp.MustCompile(`(?i)(↑↓|enter submit|esc dismiss|esc cancel)`)
+// opencodeFooterRE matches opencode's key-hint lines: the footer inside a prompt
+// block, and the status bar's shortcut hint.
+var opencodeFooterRE = regexp.MustCompile(`(?i)(↑↓|enter submit|esc dismiss|esc cancel|ctrl\+[a-z] )`)
+
+// opencodeStatusBarRE matches the bar opencode pins to the bottom of the screen —
+// cwd, context usage, and a shortcut hint. It sits BELOW the input box, outside
+// any gutter, so without this it reads as the newest line of prose.
+var opencodeStatusBarRE = regexp.MustCompile(`\d+(\.\d+)?[KM]?\s*\(\d+%\)`)
+
+// isOpencodeDrawing reports whether a line is nothing but box-drawing or block
+// characters — a border or rule with no content.
+//
+// opencode closes its input box with a rule built from BLOCK elements
+// ("╹▀▀▀▀…"), not the box-drawing pieces its gutter uses. That is neither a
+// gutter line nor a marker line, so it used to survive as prose and became the
+// card's headline. Matching the whole Unicode box-drawing (U+2500–U+257F) and
+// block-element (U+2580–U+259F) ranges covers both, and any future rule glyph.
+func isOpencodeDrawing(s string) bool {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return false
+	}
+	for _, r := range t {
+		switch {
+		case r >= 0x2500 && r <= 0x259F: // box drawing + block elements
+		case r == ' ' || r == '\t':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isOpencodeChrome reports whether a line is frame furniture rather than content:
+// a rule, the status bar, a key hint, or the shared chrome markers.
+func isOpencodeChrome(s string) bool {
+	t := strings.TrimSpace(s)
+	return t == "" || isOpencodeDrawing(t) || opencodeStatusBarRE.MatchString(t) ||
+		opencodeFooterRE.MatchString(t) || isChromeLine(t)
+}
 
 // opencodeMarkerRE matches the glyphs opencode fronts tool/status lines with, so
 // they are not mistaken for assistant prose.
@@ -187,7 +225,7 @@ func lastOpencodeMessage(text string) string {
 	}
 	for _, l := range splitLines(text) {
 		t := strings.TrimSpace(l)
-		if t == "" || isOpencodeGutter(l) || opencodeMarkerRE.MatchString(l) || isChromeLine(t) {
+		if isOpencodeGutter(l) || opencodeMarkerRE.MatchString(l) || isOpencodeChrome(t) {
 			flush()
 			continue
 		}
@@ -204,14 +242,14 @@ func opencodeReadable(text string) []string {
 	for _, l := range splitLines(text) {
 		if content, ok := stripOpencodeGutter(l); ok {
 			t := strings.TrimSpace(content)
-			if t == "" || opencodeFooterRE.MatchString(t) {
+			if isOpencodeChrome(t) {
 				continue
 			}
 			out = append(out, t)
 			continue
 		}
 		t := strings.TrimSpace(l)
-		if t == "" || isChromeLine(t) {
+		if isOpencodeChrome(t) {
 			continue
 		}
 		out = append(out, t)

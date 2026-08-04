@@ -144,6 +144,65 @@ func TestOpencodeMessagePath(t *testing.T) {
 	assertNoGutter(t, "Detail", st.Detail)
 }
 
+// TestOpencodeIdleCardIsNotChrome is the regression for a card whose headline
+// was a row of block characters.
+//
+// An idle opencode screen ends with its input box, a rule drawn from BLOCK
+// elements ("╹▀▀▀…" — not the box-drawing pieces the gutter uses), and a status
+// bar carrying the cwd and context usage. Neither the rule nor the status bar is
+// a gutter line or a marker line, so both survived as "the last prose block" and
+// became the card's headline and detail.
+func TestOpencodeIdleCardIsNotChrome(t *testing.T) {
+	st := Build(Input{
+		PaneID:    "wN:p1B",
+		Kind:      "opencode",
+		Status:    "idle",
+		Title:     "opencode",
+		Detection: readOpencodeFixture(t, "opencode_idle_detection.txt"),
+		Recent:    readOpencodeFixture(t, "opencode_idle_recent.txt"),
+	})
+
+	for _, bad := range []string{"▀", "╹", "█", "▄"} {
+		if strings.Contains(st.Headline, bad) {
+			t.Errorf("Headline contains block drawing %q: %q", bad, st.Headline)
+		}
+		if strings.Contains(st.Detail, bad) {
+			t.Errorf("Detail contains block drawing %q: %q", bad, st.Detail)
+		}
+	}
+	// The status bar (cwd + "41.6K (21%)" + "ctrl+p commands") is furniture too.
+	for _, s := range []string{"ctrl+p", "(21%)"} {
+		if strings.Contains(st.Headline, s) || strings.Contains(st.Detail, s) {
+			t.Errorf("card leaked the status bar (%q): headline=%q detail=%q", s, st.Headline, st.Detail)
+		}
+	}
+	for _, l := range st.Transcript {
+		if isOpencodeDrawing(l) {
+			t.Errorf("transcript line is pure drawing: %q", l)
+		}
+	}
+}
+
+// TestIsOpencodeDrawing pins the classifier: rules are furniture, text is not,
+// even when the text sits inside a bordered line.
+func TestIsOpencodeDrawing(t *testing.T) {
+	drawing := []string{"╹▀▀▀▀▀▀▀", "─────────", "  ┃  ", "━━━━", "████"}
+	content := []string{"┃  Build · Big Pickle", "hello", "1. An option", "┃", ""}
+	for _, s := range drawing {
+		if !isOpencodeDrawing(s) {
+			t.Errorf("isOpencodeDrawing(%q) = false, want true", s)
+		}
+	}
+	for _, s := range content {
+		if s == "" || strings.TrimSpace(s) == "┃" {
+			continue // empty and a bare gutter are handled elsewhere
+		}
+		if isOpencodeDrawing(s) {
+			t.Errorf("isOpencodeDrawing(%q) = true, want false", s)
+		}
+	}
+}
+
 // TestOpencodeRegistered guards the wiring.
 func TestOpencodeRegistered(t *testing.T) {
 	if _, ok := parserFor("opencode").(opencodeParser); !ok {
