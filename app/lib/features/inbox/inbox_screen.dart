@@ -209,10 +209,10 @@ class _SpaceTile extends StatelessWidget {
             ? space.label
             : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
     final blocked = space.agentStatus == AgentStatus.blocked;
-    // Both project and worktree names are git identifiers, so both render in
-    // mono — a project in heavy sans next to a teal-mono branch below it read
-    // as two unrelated type systems. One family, a medium (not bold) weight,
-    // and colour (teal) carries the worktree distinction instead.
+    // The old list was over-bold (w600); dropping to w500 is the real fix for
+    // that. A worktree name additionally gets teal + mono (it's a branch ref);
+    // a plain project name stays in the UI font — all-mono everywhere read as
+    // too much.
     final nameColor = isWt ? scheme.primary : scheme.onSurface;
     return ListTile(
       onTap: () => context
@@ -244,9 +244,14 @@ class _SpaceTile extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontFamily: AppTheme.monoFamily,
+                // Mono only for a worktree name — it's literally a branch, and
+                // the teal-mono pairing reads as "this is a git ref". A project
+                // name is just a directory label, so it stays in the UI font;
+                // all-mono everywhere felt off. Weight is the lighter fix for
+                // the "too bold" complaint, not the font.
+                fontFamily: isWt ? AppTheme.monoFamily : null,
                 fontWeight: FontWeight.w500,
-                fontSize: 14.5,
+                fontSize: isWt ? 14.5 : 15,
                 color: nameColor,
               ),
             ),
@@ -275,8 +280,7 @@ class _SpaceTile extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            fontFamily: AppTheme.monoFamily,
-            fontSize: 11.5,
+            fontSize: 12.5,
             color: scheme.onSurfaceVariant,
           ),
         ),
