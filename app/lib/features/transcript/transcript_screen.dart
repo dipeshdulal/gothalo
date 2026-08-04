@@ -1276,7 +1276,7 @@ class _ComposerActionsRow extends ConsumerWidget {
               const SizedBox(width: 6),
             ],
             for (var i = 0; i < commands.length; i++) ...[
-              _QuickCommandChip(
+              QuickCommandChip(
                 command: commands[i],
                 enabled: enabled,
                 onTap: () => onQuickCommand(commands[i]),
@@ -1289,7 +1289,7 @@ class _ComposerActionsRow extends ConsumerWidget {
               avatar: const Icon(Icons.add, size: 16),
               label: const Text('Add'),
               visualDensity: VisualDensity.compact,
-              onPressed: () => _showAddQuickCommand(context, ref),
+              onPressed: () => showAddQuickCommand(context, ref),
             ),
             const SizedBox(width: 6),
             ActionChip(
@@ -1305,153 +1305,6 @@ class _ComposerActionsRow extends ConsumerWidget {
     );
   }
 
-  Future<void> _showAddQuickCommand(BuildContext context, WidgetRef ref) {
-    return showDialog<void>(
-      context: context,
-      builder: (context) => _AddQuickCommandDialog(
-        onAdd: (cmd) => ref.read(quickCommandsProvider.notifier).add(cmd),
-      ),
-    );
-  }
-}
-
-class _QuickCommandChip extends StatelessWidget {
-  const _QuickCommandChip({
-    required this.command,
-    required this.enabled,
-    required this.onTap,
-    required this.onRemove,
-  });
-
-  final QuickCommand command;
-  final bool enabled;
-  final VoidCallback onTap;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onLongPress: () => _confirmRemove(context),
-      child: ActionChip(
-        avatar: command.key != null
-            ? const Icon(Icons.keyboard_command_key, size: 15)
-            : null,
-        label: Text(command.label),
-        visualDensity: VisualDensity.compact,
-        onPressed: enabled ? onTap : null,
-      ),
-    );
-  }
-
-  Future<void> _confirmRemove(BuildContext context) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Remove quick command?'),
-        content: Text('"${command.label}" will be removed.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) onRemove();
-  }
-}
-
-/// A small form for a custom quick command: a label, and either typed text
-/// (submitted like a composer message) or a raw key name (for something like
-/// "esc" — advanced, so it's a secondary field, not the default).
-class _AddQuickCommandDialog extends StatefulWidget {
-  const _AddQuickCommandDialog({required this.onAdd});
-  final void Function(QuickCommand) onAdd;
-
-  @override
-  State<_AddQuickCommandDialog> createState() => _AddQuickCommandDialogState();
-}
-
-class _AddQuickCommandDialogState extends State<_AddQuickCommandDialog> {
-  final _label = TextEditingController();
-  final _text = TextEditingController();
-  final _key = TextEditingController();
-
-  @override
-  void dispose() {
-    _label.dispose();
-    _text.dispose();
-    _key.dispose();
-    super.dispose();
-  }
-
-  bool get _valid =>
-      _label.text.trim().isNotEmpty &&
-      (_text.text.trim().isNotEmpty) != (_key.text.trim().isNotEmpty);
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Add quick command'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _label,
-            decoration: const InputDecoration(labelText: 'Label'),
-            onChanged: (_) => setState(() {}),
-          ),
-          TextField(
-            controller: _text,
-            decoration: const InputDecoration(
-              labelText: 'Text to send',
-              helperText: 'What gets typed and submitted',
-            ),
-            onChanged: (_) => setState(() {}),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6),
-            child: Text('— or —', style: TextStyle(fontSize: 11)),
-          ),
-          TextField(
-            controller: _key,
-            decoration: const InputDecoration(
-              labelText: 'Raw key (advanced)',
-              helperText: 'e.g. "esc" — for a keystroke, not text',
-            ),
-            onChanged: (_) => setState(() {}),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _valid
-              ? () {
-                  final text = _text.text.trim();
-                  final key = _key.text.trim();
-                  widget.onAdd(
-                    QuickCommand(
-                      label: _label.text.trim(),
-                      text: text.isNotEmpty ? text : null,
-                      key: key.isNotEmpty ? key : null,
-                    ),
-                  );
-                  Navigator.pop(context);
-                }
-              : null,
-          child: const Text('Add'),
-        ),
-      ],
-    );
-  }
 }
 
 /// The bottom input bar — type a prompt (or an option number for a blocked
