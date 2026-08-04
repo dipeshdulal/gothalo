@@ -64,14 +64,20 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   int _pendingCols = 0;
   int _pendingRows = 0;
 
+  /// Whether the soft keyboard is currently covering part of the view. Updated
+  /// from MediaQuery in build; read by _sendResize, which must not forward a
+  /// keyboard-driven viewport change to the remote pane.
+  bool _keyboardOpen = false;
+
   @override
   void initState() {
     super.initState();
     // Keystrokes typed into the TerminalView flow here → out to the bridge as
     // binary. No local echo: the PTY stream is the single source of truth.
     terminal.onOutput = _send;
-    // Viewport changes (first layout, rotation, keyboard show/hide) flow here →
-    // out as a resize control frame so the remote PTY matches the phone's width.
+    // Real viewport changes (first layout, rotation) flow here → out as a
+    // resize control frame so the remote PTY matches the phone. A keyboard
+    // opening is deliberately NOT one of those — see _sendResize.
     terminal.onResize = _sendResize;
   }
 
@@ -268,6 +274,25 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   /// viewport. Fired on first layout and on every later resize.
   void _sendResize(int cols, int rows, int pixelWidth, int pixelHeight) {
     if (cols <= 0 || rows <= 0) return;
+    // NEVER resize the remote because the soft keyboard opened.
+    //
+    // The keyboard covers roughly half the screen, and forwarding that as a
+    // resize shrinks the OPERATOR'S pane — measured live: 42 rows down to 23.
+    // Two things break. Their desktop layout reflows every time a phone opens
+    // the keyboard. And a full-screen TUI re-lays-out for the smaller size:
+    // opencode's ctrl+p palette needs ~22 rows above its input box, so at 23
+    // rows total it has nowhere to draw and renders nothing — which looks
+    // exactly like the keystroke being ignored. (It was not: the byte was
+    // confirmed on the wire, and the palette appeared the moment the keyboard
+    // closed and the pane grew back.)
+    //
+    // The keyboard is something covering our VIEW, not a change to the remote's
+    // geometry. The terminal already shows a scrollable window onto a larger
+    // screen, which is the right model — same as any phone ssh client. Real
+    // geometry changes (first layout, rotation) still propagate, because those
+    // happen with the keyboard down.
+    if (_keyboardOpen) return;
+
     // Debounce: onResize fires repeatedly during the keyboard's slide animation;
     // hold off until it settles, then send one resize (in _flushResize).
     _pendingCols = cols;
@@ -294,6 +319,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   Widget build(BuildContext context) {
     // Connect once a bridge client is available (activeConnection resolves
     // async), and reconnect if it changes underneath us.
+    // The keyboard's inset, not the terminal's size, is what tells us the
+    // keyboard is up — the view has already been shrunk by the time onResize
+    // fires, so the size alone can't distinguish "keyboard" from "rotation".
+    _keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     final client = ref.watch(bridgeClientProvider);
     if (client != null && !identical(client, _client)) {
       _client = client;
