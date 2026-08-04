@@ -620,6 +620,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             onPressed: () => showJumpSheet(context, currentPane: widget.pane),
             icon: const Icon(Icons.bolt),
           ),
+          IconButton(
+            tooltip: 'Changes',
+            onPressed: () => context.push(
+              '/diff/${Uri.encodeComponent(widget.pane)}',
+            ),
+            icon: const Icon(Icons.difference_outlined),
+          ),
         ],
       ),
       body: SafeArea(
