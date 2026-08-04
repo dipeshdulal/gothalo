@@ -451,12 +451,18 @@ class _AgentTile extends ConsumerWidget {
             // when it aligns with the agent's text, not the artwork.
             // No extra top gap here — LiveActivityLine carries its own small
             // top padding, so a SizedBox on top of that just double-spaced it.
-            if (agent.agentStatus == AgentStatus.working)
-              Padding(
-                // avatar diameter (radius 20 * 2) + the 12px gap to the title.
-                padding: const EdgeInsets.only(left: 52),
-                child: LiveActivityLine(paneId: agent.paneId),
+            // Shown for every status, not just working: a settled agent's last
+            // message is the most useful thing a tile can carry, and the line
+            // is now served from the agent's transcript rather than a costly
+            // scrollback read. LiveActivityLine polls only while working.
+            Padding(
+              // avatar diameter (radius 20 * 2) + the 12px gap to the title.
+              padding: const EdgeInsets.only(left: 52),
+              child: LiveActivityLine(
+                paneId: agent.paneId,
+                status: agent.agentStatus,
               ),
+            ),
           ],
         ),
       ),
