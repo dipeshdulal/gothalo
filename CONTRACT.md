@@ -71,6 +71,12 @@ sequence number it is consistent with:
 - `snapshot` is **byte-for-byte the same JSON** as `GET /snapshot`. Seed your
   store from `snapshot.result.snapshot` (agents, panes, tabs, workspaces, focus).
 - `seq` is the **baseline**: every delta that follows has `seq` strictly greater.
+- **`branch`** — gothalo adds this string to every agent in `agents[]` (herdr
+  does not provide it). It's the **authoritative** git branch, computed by
+  running git in the pane's live `foreground_cwd` (falling back to `cwd`), not
+  inferred from the path or read from the transcript. It is **`""`** when the
+  pane isn't inside a git work tree (e.g. a home dir) or on a detached HEAD, so
+  a client can render "no branch" rather than a misleading folder name.
 
 **Frames 2…N: deltas.** Each is one unified **envelope** (§3). Apply them to the
 store in order.

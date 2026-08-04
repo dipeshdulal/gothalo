@@ -161,6 +161,52 @@ func TestCollect_NotAGitRepo(t *testing.T) {
 	}
 }
 
+func TestBranch(t *testing.T) {
+	t.Run("reports the checked-out branch", func(t *testing.T) {
+		dir := t.TempDir()
+		runGit(t, dir, "init", "-q", "-b", "feat/x")
+		runGit(t, dir, "config", "user.email", "test@example.com")
+		runGit(t, dir, "config", "user.name", "Test")
+		mustWrite(t, dir, "f.txt", "hi\n")
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "-q", "-m", "base")
+
+		if got := Branch(dir); got != "feat/x" {
+			t.Errorf("Branch = %q, want feat/x", got)
+		}
+	})
+
+	t.Run("empty for a non-repo dir", func(t *testing.T) {
+		if got := Branch(t.TempDir()); got != "" {
+			t.Errorf("Branch = %q, want empty for a non-repo", got)
+		}
+	})
+
+	t.Run("empty for an empty cwd", func(t *testing.T) {
+		if got := Branch(""); got != "" {
+			t.Errorf("Branch(%q) = %q, want empty", "", got)
+		}
+	})
+
+	t.Run("empty on a detached HEAD", func(t *testing.T) {
+		dir := t.TempDir()
+		runGit(t, dir, "init", "-q", "-b", "main")
+		runGit(t, dir, "config", "user.email", "test@example.com")
+		runGit(t, dir, "config", "user.name", "Test")
+		mustWrite(t, dir, "f.txt", "one\n")
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "-q", "-m", "c1")
+		mustWrite(t, dir, "f.txt", "two\n")
+		runGit(t, dir, "commit", "-qam", "c2")
+		// Detach onto the first commit.
+		runGit(t, dir, "checkout", "-q", "HEAD~1")
+
+		if got := Branch(dir); got != "" {
+			t.Errorf("Branch = %q, want empty on detached HEAD", got)
+		}
+	})
+}
+
 // ---- test helpers ----
 
 func runGit(t *testing.T, dir string, args ...string) {

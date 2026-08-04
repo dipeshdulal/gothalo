@@ -2,6 +2,9 @@ package herdr
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -85,5 +88,54 @@ func TestManagerClientResolution(t *testing.T) {
 
 	if _, err := m.Client("nope"); err == nil || !IsNotFound(err) {
 		t.Errorf("unknown session error should satisfy IsNotFound, got %v", err)
+	}
+}
+
+func TestEnrichAgentBranches(t *testing.T) {
+	// A real repo on branch "feat/x"...
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "feat/x")
+	git("config", "user.email", "t@e.com")
+	git("config", "user.name", "T")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+
+	// ...and a plain non-repo dir.
+	nonRepo := t.TempDir()
+
+	agents := []any{
+		// foreground_cwd (the repo) is preferred over the launch cwd (non-repo).
+		map[string]any{"pane_id": "w1:p1", "cwd": nonRepo, "foreground_cwd": repo},
+		// Same repo cwd → deduped, still resolved.
+		map[string]any{"pane_id": "w1:p2", "cwd": repo},
+		// A non-repo dir → empty branch, never absent.
+		map[string]any{"pane_id": "w2:p1", "cwd": nonRepo},
+	}
+
+	enrichAgentBranches(agents)
+
+	want := map[string]string{"w1:p1": "feat/x", "w1:p2": "feat/x", "w2:p1": ""}
+	for _, it := range agents {
+		obj := it.(map[string]any)
+		id := obj["pane_id"].(string)
+		br, ok := obj["branch"]
+		if !ok {
+			t.Errorf("%s: branch field missing; it must always be set", id)
+			continue
+		}
+		if br != want[id] {
+			t.Errorf("%s: branch = %q, want %q", id, br, want[id])
+		}
 	}
 }
