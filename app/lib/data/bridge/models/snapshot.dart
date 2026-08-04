@@ -45,6 +45,18 @@ sealed class Agent with _$Agent {
     @JsonKey(name: 'workspace_id') @Default('') String workspaceId,
     @JsonKey(name: 'tab_id') @Default('') String tabId,
     @Default('') String cwd,
+
+    /// The pane's **live foreground** working directory (tracks a shell `cd`),
+    /// as reported by herdr. This is the "proper pane" cwd — preferred over the
+    /// launch [cwd] for git context (see [gitContext]). Falls back to [cwd]
+    /// when the bridge doesn't supply it.
+    @JsonKey(name: 'foreground_cwd') @Default('') String foregroundCwd,
+
+    /// The agent's checked-out git **branch**, reported authoritatively by the
+    /// bridge (it asks git). Empty when the bridge doesn't supply it (an older
+    /// bridge, or a cwd that isn't a repo) — the app then falls back to
+    /// inferring the branch from [cwd]. See [branchName].
+    @Default('') String branch,
     @Default(false) bool focused,
     @JsonKey(name: 'agent_session') AgentSession? session,
 
@@ -67,15 +79,35 @@ sealed class Agent with _$Agent {
   /// `…/.herdr/worktrees/<project>/<worktree>`, where `<worktree>` is
   /// effectively the branch; plain checkouts are just their directory name.
   ///
-  /// The bridge does not expose the real branch yet, so this is inferred from
-  /// the path. When the bridge adds a branch field, prefer it over this.
+  /// This is a *path inference* fallback: it can only reveal the branch for a
+  /// Herdr worktree (the branch is in the path). Prefer the authoritative
+  /// [branch] the bridge reports — see [branchName], which layers the two.
+  ///
+  /// Derived from the pane's live [foregroundCwd] when available (the proper
+  /// pane cwd), falling back to the launch [cwd].
   ({String project, String? worktree}) get gitContext =>
-      gitContextForCwd(cwd);
+      gitContextForCwd(foregroundCwd.isNotEmpty ? foregroundCwd : cwd);
 
-  /// The most specific git name to show — the worktree (branch) if this is a
-  /// worktree, otherwise the project directory.
-  String get gitLabel => gitContext.worktree ?? gitContext.project;
+  /// The agent's branch, preferring the bridge's authoritative [branch] and
+  /// falling back to the cwd-inferred worktree name. Null when neither knows it
+  /// — a plain checkout on an older bridge, where the path can't reveal the
+  /// branch. Once the bridge reports [branch], this is correct for plain
+  /// checkouts too, not just worktrees.
+  String? get branchName {
+    final b = branch.trim();
+    if (b.isNotEmpty) return b;
+    return gitContext.worktree;
+  }
 
+  /// True when the agent's branch is known (from the bridge or the cwd path).
+  bool get hasBranch => branchName?.isNotEmpty ?? false;
+
+  /// The most specific git name to show — the branch if known, otherwise the
+  /// project directory.
+  String get gitLabel => branchName ?? gitContext.project;
+
+  /// The cwd sits inside a Herdr-managed git worktree (path-based; independent
+  /// of whether the bridge reports [branch]).
   bool get isWorktree => gitContext.worktree != null;
 
   /// The Herdr session this agent lives in, derived from the bridge's

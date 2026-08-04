@@ -350,7 +350,7 @@ class _AgentTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final isWt = agent.isWorktree;
+    final hasBranch = agent.hasBranch;
     final dim = scheme.onSurfaceVariant;
     final showFolder = agent.gitContext.project.isNotEmpty;
 
@@ -395,11 +395,11 @@ class _AgentTile extends ConsumerWidget {
                           color: dim,
                         ),
                       ],
-                      if (isWt) ...[
+                      if (hasBranch) ...[
                         SizedBox(height: showFolder ? 3 : 6),
                         _GitLine(
                           icon: Icons.call_split,
-                          text: agent.gitContext.worktree ?? '',
+                          text: agent.branchName ?? '',
                           color: scheme.primary,
                           bold: true,
                         ),
@@ -407,7 +407,7 @@ class _AgentTile extends ConsumerWidget {
                       // Which Herdr session hosts this agent; the default session
                       // is implied and not shown.
                       if (!agent.isDefaultSession) ...[
-                        SizedBox(height: (showFolder || isWt) ? 3 : 6),
+                        SizedBox(height: (showFolder || hasBranch) ? 3 : 6),
                         _GitLine(
                           icon: Icons.layers_outlined,
                           text: agent.sessionName,

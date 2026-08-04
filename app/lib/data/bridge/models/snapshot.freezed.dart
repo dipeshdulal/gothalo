@@ -15,7 +15,15 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$Agent {
 
- String get agent;@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus get agentStatus;@JsonKey(name: 'pane_id') String get paneId;@JsonKey(name: 'terminal_title_stripped') String get title;@JsonKey(name: 'workspace_id') String get workspaceId;@JsonKey(name: 'tab_id') String get tabId; String get cwd; bool get focused;@JsonKey(name: 'agent_session') AgentSession? get session;/// Herdr's monotonic sequence for this agent's state. Backs idempotent
+ String get agent;@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus get agentStatus;@JsonKey(name: 'pane_id') String get paneId;@JsonKey(name: 'terminal_title_stripped') String get title;@JsonKey(name: 'workspace_id') String get workspaceId;@JsonKey(name: 'tab_id') String get tabId; String get cwd;/// The pane's **live foreground** working directory (tracks a shell `cd`),
+/// as reported by herdr. This is the "proper pane" cwd — preferred over the
+/// launch [cwd] for git context (see [gitContext]). Falls back to [cwd]
+/// when the bridge doesn't supply it.
+@JsonKey(name: 'foreground_cwd') String get foregroundCwd;/// The agent's checked-out git **branch**, reported authoritatively by the
+/// bridge (it asks git). Empty when the bridge doesn't supply it (an older
+/// bridge, or a cwd that isn't a repo) — the app then falls back to
+/// inferring the branch from [cwd]. See [branchName].
+ String get branch; bool get focused;@JsonKey(name: 'agent_session') AgentSession? get session;/// Herdr's monotonic sequence for this agent's state. Backs idempotent
 /// approvals (D8): an approve tap carries this seq and the bridge no-ops if
 /// the agent is no longer blocked at it.
 @JsonKey(name: 'state_change_seq') int? get stateChangeSeq;
@@ -31,16 +39,16 @@ $AgentCopyWith<Agent> get copyWith => _$AgentCopyWithImpl<Agent>(this as Agent, 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,focused,session,stateChangeSeq);
+int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq);
 
 @override
 String toString() {
-  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq)';
+  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq)';
 }
 
 
@@ -51,7 +59,7 @@ abstract mixin class $AgentCopyWith<$Res>  {
   factory $AgentCopyWith(Agent value, $Res Function(Agent) _then) = _$AgentCopyWithImpl;
 @useResult
 $Res call({
- String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq
+ String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq
 });
 
 
@@ -68,7 +76,7 @@ class _$AgentCopyWithImpl<$Res>
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,}) {
   return _then(_self.copyWith(
 agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
@@ -77,6 +85,8 @@ as String,title: null == title ? _self.title : title // ignore: cast_nullable_to
 as String,workspaceId: null == workspaceId ? _self.workspaceId : workspaceId // ignore: cast_nullable_to_non_nullable
 as String,tabId: null == tabId ? _self.tabId : tabId // ignore: cast_nullable_to_non_nullable
 as String,cwd: null == cwd ? _self.cwd : cwd // ignore: cast_nullable_to_non_nullable
+as String,foregroundCwd: null == foregroundCwd ? _self.foregroundCwd : foregroundCwd // ignore: cast_nullable_to_non_nullable
+as String,branch: null == branch ? _self.branch : branch // ignore: cast_nullable_to_non_nullable
 as String,focused: null == focused ? _self.focused : focused // ignore: cast_nullable_to_non_nullable
 as bool,session: freezed == session ? _self.session : session // ignore: cast_nullable_to_non_nullable
 as AgentSession?,stateChangeSeq: freezed == stateChangeSeq ? _self.stateChangeSeq : stateChangeSeq // ignore: cast_nullable_to_non_nullable
@@ -174,10 +184,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Agent() when $default != null:
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.focused,_that.session,_that.stateChangeSeq);case _:
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq);case _:
   return orElse();
 
 }
@@ -195,10 +205,10 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq)  $default,) {final _that = this;
 switch (_that) {
 case _Agent():
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.focused,_that.session,_that.stateChangeSeq);}
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -212,10 +222,10 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq)?  $default,) {final _that = this;
 switch (_that) {
 case _Agent() when $default != null:
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.focused,_that.session,_that.stateChangeSeq);case _:
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq);case _:
   return null;
 
 }
@@ -227,7 +237,7 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 @JsonSerializable()
 
 class _Agent extends Agent {
-  const _Agent({this.agent = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, @JsonKey(name: 'pane_id') this.paneId = '', @JsonKey(name: 'terminal_title_stripped') this.title = '', @JsonKey(name: 'workspace_id') this.workspaceId = '', @JsonKey(name: 'tab_id') this.tabId = '', this.cwd = '', this.focused = false, @JsonKey(name: 'agent_session') this.session, @JsonKey(name: 'state_change_seq') this.stateChangeSeq}): super._();
+  const _Agent({this.agent = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, @JsonKey(name: 'pane_id') this.paneId = '', @JsonKey(name: 'terminal_title_stripped') this.title = '', @JsonKey(name: 'workspace_id') this.workspaceId = '', @JsonKey(name: 'tab_id') this.tabId = '', this.cwd = '', @JsonKey(name: 'foreground_cwd') this.foregroundCwd = '', this.branch = '', this.focused = false, @JsonKey(name: 'agent_session') this.session, @JsonKey(name: 'state_change_seq') this.stateChangeSeq}): super._();
   factory _Agent.fromJson(Map<String, dynamic> json) => _$AgentFromJson(json);
 
 @override@JsonKey() final  String agent;
@@ -237,6 +247,16 @@ class _Agent extends Agent {
 @override@JsonKey(name: 'workspace_id') final  String workspaceId;
 @override@JsonKey(name: 'tab_id') final  String tabId;
 @override@JsonKey() final  String cwd;
+/// The pane's **live foreground** working directory (tracks a shell `cd`),
+/// as reported by herdr. This is the "proper pane" cwd — preferred over the
+/// launch [cwd] for git context (see [gitContext]). Falls back to [cwd]
+/// when the bridge doesn't supply it.
+@override@JsonKey(name: 'foreground_cwd') final  String foregroundCwd;
+/// The agent's checked-out git **branch**, reported authoritatively by the
+/// bridge (it asks git). Empty when the bridge doesn't supply it (an older
+/// bridge, or a cwd that isn't a repo) — the app then falls back to
+/// inferring the branch from [cwd]. See [branchName].
+@override@JsonKey() final  String branch;
 @override@JsonKey() final  bool focused;
 @override@JsonKey(name: 'agent_session') final  AgentSession? session;
 /// Herdr's monotonic sequence for this agent's state. Backs idempotent
@@ -257,16 +277,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,focused,session,stateChangeSeq);
+int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq);
 
 @override
 String toString() {
-  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq)';
+  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq)';
 }
 
 
@@ -277,7 +297,7 @@ abstract mixin class _$AgentCopyWith<$Res> implements $AgentCopyWith<$Res> {
   factory _$AgentCopyWith(_Agent value, $Res Function(_Agent) _then) = __$AgentCopyWithImpl;
 @override @useResult
 $Res call({
- String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq
+ String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq
 });
 
 
@@ -294,7 +314,7 @@ class __$AgentCopyWithImpl<$Res>
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,}) {
   return _then(_Agent(
 agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
@@ -303,6 +323,8 @@ as String,title: null == title ? _self.title : title // ignore: cast_nullable_to
 as String,workspaceId: null == workspaceId ? _self.workspaceId : workspaceId // ignore: cast_nullable_to_non_nullable
 as String,tabId: null == tabId ? _self.tabId : tabId // ignore: cast_nullable_to_non_nullable
 as String,cwd: null == cwd ? _self.cwd : cwd // ignore: cast_nullable_to_non_nullable
+as String,foregroundCwd: null == foregroundCwd ? _self.foregroundCwd : foregroundCwd // ignore: cast_nullable_to_non_nullable
+as String,branch: null == branch ? _self.branch : branch // ignore: cast_nullable_to_non_nullable
 as String,focused: null == focused ? _self.focused : focused // ignore: cast_nullable_to_non_nullable
 as bool,session: freezed == session ? _self.session : session // ignore: cast_nullable_to_non_nullable
 as AgentSession?,stateChangeSeq: freezed == stateChangeSeq ? _self.stateChangeSeq : stateChangeSeq // ignore: cast_nullable_to_non_nullable
