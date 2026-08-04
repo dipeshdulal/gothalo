@@ -140,11 +140,26 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
 /// its unified diff. **Expanded by default** — reviewing the diff *is* the
 /// point of this screen, so it shouldn't take an extra tap per file just to
 /// see what changed; collapse the ones you've already read instead.
-class _FileSection extends StatelessWidget {
+///
+/// Deliberately NOT [ExpansionTile]: `initiallyExpanded: true` on it triggers
+/// a Flutter framework bug — a `'!semantics.parentDataDirty'` assertion loop
+/// that blanks the whole screen (confirmed live: reproducible on any real
+/// diff, harmless on the empty-tree case because that path never builds an
+/// ExpansionTile at all). A plain header + conditionally-included body sidesteps
+/// ExpansionTile's animated-semantics machinery entirely — no animation, but
+/// the point here is reading a diff, not watching it unfurl.
+class _FileSection extends StatefulWidget {
   const _FileSection({required this.file});
   final DiffFile file;
 
-  (IconData, Color) _statusVisual(ColorScheme scheme) => switch (file.status) {
+  @override
+  State<_FileSection> createState() => _FileSectionState();
+}
+
+class _FileSectionState extends State<_FileSection> {
+  bool _expanded = true;
+
+  (IconData, Color) _statusVisual(ColorScheme scheme) => switch (widget.file.status) {
         'added' => (Icons.add_circle_outline, const Color(0xFF00C853)),
         'deleted' => (Icons.remove_circle_outline, scheme.error),
         'renamed' => (Icons.drive_file_rename_outline, scheme.primary),
@@ -156,54 +171,71 @@ class _FileSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final (icon, color) = _statusVisual(scheme);
+    final file = widget.file;
     final subtitle = file.oldPath != null ? 'from ${file.oldPath}' : null;
 
-    return Theme(
-      // Kill the divider ExpansionTile draws by default — the outer
-      // ListView's own spacing is enough.
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        initiallyExpanded: true,
-        visualDensity: VisualDensity.compact,
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-        childrenPadding: EdgeInsets.zero,
-        leading: Icon(icon, size: 20, color: color),
-        title: Text(
-          file.path,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontFamily: AppTheme.monoFamily,
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        subtitle: subtitle != null
-            ? Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontFamily: AppTheme.monoFamily,
-                  fontSize: 11,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: color),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        file.path,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: AppTheme.monoFamily,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (subtitle != null)
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: AppTheme.monoFamily,
+                            fontSize: 11,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _CountBadge(additions: file.additions, deletions: file.deletions),
+                const SizedBox(width: 4),
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20,
                   color: scheme.onSurfaceVariant,
                 ),
-              )
-            : null,
-        trailing: _CountBadge(additions: file.additions, deletions: file.deletions),
-        children: [
-          if (file.diff.isNotEmpty)
-            _DiffBody(diff: file.diff)
-          else
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Text(
-                'No diff to show.',
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
-              ),
+              ],
             ),
-        ],
-      ),
+          ),
+        ),
+        if (_expanded)
+          file.diff.isNotEmpty
+              ? _DiffBody(diff: file.diff)
+              : Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    'No diff to show.',
+                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+                  ),
+                ),
+      ],
     );
   }
 }
