@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 import '../data/bridge/models/snapshot.dart';
@@ -48,16 +47,17 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       fontFamily: fontFamily,
-      // Android's default (Zoom: scale + cross-fade) looks broken on a slow
-      // back-swipe — both screens sit at partial opacity at once, so the
-      // outgoing one reads as "gone transparent" over the incoming one. A
-      // plain slide has no opacity blending at any drag position, so every
-      // frame of a slow or held gesture still looks correct. Applied on both
-      // platforms so the two behave identically.
+      // A dead-simple screen switch (see [_SimpleSlideTransitionsBuilder]).
+      // The two built-ins both read as "weird" here: Zoom (Android default)
+      // scale-cross-fades so two screens sit half-visible on a slow gesture,
+      // and Cupertino adds an iOS parallax that feels foreign on Android. A
+      // plain slide-over — new screen in from the right, old one static, no
+      // fade, no parallax — is the least surprising thing. Same on both
+      // platforms so they behave identically.
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.android: _SimpleSlideTransitionsBuilder(),
+          TargetPlatform.iOS: _SimpleSlideTransitionsBuilder(),
         },
       ),
       // Transparent so the app-wide backdrop gradient shows through.
@@ -79,6 +79,37 @@ class AppTheme {
       listTileTheme: const ListTileThemeData(
         contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       ),
+    );
+  }
+}
+
+/// The app's page transition: the incoming route slides in from the right and
+/// the outgoing route (revealed on a back) slides back out the same way —
+/// nothing else. No opacity cross-fade (so two screens never sit half-visible
+/// at once — the original "it went transparent" complaint), no parallax on the
+/// page underneath, no scale. Just a clean left/right slide, the least
+/// surprising "switched screens" motion.
+class _SimpleSlideTransitionsBuilder extends PageTransitionsBuilder {
+  const _SimpleSlideTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    // `animation` runs forward on push and reverse on pop, so driving the
+    // top route's position off it covers both directions: it slides in from
+    // the right on push and back out to the right on pop. The route beneath
+    // isn't touched (secondaryAnimation ignored), so it just sits still.
+    return SlideTransition(
+      position: animation.drive(
+        Tween(begin: const Offset(1, 0), end: Offset.zero)
+            .chain(CurveTween(curve: Curves.easeOutCubic)),
+      ),
+      child: child,
     );
   }
 }
