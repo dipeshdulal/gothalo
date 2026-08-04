@@ -284,8 +284,11 @@ neighbouring pane's transcript. Install the Herdr agent integration (see the
 README) so that id is always present; for `hermes` it is required, as there is no
 cwd fallback to resolve with.
 
+`opencode` likewise keeps sessions in SQLite (`~/.local/share/opencode/opencode.db`),
+with content split across `message` rows and their child `part` rows.
+
 This is READ-ONLY — prompts/approvals still go through `POST /send` /
-`POST /approve`. `claude` and `hermes` are implemented; `codex`/`opencode` are
+`POST /approve`. `claude`, `hermes` and `opencode` are implemented; `codex` is
 recognized but not yet wired (→ `404`). Errors before the upgrade: `400` missing `pane` · `401` bad token · `404`
 no agent / no transcript / unsupported kind · `500` read failed · `502` herdr
 failed. Close code `1000` on normal teardown.

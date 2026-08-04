@@ -136,7 +136,8 @@ looked up against:
 |---|---|---|
 | `claude` | `~/.claude/projects/<encoded-cwd>/<session>.jsonl` | cwd + session id |
 | `hermes` | `~/.hermes/state.db` (SQLite; `$HERMES_DIR` overrides) | session id |
-| `codex`, `opencode` | recognized, not yet wired | — |
+| `opencode` | `~/.local/share/opencode/opencode.db` (SQLite; `$OPENCODE_DATA_DIR` / `$XDG_DATA_HOME` override) | session id |
+| `codex` | recognized, not yet wired | — |
 
 ## Quick start (on the Herdr host)
 
