@@ -70,12 +70,15 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
         : widget.pane;
 
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         titleSpacing: 12,
         title: PaneTitle(
           title: 'Changes',
           subtitle: subtitle,
-          connLabel: _loading ? 'Loading…' : (_error != null ? 'Error' : 'Live'),
+          connLabel: _loading
+              ? 'Loading…'
+              : (_error != null ? 'Error' : 'Live'),
           connColor: _error != null ? scheme.error : scheme.primary,
         ),
       ),
@@ -112,7 +115,11 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
             SizedBox(height: MediaQuery.sizeOf(context).height * 0.3),
-            Icon(Icons.check_circle_outline, size: 40, color: scheme.onSurfaceVariant),
+            Icon(
+              Icons.check_circle_outline,
+              size: 40,
+              color: scheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
             Center(
               child: Text(
@@ -159,7 +166,8 @@ class _FileSection extends StatefulWidget {
 class _FileSectionState extends State<_FileSection> {
   bool _expanded = false;
 
-  (IconData, Color) _statusVisual(ColorScheme scheme) => switch (widget.file.status) {
+  (IconData, Color) _statusVisual(ColorScheme scheme) =>
+      switch (widget.file.status) {
         'added' => (Icons.add_circle_outline, const Color(0xFF00C853)),
         'deleted' => (Icons.remove_circle_outline, scheme.error),
         'renamed' => (Icons.drive_file_rename_outline, scheme.primary),
@@ -214,7 +222,10 @@ class _FileSectionState extends State<_FileSection> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                _CountBadge(additions: file.additions, deletions: file.deletions),
+                _CountBadge(
+                  additions: file.additions,
+                  deletions: file.deletions,
+                ),
                 const SizedBox(width: 4),
                 Icon(
                   _expanded ? Icons.expand_less : Icons.expand_more,
@@ -232,7 +243,10 @@ class _FileSectionState extends State<_FileSection> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: Text(
                     'No diff to show.',
-                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+                    style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontSize: 12.5,
+                    ),
                   ),
                 ),
       ],
@@ -253,14 +267,24 @@ class _CountBadge extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (additions > 0)
-          Text('+$additions',
-              style: const TextStyle(
-                  color: green, fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(
+            '+$additions',
+            style: const TextStyle(
+              color: green,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         if (additions > 0 && deletions > 0) const SizedBox(width: 4),
         if (deletions > 0)
-          Text('-$deletions',
-              style: TextStyle(
-                  color: red, fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(
+            '-$deletions',
+            style: TextStyle(
+              color: red,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
       ],
     );
   }
@@ -307,9 +331,7 @@ class _DiffBody extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final line in lines) _DiffLine(line: line),
-                ],
+                children: [for (final line in lines) _DiffLine(line: line)],
               ),
             ),
           ),
@@ -328,18 +350,24 @@ class _DiffLine extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     const green = Color(0xFF00C853);
     final (Color? bg, Color fg) = switch (line) {
-      _ when line.startsWith('+++') || line.startsWith('---') =>
-        (null, scheme.onSurfaceVariant),
-      _ when line.startsWith('+') =>
-        (green.withValues(alpha: 0.12), green),
-      _ when line.startsWith('-') =>
-        (scheme.error.withValues(alpha: 0.12), scheme.error),
-      _ when line.startsWith('@@') =>
-        (scheme.primary.withValues(alpha: 0.1), scheme.primary),
-      _ when line.startsWith('diff --git') ||
-          line.startsWith('index ') ||
-          line.startsWith('similarity index') ||
-          line.startsWith('rename ') =>
+      _ when line.startsWith('+++') || line.startsWith('---') => (
+        null,
+        scheme.onSurfaceVariant,
+      ),
+      _ when line.startsWith('+') => (green.withValues(alpha: 0.12), green),
+      _ when line.startsWith('-') => (
+        scheme.error.withValues(alpha: 0.12),
+        scheme.error,
+      ),
+      _ when line.startsWith('@@') => (
+        scheme.primary.withValues(alpha: 0.1),
+        scheme.primary,
+      ),
+      _
+          when line.startsWith('diff --git') ||
+              line.startsWith('index ') ||
+              line.startsWith('similarity index') ||
+              line.startsWith('rename ') =>
         (null, scheme.onSurfaceVariant),
       _ => (null, scheme.onSurface),
     };

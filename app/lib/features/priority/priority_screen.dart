@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/connection/connection_providers.dart';
+import '../../core/theme.dart';
 import '../../core/widgets/live_activity_line.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -36,13 +37,17 @@ class PriorityScreen extends ConsumerWidget {
     final hits = ref.watch(priorityHitsProvider);
 
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(title: const Text('Priority')),
       body: RefreshIndicator(
         onRefresh: () async => ref.invalidate(allServersAgentsProvider),
         child: aggregate.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => ListView(
-            children: [const SizedBox(height: 120), Center(child: Text('$e'))],
+            children: [
+              const SizedBox(height: 120),
+              Center(child: Text('$e')),
+            ],
           ),
           data: (servers) => ListView(
             padding: const EdgeInsets.only(bottom: 24),
@@ -168,7 +173,9 @@ class _AgentRow extends StatelessWidget {
             onPressed: onStar,
             icon: Icon(
               starred ? Icons.star : Icons.star_border,
-              color: starred ? const Color(0xFFF5C043) : scheme.onSurfaceVariant,
+              color: starred
+                  ? const Color(0xFFF5C043)
+                  : scheme.onSurfaceVariant,
             ),
           ),
         ],
@@ -178,7 +185,11 @@ class _AgentRow extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.icon, required this.label, this.trailing});
+  const _SectionHeader({
+    required this.icon,
+    required this.label,
+    this.trailing,
+  });
   final IconData icon;
   final String label;
   final String? trailing;
@@ -194,9 +205,9 @@ class _SectionHeader extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             label,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
           ),
           if (trailing != null) ...[
             const Spacer(),

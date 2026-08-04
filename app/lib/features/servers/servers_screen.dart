@@ -34,7 +34,10 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
 
   Future<void> _openServer(ServerSummary server) async {
     await ref.read(activeServerIdProvider.notifier).set(server.id);
-    if (mounted) context.go('/inbox');
+    // push, not go: `go` replaces the whole stack, so Flock had no back entry
+    // and the hardware back button exited the app. Pushing keeps Servers
+    // underneath, so back returns here.
+    if (mounted) context.push('/inbox');
   }
 
   Future<void> _openAgent(ServerSummary server, Agent agent) async {
