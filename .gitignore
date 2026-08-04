@@ -6,6 +6,9 @@
 *.test
 *.out
 
+# GoReleaser output
+/dist/
+
 # Secrets / local config
 *.env
 .env

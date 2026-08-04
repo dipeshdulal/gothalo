@@ -1,0 +1,76 @@
+# GoReleaser config — cross-compiles the gothalo bridge/CLI and publishes a
+# GitHub Release on every `v*` tag. Run locally with `goreleaser release --snapshot --clean`.
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: gothalo
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gothalo
+    main: ./cmd/gothalo
+    binary: gothalo
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # Inject build metadata into package main (see cmd/gothalo/main.go).
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.CommitDate}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: gothalo
+    # install.sh relies on this exact name shape: gothalo_<os>_<arch>.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - src: packaging/*
+        strip_parent: true
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: dipeshdulal
+    name: gothalo
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/dipeshdulal/gothalo/main/install.sh | sh
+    ```
+
+    Run the bridge in the background (macOS launchd / Linux systemd):
+
+    ```sh
+    gothalo-service install   # installed alongside the binary by install.sh
+    ```

@@ -1,0 +1,156 @@
+#!/bin/sh
+# gothalo-service — run the gothalo bridge in the background, always.
+#
+# macOS: writes a launchd LaunchAgent (~/Library/LaunchAgents) — the same
+#        mechanism `brew services` uses under the hood.
+# Linux: writes a systemd --user unit (~/.config/systemd/user).
+#
+# Both keep the daemon alive across crashes and start it at login. Installed
+# alongside the `gothalo` binary by install.sh.
+#
+# Usage: gothalo-service <install|start|stop|restart|status|logs|uninstall>
+set -eu
+
+LABEL="app.gothalo.bridge"
+BIN="$(command -v gothalo 2>/dev/null || true)"
+LOG_DIR="${HOME}/.gothalo"
+LOG_FILE="${LOG_DIR}/gothalo.log"
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+
+require_bin() {
+  [ -n "$BIN" ] || die "gothalo not found on PATH — install it first (see install.sh)"
+}
+
+os() {
+  case "$(uname -s)" in
+    Darwin) echo darwin ;;
+    Linux)  echo linux ;;
+    *)      die "unsupported OS: $(uname -s)" ;;
+  esac
+}
+
+# ------------------------------- macOS (launchd) ----------------------------
+PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+
+mac_write_plist() {
+  mkdir -p "${HOME}/Library/LaunchAgents" "$LOG_DIR"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${BIN}</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${LOG_FILE}</string>
+  <key>StandardErrorPath</key><string>${LOG_FILE}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
+EOF
+}
+
+mac_load()   { launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST"; }
+mac_unload() { launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true; }
+
+# ------------------------------- Linux (systemd) ----------------------------
+UNIT_DIR="${HOME}/.config/systemd/user"
+UNIT="${UNIT_DIR}/gothalo.service"
+
+linux_write_unit() {
+  mkdir -p "$UNIT_DIR" "$LOG_DIR"
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=gothalo Herdr bridge
+After=network-online.target
+
+[Service]
+ExecStart=${BIN} serve
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+# --------------------------------- commands ---------------------------------
+cmd_install() {
+  require_bin
+  case "$(os)" in
+    darwin)
+      mac_write_plist; mac_unload; mac_load
+      echo "✓ installed launchd agent — gothalo serve now runs in the background"
+      echo "  plist: $PLIST" ;;
+    linux)
+      linux_write_unit
+      systemctl --user daemon-reload
+      systemctl --user enable --now gothalo.service
+      command -v loginctl >/dev/null 2>&1 && loginctl enable-linger "$(id -un)" 2>/dev/null || true
+      echo "✓ installed systemd --user unit — gothalo serve now runs in the background"
+      echo "  unit: $UNIT" ;;
+  esac
+  echo "  logs: gothalo-service logs"
+}
+
+cmd_start() {
+  case "$(os)" in
+    darwin) [ -f "$PLIST" ] || cmd_install; mac_load ;;
+    linux)  systemctl --user start gothalo.service ;;
+  esac
+  echo "✓ started"
+}
+
+cmd_stop() {
+  case "$(os)" in
+    darwin) mac_unload ;;
+    linux)  systemctl --user stop gothalo.service ;;
+  esac
+  echo "✓ stopped"
+}
+
+cmd_restart() { cmd_stop || true; cmd_start; }
+
+cmd_status() {
+  case "$(os)" in
+    darwin) launchctl print "gui/$(id -u)/${LABEL}" 2>/dev/null | grep -E "state =|pid =" || echo "not running" ;;
+    linux)  systemctl --user status gothalo.service --no-pager || true ;;
+  esac
+}
+
+cmd_logs() {
+  case "$(os)" in
+    darwin) [ -f "$LOG_FILE" ] && tail -n 100 -f "$LOG_FILE" || die "no log yet at $LOG_FILE" ;;
+    linux)  journalctl --user -u gothalo.service -n 100 -f ;;
+  esac
+}
+
+cmd_uninstall() {
+  case "$(os)" in
+    darwin) mac_unload; rm -f "$PLIST"; echo "✓ removed $PLIST" ;;
+    linux)
+      systemctl --user disable --now gothalo.service 2>/dev/null || true
+      rm -f "$UNIT"; systemctl --user daemon-reload
+      echo "✓ removed $UNIT" ;;
+  esac
+}
+
+case "${1:-}" in
+  install)   cmd_install ;;
+  start)     cmd_start ;;
+  stop)      cmd_stop ;;
+  restart)   cmd_restart ;;
+  status)    cmd_status ;;
+  logs)      cmd_logs ;;
+  uninstall) cmd_uninstall ;;
+  *) echo "usage: gothalo-service <install|start|stop|restart|status|logs|uninstall>" >&2; exit 2 ;;
+esac

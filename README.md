@@ -75,16 +75,44 @@ gothalo/
     └── TESTING.md   How to validate each layer with curl / a browser — no app
 ```
 
-## Quick start (bridge, on the Herdr host)
+## Install (bridge, on the Herdr host)
+
+One line — downloads the right prebuilt binary for your OS/arch from the latest
+GitHub Release and drops it (plus the `gothalo-service` helper) onto your PATH:
 
 ```bash
-cd bridge
-go build -o gothalo-bridge .
-BRIDGE_ADDR=$(tailscale ip -4):8787 BRIDGE_TOKEN=<your-token> ./gothalo-bridge
+curl -fsSL https://raw.githubusercontent.com/dipeshdulal/gothalo/main/install.sh | sh
+```
+
+Then bring the bridge up and keep it running in the background, always:
+
+```bash
+gothalo serve            # start once: writes ~/.gothalo/config.json + an admin token
+# edit ~/.gothalo/config.json → set transport.public_url (your tailnet HTTPS URL)
+
+gothalo-service install  # supervise `gothalo serve` via launchd (macOS) / systemd (Linux):
+                         # starts at login, restarts on crash, survives logout
+gothalo pair             # QR-pair a phone
 
 # from anything on the tailnet:
-curl -H "Authorization: Bearer <your-token>" http://<tailscale-ip>:8787/snapshot
+curl -H "Authorization: Bearer <admin-token>" http://<tailscale-ip>:8787/snapshot
 ```
+
+`gothalo-service` also takes `start | stop | restart | status | logs | uninstall`.
+Prefer Go? `go install github.com/dipeshdulal/gothalo/cmd/gothalo@latest`.
 
 See `docs/TESTING.md` for the full ladder — you validate the whole backend
 (including a real push landing on a device) before writing any app code.
+
+## Releasing (maintainer)
+
+Releases are cut by GoReleaser from a semver tag; GitHub Actions
+(`.github/workflows/release.yml`) does the rest:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+This cross-compiles darwin/linux (amd64 + arm64), publishes a GitHub Release with
+archives + `checksums.txt`, and generates the changelog. Dry-run locally with
+`goreleaser release --snapshot --clean` (artifacts land in `dist/`).
