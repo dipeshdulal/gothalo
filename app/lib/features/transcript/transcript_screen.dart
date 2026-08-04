@@ -15,6 +15,7 @@ import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import 'quick_commands_providers.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -248,6 +249,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _client?.sendText(widget.pane, '${opt.index}\n');
     }
     setState(() => _agentState = null);
+  }
+
+  /// Fire a quick command: a keyed one sends its raw keystroke (e.g. Esc to
+  /// interrupt); a text one submits like a composer message (a trailing `\n`
+  /// so the bridge turns it into a real Enter, same as the composer itself).
+  void _handleQuickCommand(QuickCommand cmd) {
+    if (cmd.key != null) {
+      _client?.sendKey(widget.pane, cmd.key!);
+    } else {
+      _client?.sendText(widget.pane, '${cmd.text}\n');
+    }
   }
 
   /// The command / file context being approved — pulled from the most recent
@@ -656,6 +668,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               onOpenTerminal: () => context.push(
                 '/terminal/${Uri.encodeComponent(widget.pane)}',
               ),
+            ),
+            _QuickCommandsRow(
+              onTap: _handleQuickCommand,
+              enabled: _conn != _Conn.closed &&
+                  _conn != _Conn.failed &&
+                  _failure == null,
             ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
@@ -1228,6 +1246,203 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A horizontally scrollable row of reusable prompts/keystrokes ("Continue",
+/// "Run tests", an Esc interrupt, …) right above the composer — the
+/// Termius/Blink "snippets" table stake gothalo lacked (see
+/// docs/RESEARCH-feature-ideas.md, #7). A trailing "+" chip adds a custom one;
+/// long-press an existing chip to remove it. Hidden entirely while the list
+/// is empty (or still loading/errored) rather than showing an empty strip.
+class _QuickCommandsRow extends ConsumerWidget {
+  const _QuickCommandsRow({required this.onTap, required this.enabled});
+
+  final void Function(QuickCommand) onTap;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final commands = ref.watch(quickCommandsProvider).asData?.value;
+    if (commands == null) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+
+    return Container(
+      color: scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+      child: SizedBox(
+        height: 34,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            for (var i = 0; i < commands.length; i++) ...[
+              if (i > 0) const SizedBox(width: 6),
+              _QuickCommandChip(
+                command: commands[i],
+                enabled: enabled,
+                onTap: () => onTap(commands[i]),
+                onRemove: () =>
+                    ref.read(quickCommandsProvider.notifier).removeAt(i),
+              ),
+            ],
+            const SizedBox(width: 6),
+            ActionChip(
+              avatar: const Icon(Icons.add, size: 16),
+              label: const Text('Add'),
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _showAddQuickCommand(context, ref),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAddQuickCommand(BuildContext context, WidgetRef ref) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => _AddQuickCommandDialog(
+        onAdd: (cmd) => ref.read(quickCommandsProvider.notifier).add(cmd),
+      ),
+    );
+  }
+}
+
+class _QuickCommandChip extends StatelessWidget {
+  const _QuickCommandChip({
+    required this.command,
+    required this.enabled,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  final QuickCommand command;
+  final bool enabled;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onLongPress: () => _confirmRemove(context),
+      child: ActionChip(
+        avatar: command.key != null
+            ? const Icon(Icons.keyboard_command_key, size: 15)
+            : null,
+        label: Text(command.label),
+        visualDensity: VisualDensity.compact,
+        onPressed: enabled ? onTap : null,
+      ),
+    );
+  }
+
+  Future<void> _confirmRemove(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove quick command?'),
+        content: Text('"${command.label}" will be removed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) onRemove();
+  }
+}
+
+/// A small form for a custom quick command: a label, and either typed text
+/// (submitted like a composer message) or a raw key name (for something like
+/// "esc" — advanced, so it's a secondary field, not the default).
+class _AddQuickCommandDialog extends StatefulWidget {
+  const _AddQuickCommandDialog({required this.onAdd});
+  final void Function(QuickCommand) onAdd;
+
+  @override
+  State<_AddQuickCommandDialog> createState() =>
+      _AddQuickCommandDialogState();
+}
+
+class _AddQuickCommandDialogState extends State<_AddQuickCommandDialog> {
+  final _label = TextEditingController();
+  final _text = TextEditingController();
+  final _key = TextEditingController();
+
+  @override
+  void dispose() {
+    _label.dispose();
+    _text.dispose();
+    _key.dispose();
+    super.dispose();
+  }
+
+  bool get _valid =>
+      _label.text.trim().isNotEmpty &&
+      (_text.text.trim().isNotEmpty) != (_key.text.trim().isNotEmpty);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add quick command'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _label,
+            decoration: const InputDecoration(labelText: 'Label'),
+            onChanged: (_) => setState(() {}),
+          ),
+          TextField(
+            controller: _text,
+            decoration: const InputDecoration(
+              labelText: 'Text to send',
+              helperText: 'What gets typed and submitted',
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text('— or —', style: TextStyle(fontSize: 11)),
+          ),
+          TextField(
+            controller: _key,
+            decoration: const InputDecoration(
+              labelText: 'Raw key (advanced)',
+              helperText: 'e.g. "esc" — for a keystroke, not text',
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _valid
+              ? () {
+                  final text = _text.text.trim();
+                  final key = _key.text.trim();
+                  widget.onAdd(QuickCommand(
+                    label: _label.text.trim(),
+                    text: text.isNotEmpty ? text : null,
+                    key: key.isNotEmpty ? key : null,
+                  ));
+                  Navigator.pop(context);
+                }
+              : null,
+          child: const Text('Add'),
+        ),
+      ],
     );
   }
 }
