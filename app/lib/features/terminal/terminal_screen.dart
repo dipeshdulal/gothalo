@@ -177,7 +177,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     bool gone = false;
     try {
       final snap = await client.getSnapshot();
-      gone = !snap.panes.any((p) => p.paneId == widget.pane) &&
+      gone =
+          !snap.panes.any((p) => p.paneId == widget.pane) &&
           !snap.agents.any((a) => a.paneId == widget.pane);
     } catch (_) {
       // Couldn't reach the bridge to check → treat as a transient drop and
@@ -225,8 +226,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _pendingCols = cols;
     _pendingRows = rows;
     _resizeDebounce?.cancel();
-    _resizeDebounce =
-        Timer(const Duration(milliseconds: 150), _flushResize);
+    _resizeDebounce = Timer(const Duration(milliseconds: 150), _flushResize);
   }
 
   /// Sends the latest pending geometry as one resize control frame.
@@ -235,7 +235,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     if (channel == null || _conn != _Conn.connected) return;
     if (_pendingCols <= 0 || _pendingRows <= 0) return;
     channel.sink.add(
-      jsonEncode({'type': 'resize', 'cols': _pendingCols, 'rows': _pendingRows}),
+      jsonEncode({
+        'type': 'resize',
+        'cols': _pendingCols,
+        'rows': _pendingRows,
+      }),
     );
   }
 
@@ -278,11 +282,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
     // Non-null (and final) only when this pane's agent is blocked — safe to
     // capture in the button's callback.
-    final approvable =
-        agent?.agentStatus == AgentStatus.blocked ? agent : null;
+    final approvable = agent?.agentStatus == AgentStatus.blocked ? agent : null;
 
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         titleSpacing: 12,
         title: PaneTitle(
@@ -344,8 +348,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                   child: TerminalView(
                     terminal,
                     theme: TerminalThemes.defaultTheme,
-                    textStyle:
-                        const TerminalStyle(fontFamily: AppTheme.monoFamily),
+                    textStyle: const TerminalStyle(
+                      fontFamily: AppTheme.monoFamily,
+                    ),
                     padding: const EdgeInsets.all(8),
                   ),
                 ),
@@ -421,8 +426,8 @@ class _ClosedOverlay extends StatelessWidget {
                 'It was closed on the host or the agent finished. The last screen is shown above.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 16),
               Row(
@@ -475,11 +480,7 @@ class _AccessoryKeyRow extends StatelessWidget {
           child: Row(
             children: [
               _Key(label: 'Esc', onTap: () => onKey('\x1b')),
-              _Key(
-                label: 'Ctrl',
-                active: stickyCtrl,
-                onTap: onToggleCtrl,
-              ),
+              _Key(label: 'Ctrl', active: stickyCtrl, onTap: onToggleCtrl),
               _Key(label: 'Tab', onTap: () => onKey('\t')),
               _Key(label: '↑', onTap: () => onKey('\x1b[A')),
               _Key(label: '↓', onTap: () => onKey('\x1b[B')),

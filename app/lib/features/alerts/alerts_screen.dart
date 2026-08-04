@@ -29,6 +29,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
     final alerts = ref.watch(alertsProvider);
     final live = ref.watch(activeAgentsByPaneProvider);
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         title: const Text('Alerts'),
         actions: [
@@ -125,37 +126,36 @@ class _AlertTile extends StatelessWidget {
       onTap: event.paneId.isEmpty
           ? null
           : () => context.push(
-                // Alerts are always about an agent → open its chat view.
-                '/transcript/${Uri.encodeComponent(event.paneId)}',
-              ),
+              // Alerts are always about an agent → open its chat view.
+              '/transcript/${Uri.encodeComponent(event.paneId)}',
+            ),
       // A needs-you alert gets an urgent filled dot; done a completion check;
       // resolved a hollow ring — the kind reads at a glance without the label.
       leading: SizedBox(
         width: 16,
         child: switch (liveness) {
           AlertLiveness.done => const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Icon(Icons.check_circle, size: 15, color: doneColor),
-            ),
+            padding: EdgeInsets.only(top: 4),
+            child: Icon(Icons.check_circle, size: 15, color: doneColor),
+          ),
           AlertLiveness.resolved => Container(
-              width: 12,
-              height: 12,
-              margin: const EdgeInsets.only(top: 6),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border:
-                    Border.all(color: scheme.onSurfaceVariant, width: 1.5),
-              ),
+            width: 12,
+            height: 12,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: scheme.onSurfaceVariant, width: 1.5),
             ),
+          ),
           AlertLiveness.needsYou => Container(
-              width: 12,
-              height: 12,
-              margin: const EdgeInsets.only(top: 6),
-              decoration: const BoxDecoration(
-                color: blockedColor,
-                shape: BoxShape.circle,
-              ),
+            width: 12,
+            height: 12,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: const BoxDecoration(
+              color: blockedColor,
+              shape: BoxShape.circle,
             ),
+          ),
         },
       ),
       title: Text(
@@ -201,12 +201,14 @@ class _AlertTile extends StatelessWidget {
           ? Container(
               width: 8,
               height: 8,
-              decoration:
-                  BoxDecoration(color: scheme.primary, shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                shape: BoxShape.circle,
+              ),
             )
           : (event.paneId.isEmpty
-              ? null
-              : Icon(Icons.chevron_right, color: scheme.onSurfaceVariant)),
+                ? null
+                : Icon(Icons.chevron_right, color: scheme.onSurfaceVariant)),
     );
 
     // Unread → accent left-bar + faint tint. Resolved → dimmed as a whole.
@@ -214,9 +216,7 @@ class _AlertTile extends StatelessWidget {
       decoration: unread
           ? BoxDecoration(
               color: scheme.primary.withValues(alpha: 0.05),
-              border: Border(
-                left: BorderSide(color: scheme.primary, width: 3),
-              ),
+              border: Border(left: BorderSide(color: scheme.primary, width: 3)),
             )
           : null,
       child: settled ? Opacity(opacity: 0.6, child: tile) : tile,
@@ -255,16 +255,23 @@ class _EmptyAlerts extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.notifications_none, size: 56, color: scheme.onSurfaceVariant),
+            Icon(
+              Icons.notifications_none,
+              size: 56,
+              color: scheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
-            Text('No alerts yet', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'No alerts yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 6),
             Text(
               'When an agent gets blocked or finishes, it shows up here.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),

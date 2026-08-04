@@ -65,14 +65,9 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.system,
       routerConfig: ref.watch(routerProvider),
-      // Paint the subtle backdrop gradient behind every screen. Scaffolds are
-      // transparent (see AppTheme), so this shows through.
-      builder: (context, child) => DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: AppTheme.backgroundGradient(Theme.of(context).brightness),
-        ),
-        child: child,
-      ),
+      // No app-wide backdrop here: each screen paints its OWN opaque backdrop
+      // via AppBackground, so pages slide as solid layers instead of showing
+      // through one another during a transition. See AppBackground.
     );
   }
 }

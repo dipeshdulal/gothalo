@@ -38,6 +38,15 @@ class AppTheme {
     );
   }
 
+  /// A flat, **opaque** backdrop colour matching the gradient's base — for
+  /// utility screens that just need a solid, transition-safe background rather
+  /// than the full [AppBackground] gradient/artwork. Near-identical to the
+  /// gradient's midpoint, so pages read consistently either way.
+  static Color scaffoldBase(Brightness brightness) =>
+      brightness == Brightness.dark
+      ? const Color(0xFF0A0E0F)
+      : const Color(0xFFECF2F1);
+
   static ThemeData _build(Brightness brightness) {
     final scheme = ColorScheme.fromSeed(
       seedColor: _seed,
@@ -60,7 +69,10 @@ class AppTheme {
           TargetPlatform.iOS: _SimpleSlideTransitionsBuilder(),
         },
       ),
-      // Transparent so the app-wide backdrop gradient shows through.
+      // Transparent by default so an [AppBackground]-wrapped screen shows its
+      // own gradient/artwork through the Scaffold. Utility screens that aren't
+      // wrapped set an opaque [AppTheme.scaffoldBase] on their Scaffold so they
+      // still slide as a solid layer.
       scaffoldBackgroundColor: Colors.transparent,
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
@@ -72,9 +84,7 @@ class AppTheme {
         clipBehavior: Clip.antiAlias,
         elevation: 0,
         color: scheme.surfaceContainerHigh,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       listTileTheme: const ListTileThemeData(
         contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -106,8 +116,10 @@ class _SimpleSlideTransitionsBuilder extends PageTransitionsBuilder {
     // isn't touched (secondaryAnimation ignored), so it just sits still.
     return SlideTransition(
       position: animation.drive(
-        Tween(begin: const Offset(1, 0), end: Offset.zero)
-            .chain(CurveTween(curve: Curves.easeOutCubic)),
+        Tween(
+          begin: const Offset(1, 0),
+          end: Offset.zero,
+        ).chain(CurveTween(curve: Curves.easeOutCubic)),
       ),
       child: child,
     );
@@ -136,15 +148,33 @@ extension AgentStatusUi on AgentStatus {
   /// Background/foreground for the badge, tuned per brightness.
   ({Color bg, Color fg}) colors(ColorScheme scheme) {
     final dark = scheme.brightness == Brightness.dark;
-    Color pair(Color base) => dark ? base.withValues(alpha: 0.22) : base.withValues(alpha: 0.14);
-    Color fg(Color base) => dark ? base : Color.alphaBlend(base.withValues(alpha: 0.85), Colors.black);
+    Color pair(Color base) =>
+        dark ? base.withValues(alpha: 0.22) : base.withValues(alpha: 0.14);
+    Color fg(Color base) => dark
+        ? base
+        : Color.alphaBlend(base.withValues(alpha: 0.85), Colors.black);
 
     return switch (this) {
-      AgentStatus.blocked => (bg: pair(const Color(0xFFFF5252)), fg: fg(const Color(0xFFFF5252))),
-      AgentStatus.working => (bg: pair(const Color(0xFF448AFF)), fg: fg(const Color(0xFF448AFF))),
-      AgentStatus.done => (bg: pair(const Color(0xFF69F0AE)), fg: fg(const Color(0xFF00C853))),
-      AgentStatus.idle => (bg: scheme.surfaceContainerHighest, fg: scheme.onSurfaceVariant),
-      AgentStatus.unknown => (bg: scheme.surfaceContainerHighest, fg: scheme.onSurfaceVariant),
+      AgentStatus.blocked => (
+        bg: pair(const Color(0xFFFF5252)),
+        fg: fg(const Color(0xFFFF5252)),
+      ),
+      AgentStatus.working => (
+        bg: pair(const Color(0xFF448AFF)),
+        fg: fg(const Color(0xFF448AFF)),
+      ),
+      AgentStatus.done => (
+        bg: pair(const Color(0xFF69F0AE)),
+        fg: fg(const Color(0xFF00C853)),
+      ),
+      AgentStatus.idle => (
+        bg: scheme.surfaceContainerHighest,
+        fg: scheme.onSurfaceVariant,
+      ),
+      AgentStatus.unknown => (
+        bg: scheme.surfaceContainerHighest,
+        fg: scheme.onSurfaceVariant,
+      ),
     };
   }
 }

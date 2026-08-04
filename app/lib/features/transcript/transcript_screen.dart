@@ -190,21 +190,21 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       await _pollAgentState();
     } on BridgeException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
   /// A short, readable label for a permission mode; unknown values pass through.
   String _modeLabel(String m) => switch (m) {
-        'default' => 'manual',
-        'acceptEdits' => 'accept edits',
-        'plan' => 'plan',
-        'auto' => 'auto',
-        'bypassPermissions' => 'bypass',
-        _ => m,
-      };
+    'default' => 'manual',
+    'acceptEdits' => 'accept edits',
+    'plan' => 'plan',
+    'auto' => 'auto',
+    'bypassPermissions' => 'bypass',
+    _ => m,
+  };
 
   /// Approve the highlighted default via idempotent `POST /approve {agent, seq}`
   /// (the bridge picks the confirm key and no-ops a stale seq). The seq comes
@@ -215,7 +215,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (client == null) return;
     final agents =
         ref.read(snapshotControllerProvider).asData?.value.agents ??
-            const <Agent>[];
+        const <Agent>[];
     var seq = 0;
     for (final a in agents) {
       if (a.paneId == widget.pane) {
@@ -227,9 +227,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     try {
       final res = await client.approve(widget.pane, seq);
       if (!res.applied && res.reason != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res.reason!)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(res.reason!)));
       }
     } catch (e) {
       if (!mounted) return;
@@ -270,7 +270,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     for (final e in _ordered.reversed) {
       if (e.kind != EntryKind.toolCall || e.tool == null) continue;
       final t = e.tool!;
-      if (_resultsByForId[t.id] != null) break; // resolved → not the pending one
+      if (_resultsByForId[t.id] != null)
+        break; // resolved → not the pending one
       final ctx = _firstText([t.command, t.file, t.inputSummary, t.title]);
       if (ctx != null) return ctx;
       break;
@@ -461,7 +462,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     bool gone = false;
     try {
       final snap = await client.getSnapshot();
-      gone = !snap.panes.any((p) => p.paneId == widget.pane) &&
+      gone =
+          !snap.panes.any((p) => p.paneId == widget.pane) &&
           !snap.agents.any((a) => a.paneId == widget.pane);
     } catch (_) {
       gone = false; // couldn't check → treat as transient, keep retrying
@@ -520,11 +522,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       return;
     }
     _loadingOlder = true;
-    channel.sink.add(jsonEncode({
-      'type': 'load_older',
-      'before_seq': _oldestSeq,
-      'limit': 150,
-    }));
+    channel.sink.add(
+      jsonEncode({
+        'type': 'load_older',
+        'before_seq': _oldestSeq,
+        'limit': 150,
+      }),
+    );
     if (mounted) setState(() {}); // show the top loader
   }
 
@@ -603,6 +607,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         titleSpacing: 12,
         title: PaneTitle(
@@ -634,9 +639,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           ),
           IconButton(
             tooltip: 'Changes',
-            onPressed: () => context.push(
-              '/diff/${Uri.encodeComponent(widget.pane)}',
-            ),
+            onPressed: () =>
+                context.push('/diff/${Uri.encodeComponent(widget.pane)}'),
             icon: const Icon(Icons.difference_outlined),
           ),
         ],
@@ -675,11 +679,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
                   ? _modeLabel(_agentState!.permissionMode!)
                   : null,
               onCycleMode: _cycleMode,
-              onOpenTerminal: () => context.push(
-                '/terminal/${Uri.encodeComponent(widget.pane)}',
-              ),
+              onOpenTerminal: () =>
+                  context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
               onQuickCommand: _handleQuickCommand,
-              enabled: _conn != _Conn.closed &&
+              enabled:
+                  _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
             ),
@@ -691,7 +695,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               hintText: _agentState?.isBlocked == true
                   ? 'Type a number, or your own reply…'
                   : null,
-              enabled: _conn != _Conn.closed &&
+              enabled:
+                  _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
             ),
@@ -825,12 +830,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   }
 
   Widget _blockWidget(_Block block) => switch (block) {
-        _EntryBlock(:final entry) => _EntryTile(entry: entry),
-        _ToolGroupBlock(:final calls) => _ToolLedger(
-            calls: calls,
-            resultFor: (id) => _resultsByForId[id],
-          ),
-      };
+    _EntryBlock(:final entry) => _EntryTile(entry: entry),
+    _ToolGroupBlock(:final calls) => _ToolLedger(
+      calls: calls,
+      resultFor: (id) => _resultsByForId[id],
+    ),
+  };
 }
 
 /// A unit of the rendered transcript: either a standalone entry or a grouped
@@ -885,20 +890,20 @@ class _ApprovalCard extends StatelessWidget {
     final severity = state.blockSeverity;
     final (Color bg, Color accent, IconData icon) = switch (severity) {
       BlockSeverity.danger => (
-          scheme.errorContainer.withValues(alpha: 0.55),
-          scheme.error,
-          Icons.lock_outline,
-        ),
+        scheme.errorContainer.withValues(alpha: 0.55),
+        scheme.error,
+        Icons.lock_outline,
+      ),
       BlockSeverity.permission => (
-          scheme.errorContainer.withValues(alpha: 0.3),
-          scheme.error,
-          Icons.lock_outline,
-        ),
+        scheme.errorContainer.withValues(alpha: 0.3),
+        scheme.error,
+        Icons.lock_outline,
+      ),
       BlockSeverity.question => (
-          scheme.surfaceContainerHighest.withValues(alpha: 0.7),
-          scheme.primary,
-          Icons.forum_outlined,
-        ),
+        scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        scheme.primary,
+        Icons.forum_outlined,
+      ),
     };
     final categoryLabel = state.blockedCategoryLabel;
     final question = (state.blockedQuestion?.trim().isNotEmpty ?? false)
@@ -1023,8 +1028,12 @@ class _OptionRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final accent = danger ? scheme.error : scheme.primary;
     final bg = primary ? accent : scheme.surface.withValues(alpha: 0.6);
-    final fg = primary ? (danger ? scheme.onError : scheme.onPrimary) : scheme.onSurface;
-    final badgeText = option.isKeyed ? option.key!.toUpperCase() : '${option.index}';
+    final fg = primary
+        ? (danger ? scheme.onError : scheme.onPrimary)
+        : scheme.onSurface;
+    final badgeText = option.isKeyed
+        ? option.key!.toUpperCase()
+        : '${option.index}';
 
     return Material(
       color: bg,
@@ -1106,16 +1115,18 @@ class _CategoryPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: strong ? accent : accent.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(6),
-        border: strong ? null : Border.all(color: accent.withValues(alpha: 0.6)),
+        border: strong
+            ? null
+            : Border.all(color: accent.withValues(alpha: 0.6)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon,
-              size: 12,
-              color: strong
-                  ? Theme.of(context).colorScheme.onError
-                  : accent),
+          Icon(
+            icon,
+            size: 12,
+            color: strong ? Theme.of(context).colorScheme.onError : accent,
+          ),
           const SizedBox(width: 4),
           Text(
             label.toUpperCase(),
@@ -1123,8 +1134,7 @@ class _CategoryPill extends StatelessWidget {
               fontSize: 10.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.4,
-              color:
-                  strong ? Theme.of(context).colorScheme.onError : accent,
+              color: strong ? Theme.of(context).colorScheme.onError : accent,
             ),
           ),
         ],
@@ -1358,8 +1368,7 @@ class _AddQuickCommandDialog extends StatefulWidget {
   final void Function(QuickCommand) onAdd;
 
   @override
-  State<_AddQuickCommandDialog> createState() =>
-      _AddQuickCommandDialogState();
+  State<_AddQuickCommandDialog> createState() => _AddQuickCommandDialogState();
 }
 
 class _AddQuickCommandDialogState extends State<_AddQuickCommandDialog> {
@@ -1423,11 +1432,13 @@ class _AddQuickCommandDialogState extends State<_AddQuickCommandDialog> {
               ? () {
                   final text = _text.text.trim();
                   final key = _key.text.trim();
-                  widget.onAdd(QuickCommand(
-                    label: _label.text.trim(),
-                    text: text.isNotEmpty ? text : null,
-                    key: key.isNotEmpty ? key : null,
-                  ));
+                  widget.onAdd(
+                    QuickCommand(
+                      label: _label.text.trim(),
+                      text: text.isNotEmpty ? text : null,
+                      key: key.isNotEmpty ? key : null,
+                    ),
+                  );
                   Navigator.pop(context);
                 }
               : null,
@@ -1575,8 +1586,9 @@ class _SendButton extends StatelessWidget {
     final Color bg = !enabled
         ? scheme.surfaceContainerHighest
         : (active ? _green : _green.withValues(alpha: 0.65));
-    final Color fg =
-        enabled ? Colors.white : scheme.onSurfaceVariant.withValues(alpha: 0.6);
+    final Color fg = enabled
+        ? Colors.white
+        : scheme.onSurfaceVariant.withValues(alpha: 0.6);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 150),
       width: 48,
@@ -1588,9 +1600,7 @@ class _SendButton extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap == null ? null : () => onTap!(),
-          child: Center(
-            child: Icon(Icons.send_rounded, size: 22, color: fg),
-          ),
+          child: Center(child: Icon(Icons.send_rounded, size: 22, color: fg)),
         ),
       ),
     );
@@ -1728,11 +1738,17 @@ class _PendingBubble extends StatelessWidget {
             children: [
               Text(
                 text,
-                style: TextStyle(color: scheme.onPrimaryContainer, height: 1.35),
+                style: TextStyle(
+                  color: scheme.onPrimaryContainer,
+                  height: 1.35,
+                ),
               ),
               const SizedBox(height: 3),
-              Icon(Icons.schedule,
-                  size: 12, color: scheme.onPrimaryContainer.withValues(alpha: 0.7)),
+              Icon(
+                Icons.schedule,
+                size: 12,
+                color: scheme.onPrimaryContainer.withValues(alpha: 0.7),
+              ),
             ],
           ),
         ),
@@ -1919,14 +1935,14 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
 enum _ToolClass { bash, edit, read, search, web, task, other }
 
 _ToolClass _classifyTool(String name) => switch (name.toLowerCase()) {
-      'bash' => _ToolClass.bash,
-      'edit' || 'write' || 'multiedit' || 'notebookedit' => _ToolClass.edit,
-      'read' => _ToolClass.read,
-      'grep' || 'glob' => _ToolClass.search,
-      'webfetch' || 'websearch' => _ToolClass.web,
-      'task' => _ToolClass.task,
-      _ => _ToolClass.other,
-    };
+  'bash' => _ToolClass.bash,
+  'edit' || 'write' || 'multiedit' || 'notebookedit' => _ToolClass.edit,
+  'read' => _ToolClass.read,
+  'grep' || 'glob' => _ToolClass.search,
+  'webfetch' || 'websearch' => _ToolClass.web,
+  'task' => _ToolClass.task,
+  _ => _ToolClass.other,
+};
 
 /// The one-line primary content for a tool row: an icon, the text, and whether
 /// to render the text monospaced.
@@ -1943,39 +1959,57 @@ class _Primary {
 _Primary _primaryFor(_ToolClass cls, ToolCall tool) {
   switch (cls) {
     case _ToolClass.bash:
-      final cmd = _firstNonEmpty(
-              [tool.command, tool.inputSummary, tool.subtitle, tool.title]) ??
+      final cmd =
+          _firstNonEmpty([
+            tool.command,
+            tool.inputSummary,
+            tool.subtitle,
+            tool.title,
+          ]) ??
           tool.name;
       return _Primary(Icons.terminal, '\$ $cmd', mono: true);
     case _ToolClass.edit:
-      final file = _firstNonEmpty(
-              [tool.file, _basename(tool.inputSummary), tool.title]) ??
+      final file =
+          _firstNonEmpty([
+            tool.file,
+            _basename(tool.inputSummary),
+            tool.title,
+          ]) ??
           tool.name;
       return _Primary(Icons.edit_outlined, file, mono: true);
     case _ToolClass.read:
-      final file = _firstNonEmpty(
-              [tool.file, _basename(tool.inputSummary), tool.subtitle]) ??
+      final file =
+          _firstNonEmpty([
+            tool.file,
+            _basename(tool.inputSummary),
+            tool.subtitle,
+          ]) ??
           tool.name;
       return _Primary(Icons.description_outlined, file, mono: true);
     case _ToolClass.search:
-      final pattern = _firstNonEmpty(
-              [tool.command, tool.subtitle, tool.inputSummary, tool.title]) ??
+      final pattern =
+          _firstNonEmpty([
+            tool.command,
+            tool.subtitle,
+            tool.inputSummary,
+            tool.title,
+          ]) ??
           tool.name;
       return _Primary(Icons.search, pattern, mono: true);
     case _ToolClass.web:
       final u =
           _firstNonEmpty([tool.subtitle, tool.inputSummary, tool.title]) ??
-              tool.name;
+          tool.name;
       return _Primary(Icons.public, u);
     case _ToolClass.task:
       final t =
           _firstNonEmpty([tool.title, tool.subtitle, tool.inputSummary]) ??
-              tool.name;
+          tool.name;
       return _Primary(Icons.smart_toy_outlined, t);
     case _ToolClass.other:
       final t =
           _firstNonEmpty([tool.inputSummary, tool.subtitle, tool.title]) ??
-              tool.name;
+          tool.name;
       return _Primary(Icons.build_outlined, t);
   }
 }
@@ -2081,8 +2115,7 @@ class _ToolRowState extends State<_ToolRow> {
     final failed = result != null && !result.ok;
 
     // The applied diff (on the result) is authoritative over the preview.
-    final diff =
-        (result?.diff?.isNotEmpty ?? false) ? result!.diff : tool.diff;
+    final diff = (result?.diff?.isNotEmpty ?? false) ? result!.diff : tool.diff;
     final output = result?.outputSummary;
     final hasDiff = diff != null && diff.isNotEmpty;
     // Errors surface their output inline; success hides trivial/empty output so
@@ -2273,8 +2306,7 @@ class _MiniDiff extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final line in lines)
-              _diffLine(line, scheme, addBg, delBg),
+            for (final line in lines) _diffLine(line, scheme, addBg, delBg),
           ],
         ),
       ),
@@ -2392,9 +2424,10 @@ class _RawEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final head = [entry.roleRaw, entry.kindRaw]
-        .where((s) => s.isNotEmpty)
-        .join(' · ');
+    final head = [
+      entry.roleRaw,
+      entry.kindRaw,
+    ].where((s) => s.isNotEmpty).join(' · ');
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.all(10),
@@ -2458,9 +2491,9 @@ class _CenteredNotice extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             if (onTerminal != null) ...[
               const SizedBox(height: 16),
