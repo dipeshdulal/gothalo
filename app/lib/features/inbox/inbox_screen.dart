@@ -67,24 +67,38 @@ class InboxScreen extends ConsumerWidget {
                 child: const Icon(Icons.notifications_none),
               ),
             ),
-            IconButton(
-              tooltip: 'Overview',
-              onPressed: () => context.push('/overview'),
-              icon: const Icon(Icons.dashboard_outlined),
+            // Overview + per-server settings are occasional visits, not
+            // every-open actions — folded into one overflow menu so the bar
+            // isn't five same-weight icons deep. Refresh dropped outright
+            // (not just relocated): both tabs already pull-to-refresh, so the
+            // button was a redundant affordance, not a demoted one.
+            PopupMenuButton<_FlockMenuAction>(
+              tooltip: 'More',
+              icon: const Icon(Icons.more_vert),
+              onSelected: (action) => switch (action) {
+                _FlockMenuAction.overview => context.push('/overview'),
+                _FlockMenuAction.editServer => connection == null
+                    ? null
+                    : context.push('/servers/${connection.id}/edit'),
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: _FlockMenuAction.overview,
+                  child: _MenuRow(
+                    icon: Icons.dashboard_outlined,
+                    label: 'Overview',
+                  ),
+                ),
+                if (connection != null)
+                  const PopupMenuItem(
+                    value: _FlockMenuAction.editServer,
+                    child: _MenuRow(
+                      icon: Icons.settings_outlined,
+                      label: 'Edit this server',
+                    ),
+                  ),
+              ],
             ),
-            IconButton(
-              tooltip: 'Refresh',
-              onPressed: () =>
-                  ref.read(snapshotControllerProvider.notifier).refresh(),
-              icon: const Icon(Icons.refresh),
-            ),
-            if (connection != null)
-              IconButton(
-                tooltip: 'Edit this server',
-                onPressed: () =>
-                    context.push('/servers/${connection.id}/edit'),
-                icon: const Icon(Icons.settings_outlined),
-              ),
           ],
           bottom: TabBar(
             tabs: [
@@ -116,6 +130,29 @@ class InboxScreen extends ConsumerWidget {
   ) {
     final s = snap.asData?.value;
     return s == null ? '' : '  ${count(s)}';
+  }
+}
+
+/// The choices in the Flock header's overflow menu.
+enum _FlockMenuAction { overview, editServer }
+
+/// One row in the overflow menu: icon + label, laid out tighter than the
+/// default [ListTile] so a two-item menu doesn't feel oversized.
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    );
   }
 }
 
