@@ -429,6 +429,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               stickyCtrl: _stickyCtrl,
               onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
               onKey: _send,
+              onHideKeyboard: () => FocusScope.of(context).unfocus(),
             ),
           ],
         ],
@@ -517,11 +518,16 @@ class _AccessoryKeyRow extends StatelessWidget {
     required this.stickyCtrl,
     required this.onToggleCtrl,
     required this.onKey,
+    required this.onHideKeyboard,
   });
 
   final bool stickyCtrl;
   final VoidCallback onToggleCtrl;
   final void Function(String bytes) onKey;
+
+  /// Drops focus so the soft keyboard closes, giving the terminal back the rows
+  /// it was covering.
+  final VoidCallback onHideKeyboard;
 
   @override
   Widget build(BuildContext context) {
@@ -543,6 +549,14 @@ class _AccessoryKeyRow extends StatelessWidget {
               _Key(label: '←', onTap: () => onKey('\x1b[D')),
               _Key(label: '→', onTap: () => onKey('\x1b[C')),
               _Key(label: '^C', onTap: () => onKey('\x03')),
+              // Reclaim the rows the keyboard occupies. A full-screen TUI lays
+              // out for the REMOTE pane's height (42 rows on a desktop), so the
+              // phone only ever shows the bottom slice of it — anything tall,
+              // like opencode's ctrl+p palette, draws above the visible window
+              // and looks like it did nothing. The remote can't be re-laid-out
+              // without resizing the operator's pane, so give the keyboard a
+              // one-tap dismiss instead of a system gesture.
+              _Key(label: '⌄', onTap: onHideKeyboard),
             ],
           ),
         ),
