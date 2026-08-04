@@ -94,6 +94,41 @@ Runtime state lives **outside** the repo, in `~/.gothalo` (override with
 `$GOTHALO_DIR`): `config.json`, `devices.json`, and the FCM `serviceAccount.json`.
 Nothing secret is committed.
 
+## Prerequisites (on the Herdr host)
+
+Install Herdr's agent integration for every agent you run. **This is required, not
+optional** — without it the transcript view will not work:
+
+```bash
+herdr integration status          # what's installed, and whether it's current
+herdr integration install claude  # likewise: codex, opencode, copilot, …
+```
+
+The integration installs a `SessionStart` hook (for Claude, into
+`~/.claude/settings.json`) that reports the agent's own session id to Herdr via
+`pane.report_agent_session`. That id surfaces as `agent_session.value` in the
+snapshot, and it is the **only** key linking a Herdr pane to the agent's
+transcript file on disk — Claude's `~/.claude/projects/` store records no pane,
+tab, or workspace id, so there is nothing else to join on.
+
+Without the integration, `agent_session` is `null` and the bridge can only match
+transcripts by working directory. Two agents in one directory then become
+indistinguishable and both resolve to the same file, so the app shows one agent's
+conversation under another. Prompt routing is unaffected (that goes by `pane_id`),
+which makes the symptom look stranger than it is: you type to the right agent but
+read the wrong chat.
+
+Two things to know about the hook:
+
+- It fires **only when an agent session starts.** Installing it does not fix
+  already-running panes — restart the agent in each one.
+- It exits silently unless `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and
+  `HERDR_PANE_ID` are set and `python3` is on `PATH`. All four hold inside a
+  Herdr pane; an agent launched outside Herdr reports nothing.
+
+Verify with `herdr api snapshot` — every agent should carry a non-null
+`agent_session`.
+
 ## Quick start (on the Herdr host)
 
 ```bash
