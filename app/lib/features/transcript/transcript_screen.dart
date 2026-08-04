@@ -252,6 +252,28 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     setState(() => _agentState = null);
   }
 
+  /// Send a free-form answer typed in the options sheet. Same wire path as the
+  /// composer (trailing `\r` so the bridge submits it as a real Enter) and the
+  /// same optimistic echo, so a typed answer appears immediately whichever
+  /// surface it came from. Clears the card like picking an option does.
+  void _sendAnswer(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    setState(() {
+      _pending.add(trimmed);
+      _pinnedToBottom = true;
+      _agentState = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    _client?.sendText(widget.pane, '$trimmed\r').catchError((Object e) {
+      if (!mounted) return;
+      setState(() => _pending.remove(trimmed));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
+      );
+    });
+  }
+
   /// Fire a quick command: a keyed one sends its raw keystroke (e.g. Esc to
   /// interrupt); a text one submits like a composer message (a trailing `\n`
   /// so the bridge turns it into a real Enter, same as the composer itself).
@@ -299,6 +321,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           contextLine: _approvalContext(),
           onApprove: _approveDefault,
           onOption: _handleOption,
+          onFreeText: _sendAnswer,
         );
       }
     }
@@ -878,6 +901,7 @@ class _ApprovalCard extends StatelessWidget {
   const _ApprovalCard({
     required this.state,
     required this.options,
+    required this.onFreeText,
     required this.contextLine,
     required this.onApprove,
     required this.onOption,
@@ -885,6 +909,11 @@ class _ApprovalCard extends StatelessWidget {
 
   final AgentState state;
   final List<BlockedOption> options;
+
+  /// Sends a free-form answer typed in the options sheet. Needed because a menu
+  /// can itself offer "Other (type your answer)" — Hermes's clarify panel does —
+  /// so the sheet must reach the keyboard without the composer underneath it.
+  final void Function(String) onFreeText;
   final String? contextLine;
   final VoidCallback onApprove;
   final void Function(BlockedOption) onOption;
@@ -914,7 +943,6 @@ class _ApprovalCard extends StatelessWidget {
     final question = (state.blockedQuestion?.trim().isNotEmpty ?? false)
         ? state.blockedQuestion!.trim()
         : (state.headline.isNotEmpty ? state.headline : 'Approve?');
-    final hasSelected = options.any((o) => o.selected);
 
     return Container(
       width: double.infinity,
@@ -978,22 +1006,25 @@ class _ApprovalCard extends StatelessWidget {
           ],
           if (options.isNotEmpty) ...[
             const SizedBox(height: 10),
-            for (var i = 0; i < options.length; i++) ...[
-              if (i > 0) const SizedBox(height: 6),
-              _OptionRow(
-                option: options[i],
-                primary: options[i].selected || (!hasSelected && i == 0),
+            // The choices live in a sheet rather than inline. Inline, this card
+            // was unbounded in the body Column alongside the composer, so a
+            // prompt with several options plus an open keyboard overflowed the
+            // viewport (Hermes's clarify panel offers five). The sheet sizes and
+            // scrolls itself, so the card's height no longer depends on how many
+            // choices an agent happens to offer.
+            _OpenOptionsButton(
+              count: options.length,
+              danger: severity == BlockSeverity.danger,
+              onTap: () => showBlockedOptionsSheet(
+                context,
+                question: question,
+                options: options,
                 danger: severity == BlockSeverity.danger,
-                onTap: () {
-                  final o = options[i];
-                  if (o.selected) {
-                    onApprove();
-                  } else {
-                    onOption(o);
-                  }
-                },
+                onApprove: onApprove,
+                onOption: onOption,
+                onFreeText: onFreeText,
               ),
-            ],
+            ),
           ] else ...[
             const SizedBox(height: 6),
             Text(
@@ -1013,6 +1044,219 @@ class _ApprovalCard extends StatelessWidget {
 /// instead of crowding into a chip cloud of mismatched widths. The default
 /// (`primary`) is filled and accent-coloured with a check; every other choice
 /// is a plain outlined row, each fronted by a small badge — the number to
+/// The approval card's single action when the agent offered a menu: a full-width
+/// button that opens the choices in a sheet. It replaces the inline list so the
+/// card's height is fixed no matter how many options there are.
+class _OpenOptionsButton extends StatelessWidget {
+  const _OpenOptionsButton({
+    required this.count,
+    required this.danger,
+    required this.onTap,
+  });
+
+  final int count;
+  final bool danger;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = danger ? scheme.error : scheme.primary;
+    return Material(
+      color: accent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                count == 1 ? 'Choose 1 option' : 'Choose one of $count options',
+                style: TextStyle(
+                  color: danger ? scheme.onError : scheme.onPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.keyboard_arrow_up,
+                size: 18,
+                color: danger ? scheme.onError : scheme.onPrimary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Show a blocked agent's choices in a bottom sheet.
+///
+/// The sheet carries a text field as well as the option list. That is not a
+/// convenience: a menu can offer "Other (type your answer)" (Hermes's clarify
+/// panel does), and while the sheet is up it covers the screen's composer — so
+/// without its own input there would be no way to answer such a prompt at all.
+///
+/// It is `isScrollControlled` and padded by the keyboard inset, so opening the
+/// keyboard lifts the sheet instead of overflowing it; the option list scrolls
+/// within whatever height is left.
+Future<void> showBlockedOptionsSheet(
+  BuildContext context, {
+  required String question,
+  required List<BlockedOption> options,
+  required bool danger,
+  required VoidCallback onApprove,
+  required void Function(BlockedOption) onOption,
+  required void Function(String) onFreeText,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) => _BlockedOptionsSheet(
+      question: question,
+      options: options,
+      danger: danger,
+      onApprove: onApprove,
+      onOption: onOption,
+      onFreeText: onFreeText,
+    ),
+  );
+}
+
+class _BlockedOptionsSheet extends StatefulWidget {
+  const _BlockedOptionsSheet({
+    required this.question,
+    required this.options,
+    required this.danger,
+    required this.onApprove,
+    required this.onOption,
+    required this.onFreeText,
+  });
+
+  final String question;
+  final List<BlockedOption> options;
+  final bool danger;
+  final VoidCallback onApprove;
+  final void Function(BlockedOption) onOption;
+  final void Function(String) onFreeText;
+
+  @override
+  State<_BlockedOptionsSheet> createState() => _BlockedOptionsSheetState();
+}
+
+class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
+  final _answer = TextEditingController();
+
+  @override
+  void dispose() {
+    _answer.dispose();
+    super.dispose();
+  }
+
+  void _pick(BlockedOption o) {
+    Navigator.of(context).pop();
+    if (o.selected) {
+      widget.onApprove();
+    } else {
+      widget.onOption(o);
+    }
+  }
+
+  void _submitTyped() {
+    final text = _answer.text.trim();
+    if (text.isEmpty) return;
+    Navigator.of(context).pop();
+    widget.onFreeText(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasSelected = widget.options.any((o) => o.selected);
+    // Leave room for the drag handle and the sheet's own chrome; the list
+    // scrolls inside whatever remains once the keyboard has taken its share.
+    final maxListHeight = MediaQuery.sizeOf(context).height * 0.45;
+
+    return Padding(
+      // Lift the whole sheet above the keyboard rather than letting it overflow.
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.question,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxListHeight),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: widget.options.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) => _OptionRow(
+                    option: widget.options[i],
+                    primary:
+                        widget.options[i].selected || (!hasSelected && i == 0),
+                    danger: widget.danger,
+                    onTap: () => _pick(widget.options[i]),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // The free-text path — for "Other (type your answer)" and for any
+              // prompt where none of the offered choices is what you want.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _answer,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _submitTyped(),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: 'Or type your answer…',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    onPressed: _submitTyped,
+                    icon: const Icon(Icons.send),
+                    tooltip: 'Send answer',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// type, or the raw key name (e.g. "ESC") for a [BlockedOption.isKeyed] choice
 /// that has no menu number at all.
 class _OptionRow extends StatelessWidget {
