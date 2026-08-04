@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 import '../data/bridge/models/snapshot.dart';
@@ -47,6 +48,18 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       fontFamily: fontFamily,
+      // Android's default (Zoom: scale + cross-fade) looks broken on a slow
+      // back-swipe — both screens sit at partial opacity at once, so the
+      // outgoing one reads as "gone transparent" over the incoming one. A
+      // plain slide has no opacity blending at any drag position, so every
+      // frame of a slow or held gesture still looks correct. Applied on both
+      // platforms so the two behave identically.
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+        },
+      ),
       // Transparent so the app-wide backdrop gradient shows through.
       scaffoldBackgroundColor: Colors.transparent,
       appBarTheme: const AppBarTheme(
