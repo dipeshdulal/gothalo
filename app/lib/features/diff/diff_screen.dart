@@ -128,7 +128,7 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
       onRefresh: _load,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 2),
         itemCount: files.length,
         itemBuilder: (context, i) => _FileSection(file: files[i]),
       ),
@@ -137,8 +137,9 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
 }
 
 /// One changed file: a summary row (status, path, +/- counts) that expands to
-/// its unified diff. Collapsed by default — a tree with a dozen files
-/// shouldn't dump every diff on screen at once.
+/// its unified diff. **Expanded by default** — reviewing the diff *is* the
+/// point of this screen, so it shouldn't take an extra tap per file just to
+/// see what changed; collapse the ones you've already read instead.
 class _FileSection extends StatelessWidget {
   const _FileSection({required this.file});
   final DiffFile file;
@@ -162,7 +163,10 @@ class _FileSection extends StatelessWidget {
       // ListView's own spacing is enough.
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
+        initiallyExpanded: true,
+        visualDensity: VisualDensity.compact,
         tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        childrenPadding: EdgeInsets.zero,
         leading: Icon(icon, size: 20, color: color),
         title: Text(
           file.path,
@@ -243,8 +247,8 @@ class _DiffBody extends StatelessWidget {
     final lines = diff.split('\n');
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
         color: scheme.surface,
         borderRadius: BorderRadius.circular(10),
