@@ -9,6 +9,7 @@ import (
 
 	"github.com/dipeshdulal/gothalo/internal/agentstate"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
+	"github.com/dipeshdulal/gothalo/internal/transcript"
 )
 
 // GET /agent-state?pane=<pane_id> -> a compact, parsed, phone-readable state for
@@ -16,15 +17,23 @@ import (
 // of a full terminal the app gets one JSON struct (headline, detail, and — when
 // blocked — the question + choices, pairing with POST /approve).
 //
-// The bridge stays stateless: it reads the pane's status via `herdr agent get`
-// and its terminal text via `herdr agent read`, hands both to the per-kind parser
-// registry (claude today; codex/opencode next), and returns the common contract.
-// Parsing never 500s — an unrecognised agent kind degrades to Parsed=false with a
-// best-effort raw text dump. Same auth as every other endpoint.
+// The bridge stays stateless, and reads from two places by design:
 //
-// The card is built from the pane's CURRENT SCREEN. `?recent=1` additionally
-// reads scrollback for a richer Detail/Transcript, at the cost of scrolling the
-// operator's pane — see wantRecent.
+//   - The agent's own TRANSCRIPT (internal/transcript) supplies the history —
+//     headline, detail, and the recent lines. Structured, already parsed, not
+//     truncated by the viewport, and free of side effects.
+//   - The pane's CURRENT SCREEN (`herdr agent read --source detection`) supplies
+//     the blocked form. That one cannot come from a transcript: a permission or
+//     question prompt is UI the agent is drawing right now to ask you something,
+//     not conversation, so nothing records it.
+//
+// Terminal scraping is therefore confined to what only the screen knows. The
+// legacy scrollback source is still reachable with `?recent=1` for a kind with
+// no transcript reader, at the cost of scrolling the operator's pane — see
+// wantRecent.
+//
+// Parsing never 500s — an unrecognised agent kind degrades to Parsed=false with
+// a best-effort raw text dump. Same auth as every other endpoint.
 func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -50,11 +59,10 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The two text snapshots the parsers work from. detection is the live
-	// current-state view (best for the blocker form); recent-unwrapped is the
-	// unwrapped recent transcript (best for the last assistant message). A read
-	// failure here is non-fatal: we still return a state from whatever we have,
-	// so a momentary read hiccup degrades instead of erroring.
+	// The live current-state view — the only source for the blocked form, and the
+	// fallback for everything else when a kind has no transcript reader. A read
+	// failure here is non-fatal: we still return a state from whatever we have, so
+	// a momentary hiccup degrades instead of erroring.
 	detection, derr := c.ReadText(bare, "detection", 0)
 	if derr != nil {
 		log.Warn("agent-state: detection read failed", "pane", pane, "err", derr)
@@ -83,6 +91,7 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		Title:     agent.Title,
 		Detection: detection,
 		Recent:    recent,
+		History:   agentHistory(agent, pane),
 	})
 
 	// Enrich a block with Herdr's own detection category (agent.explain): the
@@ -101,6 +110,46 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, state)
+}
+
+// agentHistoryEntries is how many recent transcript entries the card reads. Big
+// enough that the last assistant message is in there even after a long run of
+// tool calls, small enough to stay a cheap read on every poll.
+const agentHistoryEntries = 40
+
+// agentHistory reads the tail of the agent's own transcript for the card.
+//
+// This is the structured alternative to scraping the terminal: already parsed,
+// immune to frame furniture, not truncated by the viewport, and — unlike the
+// scrollback read it replaces — with no effect on the operator's screen.
+//
+// Best-effort by design. A kind with no reader, an unresolvable session, or a
+// read error all yield nil, and the parser's terminal-derived values stand. The
+// card must never fail because a transcript is missing.
+func agentHistory(agent herdr.Agent, pane string) []agentstate.HistoryEntry {
+	src, err := transcript.Open(agent.Kind, agent.Cwd, agent.SessionID())
+	if err != nil {
+		// Unsupported kind / no transcript yet is the normal case for some agents,
+		// so this is debug-level noise, not a warning.
+		return nil
+	}
+	defer src.Close()
+
+	backlog, err := src.Backlog(agentHistoryEntries)
+	if err != nil {
+		log.Warn("agent-state: history read failed", "pane", pane, "kind", agent.Kind, "err", err)
+		return nil
+	}
+
+	out := make([]agentstate.HistoryEntry, 0, len(backlog.Entries))
+	for _, e := range backlog.Entries {
+		h := agentstate.HistoryEntry{Role: e.Role, Kind: e.Kind, Text: e.Text}
+		if e.Tool != nil {
+			h.Tool = e.Tool.Name
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // wantRecent reports whether this request wants the scrollback-backed
