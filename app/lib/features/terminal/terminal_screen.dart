@@ -18,6 +18,7 @@ import '../../data/bridge/models/snapshot.dart';
 import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../transcript/quick_commands_providers.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
 /// [closed] is terminal: the pane no longer exists (closed on the host or the
@@ -214,6 +215,35 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     channel.sink.add(Uint8List.fromList(utf8.encode(out)));
   }
 
+  /// Fire a [QuickCommand] into the raw PTY. A text command is typed and
+  /// submitted (a trailing CR — what a terminal Enter sends); a keyed command
+  /// (e.g. "esc" to interrupt) becomes its control byte. Unlike the transcript,
+  /// which routes these over the bridge's /send, here they're just raw bytes on
+  /// the same channel as the keyboard.
+  void _handleQuickCommand(QuickCommand cmd) {
+    if (cmd.key != null) {
+      _send(_keyBytes(cmd.key!));
+    } else {
+      _send('${cmd.text}\r');
+    }
+  }
+
+  /// Maps a quick command's key name to the bytes a terminal expects. Falls
+  /// back to sending the name literally so a typo just types instead of doing
+  /// nothing.
+  String _keyBytes(String key) => switch (key.toLowerCase().trim()) {
+    'esc' || 'escape' => '\x1b',
+    'enter' || 'return' => '\r',
+    'tab' => '\t',
+    'up' => '\x1b[A',
+    'down' => '\x1b[B',
+    'left' => '\x1b[D',
+    'right' => '\x1b[C',
+    'ctrl+c' || '^c' => '\x03',
+    'ctrl+d' || '^d' => '\x04',
+    _ => key,
+  };
+
   /// Sends the terminal geometry to the bridge as a **text** control frame
   /// (`{"type":"resize","cols":C,"rows":R}`) — distinct from the binary PTY
   /// byte stream. The bridge resizes the remote PTY so line-editing redraws
@@ -369,12 +399,17 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             ),
           ),
           // No point typing into a pane that no longer exists.
-          if (_conn != _Conn.closed)
+          if (_conn != _Conn.closed) ...[
+            // Reusable snippets/keystrokes (Interrupt + your custom ones),
+            // the same shared list as the transcript composer — sent here as
+            // raw PTY bytes.
+            QuickCommandsBar(onCommand: _handleQuickCommand),
             _AccessoryKeyRow(
               stickyCtrl: _stickyCtrl,
               onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
               onKey: _send,
             ),
+          ],
         ],
       ),
     );
