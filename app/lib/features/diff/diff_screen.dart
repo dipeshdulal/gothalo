@@ -269,6 +269,19 @@ class _CountBadge extends StatelessWidget {
 /// The unified diff itself — one line per row, colored by prefix, in a
 /// horizontally scrollable monospace block so long source lines don't wrap
 /// into an unreadable staircase.
+///
+/// Layout notes, both learned the hard way on-device:
+/// - The per-line background must span the full (scrollable) width so a `+`/`-`
+///   line highlights edge-to-edge, but the old `width: double.infinity` on each
+///   line lived inside a horizontally-scrolling viewport — i.e. an UNBOUNDED
+///   width — which is illegal. `IntrinsicWidth` gives the column the width of
+///   its widest line (a real, bounded number); `CrossAxisAlignment.stretch`
+///   then stretches every line to that width. Same visual, valid constraints.
+/// - Wrapped in `ExcludeSemantics`: a real Flutter framework bug
+///   (`!semantics.parentDataDirty`) fires every frame for this scrollable and
+///   blanks the whole screen. The diff is monospace code with no meaningful
+///   accessibility semantics to lose, so dropping it from the semantics tree
+///   sidesteps the bug cleanly.
 class _DiffBody extends StatelessWidget {
   const _DiffBody({required this.diff});
   final String diff;
@@ -280,19 +293,26 @@ class _DiffBody extends StatelessWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: scheme.surface,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final line in lines) _DiffLine(line: line),
-          ],
+      child: ExcludeSemantics(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: IntrinsicWidth(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final line in lines) _DiffLine(line: line),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -323,8 +343,9 @@ class _DiffLine extends StatelessWidget {
         (null, scheme.onSurfaceVariant),
       _ => (null, scheme.onSurface),
     };
+    // No width here — CrossAxisAlignment.stretch on the parent Column (sized by
+    // IntrinsicWidth) makes every line fill the widest line's width.
     return Container(
-      width: double.infinity,
       color: bg,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 1),
       child: Text(
