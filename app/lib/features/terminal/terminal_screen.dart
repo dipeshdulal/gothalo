@@ -11,6 +11,7 @@ import 'package:xterm/xterm.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -254,14 +255,25 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
 
     // The agent behind this pane, for the app-bar approve affordance.
-    final agents =
-        ref.watch(snapshotControllerProvider).asData?.value.agents ??
-        const <Agent>[];
+    final snap = ref.watch(snapshotControllerProvider).asData?.value;
+    final agents = snap?.agents ?? const <Agent>[];
     Agent? agent;
     for (final a in agents) {
       if (a.paneId == widget.pane) {
         agent = a;
         break;
+      }
+    }
+    // A non-agent pane (plain shell, dev server, log) isn't in [agents] at
+    // all — fall back to the flat pane list for its location, so the title
+    // subtitle still has something to show.
+    Pane? pane;
+    if (agent == null) {
+      for (final p in snap?.panes ?? const <Pane>[]) {
+        if (p.paneId == widget.pane) {
+          pane = p;
+          break;
+        }
       }
     }
     // Non-null (and final) only when this pane's agent is blocked — safe to
@@ -272,7 +284,28 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(agent?.displayTitle ?? widget.pane),
+        titleSpacing: 12,
+        title: PaneTitle(
+          title: agent?.displayTitle ?? widget.pane,
+          subtitle: agent != null
+              ? [
+                  agent.gitLabel,
+                  agent.agent,
+                ].where((s) => s.isNotEmpty).join(' · ')
+              : (pane?.locationLabel ?? ''),
+          connLabel: switch (_conn) {
+            _Conn.connected => 'Live',
+            _Conn.connecting => 'Connecting…',
+            _Conn.disconnected => 'Reconnecting…',
+            _Conn.closed => 'Closed',
+          },
+          connColor: switch (_conn) {
+            _Conn.connected => scheme.primary,
+            _Conn.connecting => scheme.onSurfaceVariant,
+            _Conn.disconnected => scheme.error,
+            _Conn.closed => scheme.onSurfaceVariant,
+          },
+        ),
         actions: [
           IconButton(
             tooltip: 'Jump to an agent',
@@ -299,29 +332,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             tooltip: 'Overview',
             onPressed: () => context.push('/overview'),
             icon: const Icon(Icons.grid_view_outlined),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12, left: 4),
-            child: Tooltip(
-              message: switch (_conn) {
-                _Conn.connected => 'Live',
-                _Conn.connecting => 'Connecting…',
-                _Conn.disconnected => 'Reconnecting…',
-                _Conn.closed => 'Closed',
-              },
-              child: Icon(
-                _conn == _Conn.connected
-                    ? Icons.circle
-                    : Icons.circle_outlined,
-                size: 12,
-                color: switch (_conn) {
-                  _Conn.connected => scheme.primary,
-                  _Conn.connecting => scheme.onSurfaceVariant,
-                  _Conn.disconnected => scheme.error,
-                  _Conn.closed => scheme.onSurfaceVariant,
-                },
-              ),
-            ),
           ),
         ],
       ),

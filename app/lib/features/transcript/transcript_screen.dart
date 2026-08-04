@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -592,7 +593,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 12,
-        title: _TranscriptTitle(
+        title: PaneTitle(
           title: agent?.displayTitle ?? widget.pane,
           subtitle: [
             if (agent != null) agent.gitLabel,
@@ -1103,56 +1104,6 @@ class _CategoryPill extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// The app bar's title: the agent's headline title, plus a small muted
-/// subtitle line (git context + agent kind) and a live-connection dot+label —
-/// context that used to need a tooltip hover to discover, now just readable
-/// at a glance in the freed-up header space.
-class _TranscriptTitle extends StatelessWidget {
-  const _TranscriptTitle({
-    required this.title,
-    required this.subtitle,
-    required this.connLabel,
-    required this.connColor,
-  });
-
-  final String title;
-  final String subtitle;
-  final String connLabel;
-  final Color connColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.circle, size: 8, color: connColor),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                subtitle.isEmpty ? connLabel : '$subtitle · $connLabel',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 }
