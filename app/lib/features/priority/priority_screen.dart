@@ -160,8 +160,12 @@ class _AgentRow extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
-          if (agent.agentStatus == AgentStatus.working && client != null)
-            LiveActivityLine(paneId: agent.paneId, client: client),
+          if (client != null)
+            LiveActivityLine(
+              paneId: agent.paneId,
+              status: agent.agentStatus,
+              client: client,
+            ),
         ],
       ),
       trailing: Row(

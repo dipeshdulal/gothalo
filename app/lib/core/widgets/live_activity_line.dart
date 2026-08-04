@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
+import '../../data/bridge/models/snapshot.dart';
 
 /// A one-line "what's it doing right now" under a working agent's tile —
 /// Vercel's live build-step pattern applied to agents (see
@@ -15,15 +16,38 @@ import '../../data/bridge/bridge_providers.dart';
 /// need a bridge change (the "quick win" version of the idea, not the
 /// `/snapshot`-carries-it "medium" version).
 ///
-/// Callers should only mount this for a **working** agent — polling an idle
-/// one would burn a request for a line that never changes. It disappears
-/// (renders nothing) until the first successful poll, and again if a poll
-/// ever comes back with nothing to show, rather than holding a stale line
-/// after the agent moves on.
+/// Mount it for **any** agent. What it shows, and how hard it works to keep it
+/// fresh, both follow [status]:
+///
+/// | status | line | refresh |
+/// |---|---|---|
+/// | working | what it's doing right now | every [_pollEvery] |
+/// | blocked | the question it's waiting on | once |
+/// | idle / done | the last thing it said | once |
+///
+/// The one-shot cases matter: a settled agent's line does not change, so a
+/// timer would burn a request per tile for nothing. It re-fetches when [status]
+/// changes, which is exactly when the line becomes stale.
+///
+/// This used to be working-only, because the line came from a scrollback read
+/// that scrolled the operator's pane and cost a herdr round-trip. It is now
+/// served from the agent's own transcript, so showing it everywhere is cheap.
+///
+/// It renders nothing until the first successful fetch, and again if a fetch
+/// comes back empty, rather than holding a stale line after the agent moves on.
 class LiveActivityLine extends ConsumerStatefulWidget {
-  const LiveActivityLine({super.key, required this.paneId, this.client});
+  const LiveActivityLine({
+    super.key,
+    required this.paneId,
+    required this.status,
+    this.client,
+  });
 
   final String paneId;
+
+  /// The agent's current status, from the snapshot. Drives both what the line
+  /// shows and whether it polls; a change re-fetches.
+  final AgentStatus status;
 
   /// The client to poll with. Omit to use the active server's
   /// [bridgeClientProvider] (the common case — inbox tiles are always the
@@ -49,13 +73,47 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
   void initState() {
     super.initState();
     _poll();
-    _timer = Timer.periodic(_pollEvery, (_) => _poll());
+    _syncTimer();
+  }
+
+  @override
+  void didUpdateWidget(LiveActivityLine old) {
+    super.didUpdateWidget(old);
+    // A status change is precisely when a settled agent's line goes stale — it
+    // just said something new, or started/stopped working. Re-fetch and re-arm.
+    if (old.status != widget.status || old.paneId != widget.paneId) {
+      _poll();
+      _syncTimer();
+    }
+  }
+
+  /// Only a working agent needs a repeating poll; every other state produces a
+  /// line that cannot change until the status itself does.
+  void _syncTimer() {
+    _timer?.cancel();
+    _timer = null;
+    if (widget.status == AgentStatus.working) {
+      _timer = Timer.periodic(_pollEvery, (_) => _poll());
+    }
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  /// The line for the current status: a blocked agent's question is what you
+  /// need to see, and for everything else the newest prose — which is the
+  /// current activity while working, and the last reply once settled.
+  String _lineFor(AgentState state) {
+    if (state.isBlocked) {
+      final q = state.blockedQuestion?.trim() ?? '';
+      if (q.isNotEmpty) return q;
+    }
+    final detail = state.detail.trim();
+    final firstLine = detail.isNotEmpty ? detail.split('\n').first.trim() : '';
+    return firstLine.isNotEmpty ? firstLine : state.headline.trim();
   }
 
   Future<void> _poll() async {
@@ -69,10 +127,7 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
       // across a whole list of working agents.
       final state = await client.getAgentState(widget.paneId);
       if (!mounted) return;
-      final detail = state.detail.trim();
-      final firstLine =
-          detail.isNotEmpty ? detail.split('\n').first.trim() : '';
-      final line = firstLine.isNotEmpty ? firstLine : state.headline.trim();
+      final line = _lineFor(state);
       setState(() => _line = line.isEmpty ? null : line);
     } on BridgeException {
       // Best-effort — a transient failure just leaves the last known line
