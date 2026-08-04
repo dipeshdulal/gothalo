@@ -214,13 +214,23 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     final channel = _channel;
     if (channel == null || _conn != _Conn.connected) return;
 
+    if (data.isEmpty) return; // IMEs emit empty callbacks; nothing to send
+
     var out = data;
-    if (_stickyCtrl && data.isNotEmpty) {
+    // Spend the modifier only on a PRINTABLE key. An Android IME emits spurious
+    // input when its composing region resets — an empty callback, then a
+    // backspace — and a sticky Ctrl that any byte could consume was being eaten
+    // by that backspace (0x7f & 0x1f = 0x1f) before the letter you actually
+    // pressed arrived, which then went out as a bare letter. Observed live.
+    if (_stickyCtrl && _isPrintable(data.codeUnitAt(0))) {
       out = String.fromCharCode(data.codeUnitAt(0) & 0x1f) + data.substring(1);
       setState(() => _stickyCtrl = false);
     }
     channel.sink.add(Uint8List.fromList(utf8.encode(out)));
   }
+
+  /// Printable ASCII — the only bytes a sticky Ctrl should be spent on.
+  static bool _isPrintable(int c) => c >= 0x20 && c < 0x7f;
 
   /// Fire a [QuickCommand] into the raw PTY. A text command is typed and
   /// submitted (a trailing CR — what a terminal Enter sends); a keyed command
