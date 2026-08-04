@@ -30,91 +30,102 @@ class InboxScreen extends ConsumerWidget {
     return AppBackground(
       asset: Backgrounds.flock,
       child: DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            tooltip: 'Servers',
-            onPressed: () => context.go('/'),
-            icon: const Icon(Icons.dns_outlined),
-          ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Flock'),
-              if (connection != null)
-                Text(
-                  connection.name,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+        length: 2,
+        child: Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              tooltip: 'Servers',
+              onPressed: () => context.go('/'),
+              icon: const Icon(Icons.dns_outlined),
+            ),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Flock'),
+                if (connection != null)
+                  Text(
+                    connection.name,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
+              ],
+            ),
+            actions: [
+              IconButton(
+                tooltip: 'Jump to an agent',
+                onPressed: () => showJumpSheet(context),
+                icon: const Icon(Icons.bolt),
+              ),
+              IconButton(
+                tooltip: 'Alerts',
+                onPressed: () => context.push('/alerts'),
+                icon: Badge(
+                  isLabelVisible:
+                      (ref.watch(unreadAlertsProvider).asData?.value ?? 0) > 0,
+                  label: Text(
+                    '${ref.watch(unreadAlertsProvider).asData?.value ?? 0}',
+                  ),
+                  child: const Icon(Icons.notifications_none),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Overview',
+                onPressed: () => context.push('/overview'),
+                icon: const Icon(Icons.dashboard_outlined),
+              ),
+              IconButton(
+                tooltip: 'Refresh',
+                onPressed: () =>
+                    ref.read(snapshotControllerProvider.notifier).refresh(),
+                icon: const Icon(Icons.refresh),
+              ),
+              if (connection != null)
+                IconButton(
+                  tooltip: 'Edit this server',
+                  onPressed: () =>
+                      context.push('/servers/${connection.id}/edit'),
+                  icon: const Icon(Icons.settings_outlined),
                 ),
             ],
+            bottom: TabBar(
+              tabs: [
+                Tab(
+                  text:
+                      'Agents${_countSuffix(snapshot, (s) => s.agents.length)}',
+                ),
+                Tab(
+                  text:
+                      'Spaces${_countSuffix(snapshot, (s) => s.workspaces.length)}',
+                ),
+              ],
+            ),
           ),
-          actions: [
-            IconButton(
-              tooltip: 'Jump to an agent',
-              onPressed: () => showJumpSheet(context),
-              icon: const Icon(Icons.bolt),
+          body: snapshot.when(
+            skipLoadingOnRefresh: true,
+            skipLoadingOnReload: true,
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (err, _) => _ErrorState(error: err),
+            data: (snap) => TabBarView(
+              children: [
+                _Refreshable(
+                  ref: ref,
+                  child: _AgentsTab(snap: snap),
+                ),
+                _Refreshable(
+                  ref: ref,
+                  child: _SpacesTab(snap: snap),
+                ),
+              ],
             ),
-            IconButton(
-              tooltip: 'Alerts',
-              onPressed: () => context.push('/alerts'),
-              icon: Badge(
-                isLabelVisible:
-                    (ref.watch(unreadAlertsProvider).asData?.value ?? 0) > 0,
-                label: Text('${ref.watch(unreadAlertsProvider).asData?.value ?? 0}'),
-                child: const Icon(Icons.notifications_none),
-              ),
-            ),
-            IconButton(
-              tooltip: 'Overview',
-              onPressed: () => context.push('/overview'),
-              icon: const Icon(Icons.dashboard_outlined),
-            ),
-            IconButton(
-              tooltip: 'Refresh',
-              onPressed: () =>
-                  ref.read(snapshotControllerProvider.notifier).refresh(),
-              icon: const Icon(Icons.refresh),
-            ),
-            if (connection != null)
-              IconButton(
-                tooltip: 'Edit this server',
-                onPressed: () =>
-                    context.push('/servers/${connection.id}/edit'),
-                icon: const Icon(Icons.settings_outlined),
-              ),
-          ],
-          bottom: TabBar(
-            tabs: [
-              Tab(text: 'Agents${_countSuffix(snapshot, (s) => s.agents.length)}'),
-              Tab(text: 'Spaces${_countSuffix(snapshot, (s) => s.workspaces.length)}'),
-            ],
           ),
         ),
-        body: snapshot.when(
-          skipLoadingOnRefresh: true,
-          skipLoadingOnReload: true,
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (err, _) => _ErrorState(error: err),
-          data: (snap) => TabBarView(
-            children: [
-              _Refreshable(ref: ref, child: _AgentsTab(snap: snap)),
-              _Refreshable(ref: ref, child: _SpacesTab(snap: snap)),
-            ],
-          ),
-        ),
-      ),
       ),
     );
   }
 
-  String _countSuffix(
-    AsyncValue<Snapshot> snap,
-    int Function(Snapshot) count,
-  ) {
+  String _countSuffix(AsyncValue<Snapshot> snap, int Function(Snapshot) count) {
     final s = snap.asData?.value;
     return s == null ? '' : '  ${count(s)}';
   }
@@ -172,15 +183,16 @@ class _SpacesTab extends StatelessWidget {
     ({String project, String? worktree}) git(WorkspaceInfo w) =>
         gitContextForCwd(cwdByWs[w.workspaceId] ?? '');
 
-    final spaces = [...snap.workspaces]..sort((a, b) {
-      final ca = git(a), cb = git(b);
-      final p = ca.project.toLowerCase().compareTo(cb.project.toLowerCase());
-      if (p != 0) return p;
-      final wa = ca.worktree == null ? 0 : 1;
-      final wb = cb.worktree == null ? 0 : 1;
-      if (wa != wb) return wa - wb; // main checkout before its worktrees
-      return a.number.compareTo(b.number);
-    });
+    final spaces = [...snap.workspaces]
+      ..sort((a, b) {
+        final ca = git(a), cb = git(b);
+        final p = ca.project.toLowerCase().compareTo(cb.project.toLowerCase());
+        if (p != 0) return p;
+        final wa = ca.worktree == null ? 0 : 1;
+        final wb = cb.worktree == null ? 0 : 1;
+        if (wa != wb) return wa - wb; // main checkout before its worktrees
+        return a.number.compareTo(b.number);
+      });
 
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -207,16 +219,17 @@ class _SpaceTile extends StatelessWidget {
     final label = isWt
         ? git.worktree!
         : (space.label.isNotEmpty
-            ? space.label
-            : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
+              ? space.label
+              : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
     final blocked = space.agentStatus == AgentStatus.blocked;
     return ListTile(
-      onTap: () => context
-          .push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
+      onTap: () =>
+          context.push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
       contentPadding: EdgeInsets.only(left: isWt ? 32 : 16, right: 16),
       leading: CircleAvatar(
-        backgroundColor:
-            space.focused ? scheme.primary : scheme.surfaceContainerHighest,
+        backgroundColor: space.focused
+            ? scheme.primary
+            : scheme.surfaceContainerHighest,
         child: Icon(
           isWt ? Icons.call_split : Icons.workspaces_outline,
           color: space.focused
@@ -243,8 +256,10 @@ class _SpaceTile extends StatelessWidget {
             Container(
               width: 8,
               height: 8,
-              decoration:
-                  BoxDecoration(color: scheme.error, shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                color: scheme.error,
+                shape: BoxShape.circle,
+              ),
             ),
           ],
         ],
@@ -277,88 +292,97 @@ class _AgentTile extends ConsumerWidget {
           context.push('/transcript/${Uri.encodeComponent(agent.paneId)}'),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AgentAvatar(agent: agent.agent),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // The task itself — the star of the row. Up to two lines so
-                  // long Herdr titles stay readable instead of hard-truncating.
-                  Text(
-                    agent.displayTitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                      height: 1.25,
-                    ),
-                  ),
-                  // Project folder + branch/worktree (teal) each on their own
-                  // full-width line so long names ellipsize instead of
-                  // overflowing. Internal ids (pane, workspace) are not shown —
-                  // the pane id is still used under the hood for navigation.
-                  if (showFolder) ...[
-                    const SizedBox(height: 6),
-                    _GitLine(
-                      icon: Icons.folder_outlined,
-                      text: agent.gitContext.project,
-                      color: dim,
-                    ),
-                  ],
-                  if (isWt) ...[
-                    SizedBox(height: showFolder ? 3 : 6),
-                    _GitLine(
-                      icon: Icons.call_split,
-                      text: agent.gitContext.worktree ?? '',
-                      color: scheme.primary,
-                      bold: true,
-                    ),
-                  ],
-                  // Which Herdr session hosts this agent; the default session
-                  // is implied and not shown.
-                  if (!agent.isDefaultSession) ...[
-                    SizedBox(height: (showFolder || isWt) ? 3 : 6),
-                    _GitLine(
-                      icon: Icons.layers_outlined,
-                      text: agent.sessionName,
-                      color: dim,
-                    ),
-                  ],
-                  // "What's it doing right now" — only for a working agent;
-                  // an idle/blocked/done one has nothing that changes to poll
-                  // for.
-                  if (agent.agentStatus == AgentStatus.working)
-                    LiveActivityLine(paneId: agent.paneId),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 2),
-                StatusBadge(agent.agentStatus),
-                // One-tap approve for a blocked agent (D7/D8). The bridge picks
-                // the confirm keystroke and no-ops a stale tap.
-                if (agent.agentStatus == AgentStatus.blocked) ...[
-                  const SizedBox(height: 8),
-                  FilledButton.tonal(
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      minimumSize: const Size(0, 32),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    onPressed: () => approveAgent(context, ref, agent),
-                    child: const Text('Approve'),
+                AgentAvatar(agent: agent.agent),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // The task itself — the star of the row. Up to two lines so
+                      // long Herdr titles stay readable instead of hard-truncating.
+                      Text(
+                        agent.displayTitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          height: 1.25,
+                        ),
+                      ),
+                      // Project folder + branch/worktree (teal) each on their own
+                      // full-width line so long names ellipsize instead of
+                      // overflowing. Internal ids (pane, workspace) are not shown —
+                      // the pane id is still used under the hood for navigation.
+                      if (showFolder) ...[
+                        const SizedBox(height: 6),
+                        _GitLine(
+                          icon: Icons.folder_outlined,
+                          text: agent.gitContext.project,
+                          color: dim,
+                        ),
+                      ],
+                      if (isWt) ...[
+                        SizedBox(height: showFolder ? 3 : 6),
+                        _GitLine(
+                          icon: Icons.call_split,
+                          text: agent.gitContext.worktree ?? '',
+                          color: scheme.primary,
+                          bold: true,
+                        ),
+                      ],
+                      // Which Herdr session hosts this agent; the default session
+                      // is implied and not shown.
+                      if (!agent.isDefaultSession) ...[
+                        SizedBox(height: (showFolder || isWt) ? 3 : 6),
+                        _GitLine(
+                          icon: Icons.layers_outlined,
+                          text: agent.sessionName,
+                          color: dim,
+                        ),
+                      ],
+                    ],
                   ),
-                ],
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const SizedBox(height: 2),
+                    StatusBadge(agent.agentStatus),
+                    // One-tap approve for a blocked agent (D7/D8). The bridge picks
+                    // the confirm keystroke and no-ops a stale tap.
+                    if (agent.agentStatus == AgentStatus.blocked) ...[
+                      const SizedBox(height: 8),
+                      FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          minimumSize: const Size(0, 32),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onPressed: () => approveAgent(context, ref, agent),
+                        child: const Text('Approve'),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
+            // "What's it doing right now" — only for a working agent; an
+            // idle/blocked/done one has nothing that changes to poll for.
+            // Full row width (below the status column, not squeezed beside
+            // it) — a status badge can be wide enough to truncate an
+            // already-short activity line down to nothing useful.
+            if (agent.agentStatus == AgentStatus.working) ...[
+              const SizedBox(height: 6),
+              LiveActivityLine(paneId: agent.paneId),
+            ],
           ],
         ),
       ),
@@ -419,16 +443,18 @@ class _EmptyState extends StatelessWidget {
         Icon(Icons.inbox_outlined, size: 56, color: scheme.onSurfaceVariant),
         const SizedBox(height: 12),
         Center(
-          child: Text('No agents right now',
-              style: Theme.of(context).textTheme.titleMedium),
+          child: Text(
+            'No agents right now',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
         ),
         const SizedBox(height: 4),
         Center(
           child: Text(
             'Start an agent in Herdr, then pull to refresh.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ),
       ],
@@ -444,7 +470,9 @@ class _ErrorState extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final bridgeErr = error is BridgeException ? error as BridgeException : null;
+    final bridgeErr = error is BridgeException
+        ? error as BridgeException
+        : null;
     final isDown = bridgeErr?.isBridgeDown ?? false;
     final isAuth = bridgeErr?.isAuth ?? false;
 
@@ -464,8 +492,8 @@ class _ErrorState extends ConsumerWidget {
             isDown
                 ? 'Bridge unreachable'
                 : isAuth
-                    ? 'Not authorized'
-                    : 'Couldn\'t load the flock',
+                ? 'Not authorized'
+                : 'Couldn\'t load the flock',
             style: Theme.of(context).textTheme.titleMedium,
             textAlign: TextAlign.center,
           ),
@@ -474,9 +502,9 @@ class _ErrorState extends ConsumerWidget {
         Center(
           child: Text(
             bridgeErr?.message ?? error.toString(),
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             textAlign: TextAlign.center,
           ),
         ),
