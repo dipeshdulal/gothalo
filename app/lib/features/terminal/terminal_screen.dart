@@ -201,15 +201,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   }
 
   /// Sends [data] to the PTY stdin as a **binary** frame. Applies sticky-Ctrl
-  /// (D6) to a single character: letter & 0x1f collapses the whole Ctrl-combo
-  /// space into one toggle.
+  /// (D6) to the next character typed: `letter & 0x1f` collapses the whole
+  /// Ctrl-combo space into one toggle.
+  ///
+  /// The modifier is applied to the FIRST character and the rest is passed
+  /// through, rather than requiring the whole payload to be one character. An
+  /// Android IME does not always deliver a keypress alone — prediction and
+  /// autocorrect can batch several characters into one callback — and the old
+  /// exact-length check silently dropped the modifier when that happened,
+  /// sending a bare letter instead of a control byte.
   void _send(String data) {
     final channel = _channel;
     if (channel == null || _conn != _Conn.connected) return;
 
     var out = data;
-    if (_stickyCtrl && data.length == 1) {
-      out = String.fromCharCode(data.codeUnitAt(0) & 0x1f);
+    if (_stickyCtrl && data.isNotEmpty) {
+      out = String.fromCharCode(data.codeUnitAt(0) & 0x1f) + data.substring(1);
       setState(() => _stickyCtrl = false);
     }
     channel.sink.add(Uint8List.fromList(utf8.encode(out)));
@@ -377,6 +384,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 Positioned.fill(
                   child: TerminalView(
                     terminal,
+                    // Take focus on open so the keyboard has somewhere to type
+                    // without a tap first, and so the accessory row's sticky
+                    // Ctrl has a focused terminal to modify.
+                    autofocus: true,
                     theme: TerminalThemes.defaultTheme,
                     textStyle: const TerminalStyle(
                       fontFamily: AppTheme.monoFamily,
@@ -547,6 +558,13 @@ class _Key extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
+          // An accessory key must never take focus from the terminal it serves.
+          // InkWell is focusable by default, so tapping one moved focus off the
+          // TerminalView — and xterm only routes keyboard input while that view
+          // has focus. The one-shot keys still worked (they send their bytes on
+          // tap), but sticky Ctrl silently broke: the chip lit up, then the
+          // letter you pressed next went nowhere.
+          canRequestFocus: false,
           onTap: onTap,
           child: Container(
             constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
