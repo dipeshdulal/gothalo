@@ -137,9 +137,9 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
 }
 
 /// One changed file: a summary row (status, path, +/- counts) that expands to
-/// its unified diff. **Expanded by default** — reviewing the diff *is* the
-/// point of this screen, so it shouldn't take an extra tap per file just to
-/// see what changed; collapse the ones you've already read instead.
+/// its unified diff. **Collapsed by default** — the file list is the overview
+/// (which files changed, how much, at a glance); tap a row to read the diff
+/// you care about, rather than scrolling past every diff at full length.
 ///
 /// Deliberately NOT [ExpansionTile]: `initiallyExpanded: true` on it triggers
 /// a Flutter framework bug — a `'!semantics.parentDataDirty'` assertion loop
@@ -157,7 +157,7 @@ class _FileSection extends StatefulWidget {
 }
 
 class _FileSectionState extends State<_FileSection> {
-  bool _expanded = true;
+  bool _expanded = false;
 
   (IconData, Color) _statusVisual(ColorScheme scheme) => switch (widget.file.status) {
         'added' => (Icons.add_circle_outline, const Color(0xFF00C853)),
