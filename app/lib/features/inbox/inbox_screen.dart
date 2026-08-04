@@ -382,14 +382,14 @@ class _AgentTile extends ConsumerWidget {
             // than running back under the avatar — the avatar column is the
             // row's visual gutter, so this reads as "part of this agent" only
             // when it aligns with the agent's text, not the artwork.
-            if (agent.agentStatus == AgentStatus.working) ...[
-              const SizedBox(height: 6),
+            // No extra top gap here — LiveActivityLine carries its own small
+            // top padding, so a SizedBox on top of that just double-spaced it.
+            if (agent.agentStatus == AgentStatus.working)
               Padding(
                 // avatar diameter (radius 20 * 2) + the 12px gap to the title.
                 padding: const EdgeInsets.only(left: 52),
                 child: LiveActivityLine(paneId: agent.paneId),
               ),
-            ],
           ],
         ),
       ),
