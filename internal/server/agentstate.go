@@ -55,6 +55,13 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		log.Warn("agent-state: detection read failed", "pane", pane, "err", derr)
 	}
 	recent, rerr := c.ReadText(bare, "recent-unwrapped", 80)
+	if errors.Is(rerr, herdr.ErrAgentNotIdle) {
+		// Expected on a working pane: the unwrapped transcript comes from
+		// scrollback, which Herdr will only capture while the agent is idle. Take
+		// its hint and fall back to the visible frame — a thinner but live view —
+		// instead of polling out a warning per request for the whole turn.
+		recent, rerr = c.ReadText(bare, "visible", 80)
+	}
 	if rerr != nil {
 		log.Warn("agent-state: recent read failed", "pane", pane, "err", rerr)
 	}
