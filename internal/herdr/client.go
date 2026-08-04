@@ -18,6 +18,13 @@ import (
 // on a zero exit code, so callers can map it to a 404 rather than a 502.
 var ErrAgentNotFound = errors.New("agent not found")
 
+// ErrAgentNotIdle is returned by ReadText when the requested source needs
+// scrollback (e.g. "recent-unwrapped") but the agent is mid-turn: Herdr can only
+// capture an alternate-screen pane's history by scrolling it while idle. Herdr's
+// own hint is to retry or fall back to --source visible, so callers get a
+// sentinel to branch on rather than an opaque error.
+var ErrAgentNotIdle = errors.New("agent not idle")
+
 // Client talks to the local herdr CLI, scoped to one Herdr session.
 type Client struct {
 	bin     string
@@ -134,14 +141,18 @@ type herdrError struct {
 }
 
 // asAgentError maps a herdr error payload to a Go error: ErrAgentNotFound for a
-// missing target, a generic error for anything else, or nil when there is no
-// error object. Herdr returns exit 0 even for these, so run() won't have caught
-// them — every command that can fail this way must check the body.
+// missing target, ErrAgentNotIdle for a scrollback read on a working pane, a
+// generic error for anything else, or nil when there is no error object. Herdr
+// returns exit 0 even for these, so run() won't have caught them — every command
+// that can fail this way must check the body.
 func asAgentError(out []byte) error {
 	var e herdrError
 	if json.Unmarshal(out, &e) == nil && e.Error != nil {
-		if e.Error.Code == "agent_not_found" {
+		switch e.Error.Code {
+		case "agent_not_found":
 			return ErrAgentNotFound
+		case "agent_not_idle":
+			return ErrAgentNotIdle
 		}
 		return fmt.Errorf("herdr: %s: %s", e.Error.Code, e.Error.Message)
 	}
@@ -175,7 +186,8 @@ func (c *Client) Get(pane string) (Agent, error) {
 // source (`herdr agent read <pane> --source <source> --format text`). Sources of
 // interest: "detection" (the parsed current-state view) and "recent-unwrapped"
 // (recent transcript, unwrapped). lines caps the snapshot when > 0. Herdr strips
-// ANSI for --format text. Returns ErrAgentNotFound when the pane has no agent.
+// ANSI for --format text. Returns ErrAgentNotFound when the pane has no agent,
+// and ErrAgentNotIdle when a scrollback source is asked of a working pane.
 func (c *Client) ReadText(pane, source string, lines int) (string, error) {
 	args := []string{"agent", "read", pane, "--source", source, "--format", "text"}
 	if lines > 0 {
