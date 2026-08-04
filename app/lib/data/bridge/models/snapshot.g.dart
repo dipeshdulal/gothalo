@@ -27,6 +27,7 @@ _Agent _$AgentFromJson(Map<String, dynamic> json) => _Agent(
       ? null
       : AgentSession.fromJson(json['agent_session'] as Map<String, dynamic>),
   stateChangeSeq: (json['state_change_seq'] as num?)?.toInt(),
+  attentionRank: (json['attention_rank'] as num?)?.toInt(),
 );
 
 Map<String, dynamic> _$AgentToJson(_Agent instance) => <String, dynamic>{
@@ -42,6 +43,7 @@ Map<String, dynamic> _$AgentToJson(_Agent instance) => <String, dynamic>{
   'focused': instance.focused,
   'agent_session': instance.session,
   'state_change_seq': instance.stateChangeSeq,
+  'attention_rank': instance.attentionRank,
 };
 
 const _$AgentStatusEnumMap = {

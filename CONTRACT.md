@@ -77,6 +77,15 @@ sequence number it is consistent with:
   inferred from the path or read from the transcript. It is **`""`** when the
   pane isn't inside a git work tree (e.g. a home dir) or on a detached HEAD, so
   a client can render "no branch" rather than a misleading folder name.
+- **`attention_rank`** — gothalo also adds this integer to every agent in
+  `agents[]` (herdr does not provide it). It is the **authoritative** "needs a
+  human first" ordering, lowest first: `blocked` 0, `done` 1, `working` 2,
+  `idle` 3, `unknown` 4. An unrecognised or missing `agent_status` also ranks 4,
+  so a status herdr adds later sorts last instead of jumping to the top. It is
+  **always present**, so a client can sort on it unconditionally, and because
+  every surface sorts on the same field, list order and any counts derived from
+  it stay consistent. Herdr's own `agent.view` sort projection is **not** used —
+  see [`docs/CONTRACT-herdr-proxy.md`](docs/CONTRACT-herdr-proxy.md) for why.
 
 **Frames 2…N: deltas.** Each is one unified **envelope** (§3). Apply them to the
 store in order.

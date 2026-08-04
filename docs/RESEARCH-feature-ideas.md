@@ -53,7 +53,7 @@ gothalo already covers the **hard 80%** that most competitors charge for: real-t
 
 Already built (from `app/lib/`): servers home with cross-server **Priority** (starred/blocked), per-server **Flock inbox** (Agents + Spaces, attention-first), persistent **Alerts log** (day-grouped, 7-day retention, unread badges), **Overview** (workspace→tab→pane), live **xterm terminal** (`WS /attach`), chat **transcript** with composer + approval bar (`WS /agent-transcript`), one-tap **Approve** everywhere, permission-mode cycling, pane/tab/worktree actions, **Jump** fuzzy command palette, **FCM push** with in-place dismiss, and **QR pairing**. Real-time backbone is `WS /events` as a change-signal → debounced `/snapshot`.
 
-**Notable existing gaps the code itself flags:** no usage/analytics anywhere, transcripts aren't persisted (only alerts are), branch is *inferred from cwd* (bridge doesn't expose it yet), and the server-side `agent.view` sort projection is stubbed pending backend support.
+**Notable existing gaps the code itself flags:** no usage/analytics anywhere, transcripts aren't persisted (only alerts are), branch is *inferred from cwd* (bridge doesn't expose it yet), and the server-side `agent.view` sort projection is stubbed pending backend support. *(Both of the latter two are now done — see §4.)*
 
 ---
 
@@ -112,7 +112,9 @@ Omnara/Orca let you *launch* parallel agents, not just watch them. You already h
 These aren't new features so much as unlocking ones you've stubbed:
 
 1. **Authoritative branch from the bridge** (today it's inferred from `cwd`). Once the bridge exposes branch, you can add **PR/branch linking** (tie an agent → its branch → GitHub PR), echoing Orca's GitHub integration — a cheap, high-signal addition to tiles.
-2. **Finish the server-side `agent.view` sort projection** so inbox ordering is authoritative rather than client-sorted — small, and it makes everything downstream (widget counts, aggregate header) consistent.
+2. ~~**Finish the server-side `agent.view` sort projection**~~ **Done — but not via `agent.view`.** Inbox ordering is now authoritative rather than client-sorted, delivered as an `attention_rank` the bridge stamps on every agent in `/snapshot`.
+
+   Herdr's `agent.view` projection turned out to be a dead end: it *accepts* `agent.view.set` and reports the view `active`, but as of **herdr 0.8.0 (protocol 19) no read applies it** — `agent.list` and `session.snapshot` both return the unprojected list (verified with a filter that should have cut 8 agents to 6; it returned all 8), and there is no projected read method to forward. Its control socket is also strictly one-request-per-connection, so the bridge's stateless proxy was never the blocker. The `agent.view.*` handshake has been removed from the app and the proxy allowlist; revisit only if Herdr applies the view to a read.
 
 ---
 

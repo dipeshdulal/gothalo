@@ -146,4 +146,69 @@ void main() {
       expect(groups.length, 2);
     });
   });
+
+  group('Authoritative attention order (from the bridge)', () {
+    test('parses attention_rank and sorts the flat list on it', () {
+      final snap = Snapshot(agents: [
+        Agent.fromJson({
+          'agent': 'idle-one',
+          'pane_id': 'w1:p1',
+          'agent_status': 'idle',
+          'attention_rank': 3,
+        }),
+        Agent.fromJson({
+          'agent': 'blocked-one',
+          'pane_id': 'w1:p2',
+          'agent_status': 'blocked',
+          'attention_rank': 0,
+        }),
+        Agent.fromJson({
+          'agent': 'working-one',
+          'pane_id': 'w2:p1',
+          'agent_status': 'working',
+          'attention_rank': 2,
+        }),
+      ]);
+
+      expect(snap.agents[0].attentionRank, 3);
+      expect(
+        snap.agentsSorted.map((a) => a.agent),
+        ['blocked-one', 'working-one', 'idle-one'],
+      );
+    });
+
+    test("the bridge's rank wins over the locally derived one", () {
+      // The bridge is authoritative: if it ever ranks a status differently than
+      // the local table, the list must follow the bridge, not re-derive.
+      final snap = Snapshot(agents: [
+        Agent.fromJson({
+          'agent': 'demoted',
+          'agent_status': 'blocked', // local rank 0…
+          'attention_rank': 9, // …but the bridge says last
+        }),
+        Agent.fromJson({
+          'agent': 'promoted',
+          'agent_status': 'idle', // local rank 3…
+          'attention_rank': 0, // …but the bridge says first
+        }),
+      ]);
+
+      expect(snap.agentsSorted.map((a) => a.agent), ['promoted', 'demoted']);
+    });
+
+    test('older bridge (no attention_rank) falls back to the local rank', () {
+      final snap = Snapshot(agents: [
+        Agent.fromJson({'agent': 'idle-one', 'agent_status': 'idle'}),
+        Agent.fromJson({'agent': 'done-one', 'agent_status': 'done'}),
+        Agent.fromJson({'agent': 'blocked-one', 'agent_status': 'blocked'}),
+      ]);
+
+      expect(snap.agents.first.attentionRank, isNull);
+      expect(snap.agents.first.attention, AgentStatus.idle.rank);
+      expect(
+        snap.agentsSorted.map((a) => a.agent),
+        ['blocked-one', 'done-one', 'idle-one'],
+      );
+    });
+  });
 }

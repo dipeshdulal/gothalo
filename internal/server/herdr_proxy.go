@@ -48,9 +48,11 @@ var herdrProxyAllowlist = map[string]bool{
 	"pane.focus":       true, // focus a pane
 	"agent.focus":      true, // focus an agent's pane
 
-	// ---- mobile agent-list projection (Herdr's own filter+sort for the phone) ----
-	"agent.view.set":   true, // install a filter+sort projection (e.g. sort by "attention")
-	"agent.view.clear": true, // clear the projection
+	// Herdr's `agent.view.*` projection is deliberately absent. Herdr stores the
+	// view and reports it active, but as of herdr 0.8.0 (protocol 19) no read
+	// applies it — `agent.list` and `session.snapshot` return the unprojected
+	// list — so forwarding it only let a client mutate daemon state to no effect.
+	// Attention ordering is served by `attention_rank` in /snapshot instead.
 }
 
 // herdrProxyRequest is the POST /herdr body: a Herdr socket method plus its

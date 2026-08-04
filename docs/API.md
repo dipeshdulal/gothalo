@@ -71,10 +71,12 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 { "result": { "snapshot": { "agents": [
   { "agent": "claude",
     "agent_status": "idle|working|blocked|done|unknown",
+    "attention_rank": 0,
     "pane_id": "wN:p2",
     "state_change_seq": 42,
     "terminal_title_stripped": "…",
     "workspace_id": "wN",
+    "branch": "feat/x",
     "cwd": "/…" }
 ] } } }
 ```
@@ -82,6 +84,14 @@ Group by `workspace_id`; badge on `agent_status`; title = `terminal_title_stripp
 `pane_id` is the id used for `/send`, `/approve`, and `/attach`.
 `state_change_seq` is a per-agent monotonic counter Herdr bumps on every state
 transition — pass it to `/approve` as the idempotency token (see below).
+
+**`attention_rank`** is the bridge's authoritative priority ordering — sort the
+inbox on it ascending: `blocked` 0, `done` 1, `working` 2, `idle` 3, `unknown` 4
+(an unrecognised status also ranks 4, so it sorts last). It is added by gothalo,
+not herdr, and is always present. Sorting every surface on this one field is
+what keeps list order and the counts derived from it consistent — don't
+re-derive priority per screen. `branch` is likewise gothalo-added; both are
+described in full in [`CONTRACT.md`](../CONTRACT.md).
 
 ## Push messages (what your FCM handler receives)
 Messages are **data-only** (no `notification` block) so your handler always runs

@@ -18,7 +18,11 @@ enum AgentStatus {
   bool get needsAttention =>
       this == AgentStatus.blocked || this == AgentStatus.done;
 
-  /// Sort rank for the flat "Agents" list — things that need you first.
+  /// Locally derived attention rank — things that need you first. This mirrors
+  /// the bridge's `attention_rank`, and exists only as the fallback for a
+  /// snapshot that doesn't carry one (an older bridge). Sort on
+  /// [Agent.attention] instead, which prefers the authoritative value; that
+  /// getter is this field's only caller.
   int get rank => switch (this) {
     AgentStatus.blocked => 0,
     AgentStatus.done => 1,
@@ -64,6 +68,13 @@ sealed class Agent with _$Agent {
     /// approvals (D8): an approve tap carries this seq and the bridge no-ops if
     /// the agent is no longer blocked at it.
     @JsonKey(name: 'state_change_seq') int? stateChangeSeq,
+
+    /// The bridge's authoritative "needs a human first" rank, lowest first. It
+    /// is computed server-side so every surface (inbox, priority, counts, the
+    /// aggregate header) orders identically instead of each deriving its own.
+    /// Null on an older bridge that doesn't send it — see [attention], which
+    /// falls back to the local [AgentStatus.rank].
+    @JsonKey(name: 'attention_rank') int? attentionRank,
   }) = _Agent;
 
   factory Agent.fromJson(Map<String, dynamic> json) => _$AgentFromJson(json);
@@ -74,6 +85,12 @@ sealed class Agent with _$Agent {
 
   /// A human label for the row when the terminal title is empty.
   String get displayTitle => title.isNotEmpty ? title : agent;
+
+  /// The rank to order this agent by: the bridge's authoritative
+  /// [attentionRank] when it sends one, else the locally derived
+  /// [AgentStatus.rank]. The two agree by construction — the fallback only
+  /// exists so an older bridge still sorts sensibly.
+  int get attention => attentionRank ?? agentStatus.rank;
 
   /// Best-effort git context derived from [cwd]. Herdr worktrees live under
   /// `…/.herdr/worktrees/<project>/<worktree>`, where `<worktree>` is
@@ -265,10 +282,14 @@ sealed class Snapshot with _$Snapshot {
 
   /// All agents as one flat list for the "Agents" tab, ordered attention-first
   /// (blocked → done → working → idle → unknown), then by title.
+  ///
+  /// The primary key is the bridge's authoritative [Agent.attention] rank, so
+  /// this list and everything counted off it stay consistent with every other
+  /// surface rather than each screen re-deriving priority.
   List<Agent> get agentsSorted {
     final list = [...agents];
     list.sort((x, y) {
-      final r = x.agentStatus.rank - y.agentStatus.rank;
+      final r = x.attention - y.attention;
       if (r != 0) return r;
       return x.displayTitle.toLowerCase().compareTo(
         y.displayTitle.toLowerCase(),

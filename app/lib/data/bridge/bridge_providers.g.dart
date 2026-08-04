@@ -58,4 +58,4 @@ final class BridgeClientProvider
   }
 }
 
-String _$bridgeClientHash() => r'483d92fc9f1bd7821cccc4b8fc0b76cae1ae512d';
+String _$bridgeClientHash() => r'e1c3737ce4724fede6f0defd96faf6e46f0bb21d';
