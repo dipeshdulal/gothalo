@@ -141,9 +141,12 @@ func newestMatchingSession(dir, cwd string) string {
 	return cands[0].path
 }
 
-// firstLineCwd reads a transcript's first line and returns its `cwd` field, or ""
-// if unreadable. Cheap: it reads only the first line, not the whole file.
+// firstLineCwd returns the transcript's first recorded `cwd`, or "" if none is
+// found early on. Newer Claude Code transcripts open with cwd-less metadata lines
+// (mode, permission-mode, file-history-snapshot), so scan a bounded number of
+// lines rather than just the first — still cheap, never the whole file.
 func firstLineCwd(path string) string {
+	const maxProbeLines = 10
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -151,7 +154,7 @@ func firstLineCwd(path string) string {
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
+	for n := 0; n < maxProbeLines && sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
@@ -162,7 +165,6 @@ func firstLineCwd(path string) string {
 		if json.Unmarshal([]byte(line), &probe) == nil && probe.Cwd != "" {
 			return probe.Cwd
 		}
-		return "" // first non-empty line had no cwd; don't scan the whole file
 	}
 	return ""
 }

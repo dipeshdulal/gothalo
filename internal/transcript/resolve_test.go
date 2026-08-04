@@ -70,6 +70,37 @@ func TestLocateClaude(t *testing.T) {
 	}
 }
 
+// TestLocateClaudeMetadataPreamble covers newer Claude Code transcripts that open
+// with cwd-less metadata lines (mode, permission-mode, file-history-snapshot)
+// before the first cwd-bearing entry — the fallback must still match on cwd.
+func TestLocateClaudeMetadataPreamble(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/Users/dev/projects/demo"
+	dir := filepath.Join(home, ".claude", "projects", EncodeProjectDir(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "11111111-2222-3333-4444-555555555555.jsonl")
+	content := `{"type":"mode","mode":"default"}
+{"type":"permission-mode","mode":"acceptEdits"}
+{"type":"file-history-snapshot","snapshot":{}}
+{"type":"user","cwd":"` + cwd + `","message":{"role":"user","content":"hi"}}
+`
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Locate("claude", cwd, "")
+	if err != nil {
+		t.Fatalf("Locate with metadata preamble: %v", err)
+	}
+	if got != p {
+		t.Errorf("Locate = %q, want %q", got, p)
+	}
+}
+
 func TestLocateUnsupportedKind(t *testing.T) {
 	for _, k := range []string{"codex", "opencode", "some-future-agent"} {
 		if _, err := Locate(k, "/tmp/x", "sid"); err == nil {
