@@ -441,7 +441,8 @@ class _JumpItem {
 
     final parts = <String>[];
     if (git.project.isNotEmpty) parts.add(git.project);
-    if (git.worktree != null) parts.add(git.worktree!);
+    final branch = a.branchName;
+    if (branch != null && branch.isNotEmpty) parts.add(branch);
     if (tabLabel.isNotEmpty) {
       parts.add(tabLabel);
     } else if (tab != null && tab.number > 0) {

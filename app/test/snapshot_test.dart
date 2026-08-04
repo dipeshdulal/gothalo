@@ -72,6 +72,64 @@ void main() {
     });
   });
 
+  group('Authoritative branch (from the bridge)', () {
+    test('a plain checkout uses the reported branch, not the folder name', () {
+      // The bridge runs git in the pane cwd — path inference could never see
+      // this branch (the dir is not a .herdr worktree).
+      final a = Agent.fromJson({
+        'agent': 'claude',
+        'pane_id': 'w8:p1',
+        'cwd': '/Users/alex/projects/acme/storefront-frontend',
+        'foreground_cwd': '/Users/alex/projects/acme/storefront-frontend',
+        'branch': 'main',
+      });
+      expect(a.branchName, 'main');
+      expect(a.hasBranch, isTrue);
+      expect(a.gitLabel, 'main'); // branch wins over the "frontend" folder
+    });
+
+    test('a repo subdir resolves to the repo branch', () {
+      final a = Agent.fromJson({
+        'pane_id': 'w5:p1C',
+        'foreground_cwd': '/Users/alex/projects/acme/acme-app/backend',
+        'branch': 'develop',
+      });
+      expect(a.branchName, 'develop');
+      expect(a.gitLabel, 'develop'); // not "backend", the leaf dir
+    });
+
+    test('a non-git dir reports empty branch -> no branch shown', () {
+      final a = Agent.fromJson({
+        'pane_id': 'w4:p1',
+        'cwd': '/Users/alex',
+        'foreground_cwd': '/Users/alex',
+        'branch': '', // bridge: not a git work tree
+      });
+      expect(a.branchName, isNull);
+      expect(a.hasBranch, isFalse);
+      expect(a.gitLabel, 'alex'); // falls back to the folder label
+    });
+
+    test('git context prefers foreground_cwd over the launch cwd', () {
+      final a = Agent.fromJson({
+        'cwd': '/Users/alex', // launch dir
+        'foreground_cwd': '/Users/alex/projects/gothalo', // shell cd'd here
+      });
+      expect(a.gitContext.project, 'gothalo');
+    });
+
+    test('older bridge (no branch field) still infers from a worktree path', () {
+      // Forward-compatibility: absent `branch` -> unchanged behavior.
+      final a = Agent.fromJson({
+        'cwd': '/Users/alex/.herdr/worktrees/gothalo/feat/agent-state',
+      });
+      expect(a.branch, ''); // default
+      expect(a.branchName, 'feat/agent-state'); // via path inference
+      expect(a.hasBranch, isTrue);
+      expect(a.gitLabel, 'feat/agent-state');
+    });
+  });
+
   group('Grouping', () {
     test('groups by workspace, floating attention-needing workspaces up', () {
       final snap = Snapshot(agents: [

@@ -20,6 +20,8 @@ _Agent _$AgentFromJson(Map<String, dynamic> json) => _Agent(
   workspaceId: json['workspace_id'] as String? ?? '',
   tabId: json['tab_id'] as String? ?? '',
   cwd: json['cwd'] as String? ?? '',
+  foregroundCwd: json['foreground_cwd'] as String? ?? '',
+  branch: json['branch'] as String? ?? '',
   focused: json['focused'] as bool? ?? false,
   session: json['agent_session'] == null
       ? null
@@ -35,6 +37,8 @@ Map<String, dynamic> _$AgentToJson(_Agent instance) => <String, dynamic>{
   'workspace_id': instance.workspaceId,
   'tab_id': instance.tabId,
   'cwd': instance.cwd,
+  'foreground_cwd': instance.foregroundCwd,
+  'branch': instance.branch,
   'focused': instance.focused,
   'agent_session': instance.session,
   'state_change_seq': instance.stateChangeSeq,
