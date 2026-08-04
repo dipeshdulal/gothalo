@@ -139,3 +139,47 @@ func TestEnrichAgentBranches(t *testing.T) {
 		}
 	}
 }
+
+// attention_rank is what the app sorts the inbox on, so it must be present on
+// every agent and must never let an unrecognised status outrank a real one.
+func TestEnrichAgentAttention(t *testing.T) {
+	agents := []any{
+		map[string]any{"pane_id": "w1:p1", "agent_status": "idle"},
+		map[string]any{"pane_id": "w1:p2", "agent_status": "blocked"},
+		map[string]any{"pane_id": "w2:p1", "agent_status": "working"},
+		map[string]any{"pane_id": "w2:p2", "agent_status": "done"},
+		map[string]any{"pane_id": "w3:p1", "agent_status": "unknown"},
+		// A status Herdr might add later must degrade to "sorts last", not to 0.
+		map[string]any{"pane_id": "w3:p2", "agent_status": "hibernating"},
+		// A malformed/absent status must still get a field to sort on.
+		map[string]any{"pane_id": "w3:p3"},
+	}
+
+	enrichAgentAttention(agents)
+
+	want := map[string]int{
+		"w1:p1": 3, "w1:p2": 0, "w2:p1": 2, "w2:p2": 1,
+		"w3:p1": 4, "w3:p2": 4, "w3:p3": 4,
+	}
+	for _, it := range agents {
+		obj := it.(map[string]any)
+		id := obj["pane_id"].(string)
+		got, ok := obj["attention_rank"]
+		if !ok {
+			t.Errorf("%s: attention_rank missing; it must always be set", id)
+			continue
+		}
+		if got != want[id] {
+			t.Errorf("%s: attention_rank = %v, want %d", id, got, want[id])
+		}
+	}
+}
+
+// The enrichers run over whatever the merge produced, which may be absent or a
+// non-array when every session failed to report agents.
+func TestEnrichAgentAttentionToleratesMissingAgents(t *testing.T) {
+	enrichAgentAttention(nil)
+	enrichAgentAttention([]any{})
+	enrichAgentAttention("not-an-array")
+	enrichAgentAttention([]any{"not-an-object", 42})
+}

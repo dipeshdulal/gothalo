@@ -330,6 +330,7 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 	merged["sessions"] = sessions
 
 	enrichAgentBranches(merged["agents"])
+	enrichAgentAttention(merged["agents"])
 
 	return json.Marshal(map[string]any{
 		"id":     "gothalo:snapshot",
@@ -397,5 +398,53 @@ func enrichAgentBranches(agentsNode any) {
 		if obj, ok := it.(map[string]any); ok {
 			obj["branch"] = branches[cwdFor(obj)]
 		}
+	}
+}
+
+// attentionRanks is the bridge's canonical "who needs a human first" ordering,
+// lowest rank first. It is the one place that priority is defined, so every
+// surface that consumes /snapshot (inbox list, priority screen, counts, the
+// aggregate header) orders identically instead of each re-deriving it.
+//
+// This lives here rather than on Herdr's `agent.view` projection deliberately:
+// Herdr accepts `agent.view.set` and reports the view active, but as of herdr
+// 0.8.0 (protocol 19) no read applies it — `agent.list` and `session.snapshot`
+// both return the unprojected list — so there is no projected read for the
+// bridge to forward. The bridge is the authority instead.
+var attentionRanks = map[string]int{
+	"blocked": 0, // waiting on an approval or an answer — the whole point of the app
+	"done":    1, // finished a turn; needs you to look at it and continue
+	"working": 2, // busy, nothing to do
+	"idle":    3, // parked at a prompt
+	"unknown": 4, // undetected; sorts last so it never displaces a real signal
+}
+
+// unknownAttentionRank is what an unrecognised (or missing) agent_status gets —
+// the same slot as "unknown", so a status Herdr adds later degrades to "sorts
+// last" instead of jumping to the top of the inbox.
+const unknownAttentionRank = 4
+
+// enrichAgentAttention stamps `attention_rank` on every agent in the snapshot
+// from its `agent_status`. Ordering by this field (then by whatever tiebreak the
+// surface wants) is what makes the app's list authoritative rather than
+// client-sorted. The field is always set, so a client can sort on it
+// unconditionally.
+func enrichAgentAttention(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok {
+		return
+	}
+	for _, it := range agents {
+		obj, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		rank := unknownAttentionRank
+		if status, ok := obj["agent_status"].(string); ok {
+			if r, known := attentionRanks[status]; known {
+				rank = r
+			}
+		}
+		obj["attention_rank"] = rank
 	}
 }

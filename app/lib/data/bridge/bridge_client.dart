@@ -459,36 +459,13 @@ class BridgeClient {
     }
   }
 
-  /// The projection `source` we own on Herdr's agent-view primitive. All our
-  /// `agent.view.*` calls carry this so we never clobber another client's view.
-  static const agentViewSource = 'gothalo';
-
-  /// `agent.view.set` — install Herdr's own filter+sort projection over the
-  /// agent list so the inbox reflects Herdr's `attention` priority ordering
-  /// rather than sorting purely client-side. Best-effort: the projection is
-  /// owned by [agentViewSource]; pair with [clearAgentView] on teardown.
-  ///
-  /// Note: this is a forward-compatible handshake. The bridge's `/herdr` proxy
-  /// is stateless (a fresh Herdr socket per request), so the projection is not
-  /// yet reflected in `/snapshot` or `agent.list` reads — the inbox keeps its
-  /// client-side attention sort as the visible order until the bridge exposes a
-  /// projected read. Installing the view now means the app benefits the moment
-  /// it does.
-  Future<void> setAgentView({
-    List<Map<String, dynamic>> sort = const [
-      {'field': 'attention', 'order': 'desc'},
-    ],
-  }) async {
-    await herdrCommand('agent.view.set', {
-      'source': agentViewSource,
-      if (sort.isNotEmpty) 'sort': sort,
-    });
-  }
-
-  /// `agent.view.clear` — drop the projection we own. Best-effort teardown.
-  Future<void> clearAgentView() async {
-    await herdrCommand('agent.view.clear', {'source': agentViewSource});
-  }
+  // Herdr's `agent.view.*` projection is deliberately NOT used. Herdr accepts
+  // `agent.view.set` and reports the view active, but as of herdr 0.8.0
+  // (protocol 19) no read applies it — `agent.list` and `session.snapshot` both
+  // return the unprojected list, and there is no projected read method — so the
+  // handshake ordered nothing. Attention ordering is the bridge's job instead:
+  // it stamps `attention_rank` on every agent in `/snapshot` (see
+  // `Agent.attention`), which is authoritative and shared by every surface.
 
   /// `POST /agent-mode/cycle {pane}` → advance a Claude pane's permission mode
   /// by one Shift+Tab. Returns the new mode (best-effort read-back; null if it

@@ -121,7 +121,8 @@ class PriorityHit {
 
 /// Priority agents across all servers: **automatically** whatever needs
 /// attention (blocked or done), **plus** anything you manually starred. Ordered
-/// blocked → done → working → idle, so what needs you sits on top.
+/// blocked → done → working → idle on the bridge's authoritative attention
+/// rank, so what needs you sits on top — and in the same order as the inbox.
 final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
   final stars = ref.watch(starredAgentsProvider).asData?.value ?? const {};
   final servers = ref.watch(allServersAgentsProvider).asData?.value ?? const [];
@@ -143,6 +144,6 @@ final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
       }
     }
   }
-  hits.sort((a, b) => a.agent.agentStatus.rank - b.agent.agentStatus.rank);
+  hits.sort((a, b) => a.agent.attention - b.agent.attention);
   return hits;
 });
