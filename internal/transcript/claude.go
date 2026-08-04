@@ -17,9 +17,24 @@ import (
 // never breaks. See CONTRACT.md for the wire shape and captured examples.
 type claudeReader struct{}
 
-func init() { Register(claudeReader{}) }
+func init() { Register(claudeReader{}); RegisterOpener(claudeOpener{}) }
 
 func (claudeReader) Kind() string { return "claude" }
+
+// claudeOpener resolves a Claude pane to its JSONL file (see Locate) and serves
+// it as a fileSource. The path math lives in resolve.go; this is only the
+// registry wiring.
+type claudeOpener struct{}
+
+func (claudeOpener) Kind() string { return "claude" }
+
+func (claudeOpener) Open(cwd, sessionID string) (Source, error) {
+	path, err := Locate("claude", cwd, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return newFileSource(path, claudeReader{}), nil
+}
 
 // claudeIgnored are entry types that are pure session metadata / plumbing — not
 // part of the conversation. They are dropped (Normalize returns no entries).
