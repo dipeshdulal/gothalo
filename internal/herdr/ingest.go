@@ -3,6 +3,7 @@ package herdr
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -45,6 +46,15 @@ var globalEventKinds = map[string]bool{
 // Herdr socket.
 const reconnectDelay = 2 * time.Second
 
+// probeInterval is how often the ingester checks that its subscription is
+// actually delivering. See [Ingester.watchLiveness].
+const probeInterval = 30 * time.Second
+
+// probeStrikes is how many consecutive disagreeing probes force a resubscribe.
+// Requiring two avoids reconnecting over an event that was merely in flight when
+// the first probe read the snapshot.
+const probeStrikes = 2
+
 // Ingester runs the single, process-wide Herdr event subscription: it dials the
 // control socket, subscribes once (global structural kinds + targeted
 // agent-status for the agent panes present at connect), normalizes every Herdr
@@ -56,10 +66,17 @@ type Ingester struct {
 	cli *Client
 	bus *events.Bus
 
+	// mu guards lastStatus, which the read loop writes and the liveness probe
+	// reads from its own goroutine.
+	mu sync.Mutex
 	// lastStatus is the last agent_status published per pane, so the several
 	// Herdr signals that carry status (the targeted pane.agent_status_changed,
 	// plus pane_updated / pane_created / pane_agent_detected) collapse into one
 	// deduplicated pane_agent_status_changed envelope per real transition.
+	//
+	// It doubles as the reference the liveness probe compares Herdr against: it
+	// is precisely "what we believe we have told the bus", so disagreement with
+	// Herdr's own view means events are going missing.
 	lastStatus map[string]string
 }
 
@@ -131,6 +148,7 @@ func (i *Ingester) session(ctx context.Context, first bool) error {
 		<-sctx.Done()
 		conn.Close()
 	}()
+	go i.watchLiveness(sctx, scancel)
 
 	for {
 		msg, err := conn.ReadMessage()
@@ -144,6 +162,77 @@ func (i *Ingester) session(ctx context.Context, first bool) error {
 	}
 }
 
+// watchLiveness forces a resubscribe when the subscription stops delivering.
+//
+// A subscribe can succeed and then deliver nothing — observed after a host
+// reboot, where the bridge logged "subscribed, subscriptions=29" and received
+// not one event for twenty minutes. Nothing detected it: the read loop simply
+// blocks forever on a socket that is open and silent, so the session never ends
+// and the reconnect path never runs. Everything downstream (notification
+// clearing, WS /events, the app's agent list) then looks broken while every
+// component reports itself healthy — which is the worst kind of failure,
+// because there is nothing to alert on.
+//
+// It cannot be a plain silence timer: an idle Herdr is legitimately quiet for
+// long stretches, and reconnecting on quiet alone would churn the socket on any
+// machine nobody is using. So it probes for DISAGREEMENT instead — Herdr's own
+// current agent statuses against what we believe we published. Divergence is
+// positive evidence that events are being missed, whereas silence is not
+// evidence of anything.
+//
+// Killing the session context closes the connection, which fails the read loop
+// and drops into Run's normal reconnect + resubscribe + herdr_resync path.
+func (i *Ingester) watchLiveness(ctx context.Context, kill func()) {
+	ticker := time.NewTicker(probeInterval)
+	defer ticker.Stop()
+
+	strikes := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !i.stale() {
+				strikes = 0
+				continue
+			}
+			strikes++
+			if strikes < probeStrikes {
+				continue
+			}
+			log.Warn("herdr ingester: subscription is not delivering events, resubscribing",
+				"session", i.cli.SessionLabel(), "probes", strikes)
+			kill()
+			return
+		}
+	}
+}
+
+// stale reports whether Herdr's live agent statuses disagree with what the
+// ingester has published. An unreadable snapshot returns false: we cannot tell,
+// and guessing would reconnect a healthy socket.
+func (i *Ingester) stale() bool {
+	agents, err := i.cli.Agents()
+	if err != nil {
+		return false
+	}
+	return i.staleAgainst(agents)
+}
+
+// staleAgainst is the comparison itself, split out so it can be exercised
+// without a live socket. A pane Herdr knows about that we have never published,
+// or one whose status has moved on without us, both mean events went missing.
+func (i *Ingester) staleAgainst(agents []Agent) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for _, a := range agents {
+		if last, seen := i.lastStatus[a.PaneID]; !seen || last != a.Status {
+			return true
+		}
+	}
+	return false
+}
+
 // seedStatuses returns the current agent pane -> status map from a snapshot and
 // records it as the dedup baseline. A snapshot failure is non-fatal (returns an
 // empty map); the read loop still works, just without a pre-seeded baseline.
@@ -154,10 +243,12 @@ func (i *Ingester) seedStatuses() map[string]string {
 		log.Warn("herdr ingester: snapshot for seed failed", "err", err)
 		return statuses
 	}
+	i.mu.Lock()
 	for _, a := range agents {
 		statuses[a.PaneID] = a.Status
 		i.lastStatus[a.PaneID] = a.Status
 	}
+	i.mu.Unlock()
 	return statuses
 }
 
@@ -254,7 +345,9 @@ func (i *Ingester) deriveAgentStatus(msg SocketMessage) {
 			PaneID string `json:"pane_id"`
 		}
 		if json.Unmarshal(msg.Data, &d) == nil {
+			i.mu.Lock()
 			delete(i.lastStatus, d.PaneID)
+			i.mu.Unlock()
 		}
 	}
 }
@@ -267,10 +360,15 @@ func (i *Ingester) emitAgentStatus(pane, workspace, agent, status string) {
 	if pane == "" || status == "" {
 		return
 	}
-	if i.lastStatus[pane] == status {
+	i.mu.Lock()
+	unchanged := i.lastStatus[pane] == status
+	if !unchanged {
+		i.lastStatus[pane] = status
+	}
+	i.mu.Unlock()
+	if unchanged {
 		return
 	}
-	i.lastStatus[pane] = status
 	i.bus.Publish(events.SourceHerdr, events.TypePaneAgentStatusChanged, map[string]any{
 		"pane_id":      Qualify(i.cli.Session(), pane),
 		"workspace_id": Qualify(i.cli.Session(), workspace),
