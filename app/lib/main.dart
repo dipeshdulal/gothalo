@@ -7,6 +7,7 @@ import 'core/connection/server_switch.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
 import 'data/bridge/bridge_providers.dart';
+import 'features/inbox/inbox_providers.dart';
 import 'features/push/push_payload.dart';
 import 'features/push/push_service.dart';
 
@@ -78,7 +79,22 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
     // loading and the bridge client is null, and a read would cache that null
     // for the whole session — leaving every server unidentified and every
     // notification action unroutable.
-    ref.watch(serverIdentityProvider);
+    // Both are subscribed with listen, not watch: it holds them alive and lets
+    // them recompute when the active bridge changes, WITHOUT rebuilding the
+    // whole app every time a snapshot arrives.
+    //
+    // Learn which bridge each server is, so a push can be attributed to one.
+    // Subscribed rather than read once: at first frame the active connection is
+    // still loading and the bridge client is null, and a one-shot read would
+    // cache that null for the session — leaving every server unidentified and
+    // every notification action unroutable.
+    ref.listen(serverIdentityProvider, (_, _) {});
+    // Bring the live `/events` connection up with the app rather than with a
+    // screen. It used to be created by whichever surface first watched it, so
+    // the app could sit on the servers list indefinitely with no socket at all —
+    // and everything downstream of it looked frozen. With no server configured
+    // this settles into an error state and starts nothing, which is correct.
+    ref.listen(snapshotControllerProvider, (_, _) {});
     return MaterialApp.router(
       title: 'gothalo',
       debugShowCheckedModeBanner: false,

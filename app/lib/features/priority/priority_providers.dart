@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,7 @@ import '../../core/connection/connection.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../inbox/inbox_providers.dart';
 
 /// Persisted set of starred agents, keyed `"<serverId>::<paneId>"`. Stored in
 /// secure storage (no schema, so it stays clear of the shared drift database).
@@ -67,10 +69,34 @@ class ServerAgents {
   bool get ok => error == null;
 }
 
+/// How often the cross-server view refetches while it is on screen.
+///
+/// This screen spans EVERY paired server, and only the active one has a live
+/// `/events` socket — so the rest can only be kept current by asking. Polling is
+/// deliberately confined to the moments the screen is actually being looked at
+/// (see the autoDispose below): a phone should not be waking N bridges in the
+/// background, which is what FCM is for.
+const _crossServerRefresh = Duration(seconds: 6);
+
 /// Fetches every saved server's `/snapshot` in parallel (each with its own
 /// bearer), so the Priority view can aggregate starred agents across all of
-/// them. Re-runs when the server list changes; refresh by invalidating.
-final allServersAgentsProvider = FutureProvider<List<ServerAgents>>((ref) async {
+/// them.
+///
+/// Refreshes itself on a timer for as long as something is watching it. Without
+/// that it fetched exactly once and then never again — the servers list and
+/// Priority froze at whatever was true when the app opened, which reads as the
+/// app being broken even though every other surface is live.
+final allServersAgentsProvider =
+    FutureProvider.autoDispose<List<ServerAgents>>((ref) async {
+  // Self-invalidate on a timer. autoDispose is what scopes it: the timer dies
+  // with the last listener, so nothing polls once the screen is gone.
+  final timer = Timer(_crossServerRefresh, ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+
+  // The active server already has a live socket; piggy-back on it so its rows
+  // update the instant something changes rather than on the next tick.
+  ref.watch(snapshotControllerProvider);
+
   final servers = ref.watch(serversProvider).asData?.value ?? const [];
   final repo = ref.watch(serversRepositoryProvider);
 
