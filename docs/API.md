@@ -385,6 +385,13 @@ action. Auth is via `?token=` (like `/attach`). The stream is **text JSON**:
    ```json
    { "source":"herdr"|"gothalo", "type":"<type>", "seq":<uint>, "ts":<ms>, "payload":{…} }
    ```
+3. Interleaved, a **heartbeat** every 20s — `{"type":"heartbeat","ts":<ms>}`.
+   It carries **no `seq`** on purpose: it means "still here", not "something
+   changed". **Skip it before your delta handling** — treating it as a change
+   signal would re-snapshot every 20 seconds for nothing. It exists so a client
+   can detect a half-open socket (one that died without either end noticing);
+   time out on silence and reconnect. The app uses 50s. Full rationale in
+   [`CONTRACT.md`](../CONTRACT.md) §2.
 
 `seq` is process-monotonic (shared across sources + the snapshot baseline); every
 delta is `> baseline`. Track the last `seq` — a gap (`seq > last+1`) means

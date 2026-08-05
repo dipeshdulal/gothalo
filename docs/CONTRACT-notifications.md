@@ -149,6 +149,33 @@ contract.
 
 `gothalo_agents` is the pre-split channel; the app deletes it on launch.
 
+### `done` is not a state an agent enters
+
+Worth knowing, because the behaviour it causes reads as a bug otherwise.
+
+Herdr's internal model has **four** agent states — `Idle`, `Working`, `Blocked`,
+`Unknown`. The API's five-value `agent_status` is a *projection* of those plus a
+"has the user looked at this" flag (`herdr` 0.8.0, `src/app/api_helpers.rs`):
+
+```rust
+(AgentState::Idle,    false) => AgentStatus::Done,     // idle + NOT seen
+(AgentState::Idle,    true)  => AgentStatus::Idle,     // idle + seen
+(AgentState::Working, _)     => AgentStatus::Working,
+(AgentState::Blocked, _)     => AgentStatus::Blocked,
+```
+
+So **`done` means "idle, and you haven't looked at it yet."**
+
+The consequence: **focusing the pane in Herdr on the desktop flips `done` →
+`idle`.** That is a status transition, so the notification-clearer dismisses the
+completion notice — with the agent having done nothing at all. Correct
+behaviour (you *have* now seen it), but "my completion notification vanished
+when I clicked on the terminal" is not what anyone would predict.
+
+It also means a `done` notification is inherently more perishable than a
+`blocked` one. A block is only resolved by answering it; a completion is
+"resolved" by so much as looking.
+
 ---
 
 ## 5. Tag and id (replace, don't duplicate)

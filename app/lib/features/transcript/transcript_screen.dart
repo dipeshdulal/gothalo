@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -111,10 +112,29 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// invisible; each is dropped when its matching user message arrives.
   final List<String> _pending = [];
 
+  /// Whether the agent is still blocked, as a listenable the options sheet can
+  /// follow.
+  ///
+  /// The sheet is a separate Navigator route, so it does not rebuild when this
+  /// screen does. Without this it kept offering choices for a block that had
+  /// already been answered elsewhere — from the desktop, the tray, or another
+  /// device — because the only thing that ever removed it was the user tapping
+  /// something. The card behind it vanished on the very same state change; the
+  /// sheet in front of it did not.
+  final ValueNotifier<bool> _blocked = ValueNotifier(false);
+
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+  }
+
+  /// Publish the live blocked-ness to anything following it. Called from every
+  /// path that assigns [_agentState], so a resolution reaches the sheet no
+  /// matter which one observed it.
+  void _publishBlocked() {
+    final s = _agentState;
+    _blocked.value = s != null && s.isBlocked;
   }
 
   @override
@@ -126,6 +146,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _agentStateTimer?.cancel();
     _scroll.dispose();
     _composer.dispose();
+    _blocked.dispose();
     super.dispose();
   }
 
@@ -182,10 +203,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       // actual history arrives over /agent-transcript, so the card never asks
       // for scrollback (see BridgeClient.getAgentState).
       final s = await client.getAgentState(widget.pane);
-      if (mounted) setState(() => _agentState = s);
+      if (mounted) {
+        setState(() => _agentState = s);
+        _publishBlocked();
+      }
     } catch (_) {
       // Non-agent / gone / transient — no bar.
-      if (mounted && _agentState != null) setState(() => _agentState = null);
+      if (mounted && _agentState != null) {
+        setState(() => _agentState = null);
+        _publishBlocked();
+      }
     }
   }
 
@@ -233,6 +260,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
     setState(() => _agentState = null);
+    _publishBlocked();
     try {
       final res = await client.approve(widget.pane, seq);
       if (!res.applied && res.reason != null && mounted) {
@@ -259,6 +287,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _client?.sendText(widget.pane, '${opt.index}\n');
     }
     setState(() => _agentState = null);
+    _publishBlocked();
   }
 
   /// Send a free-form answer typed in the options sheet. Same wire path as the
@@ -327,6 +356,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         return _ApprovalCard(
           state: s,
           options: opts,
+          blocked: _blocked,
           contextLine: _approvalContext(),
           onApprove: _approveDefault,
           onOption: _handleOption,
@@ -936,10 +966,15 @@ class _ApprovalCard extends StatelessWidget {
     required this.contextLine,
     required this.onApprove,
     required this.onOption,
+    required this.blocked,
   });
 
   final AgentState state;
   final List<BlockedOption> options;
+
+  /// Live blocked-ness, handed to the options sheet so it can close itself when
+  /// the block is answered somewhere else.
+  final ValueListenable<bool> blocked;
 
   /// Sends a free-form answer typed in the options sheet. Needed because a menu
   /// can itself offer "Other (type your answer)" — Hermes's clarify panel does —
@@ -1050,6 +1085,7 @@ class _ApprovalCard extends StatelessWidget {
                 context,
                 question: question,
                 options: options,
+                blocked: blocked,
                 danger: severity == BlockSeverity.danger,
                 onApprove: onApprove,
                 onOption: onOption,
@@ -1140,6 +1176,7 @@ Future<void> showBlockedOptionsSheet(
   required String question,
   required List<BlockedOption> options,
   required bool danger,
+  required ValueListenable<bool> blocked,
   required VoidCallback onApprove,
   required void Function(BlockedOption) onOption,
   required void Function(String) onFreeText,
@@ -1152,6 +1189,7 @@ Future<void> showBlockedOptionsSheet(
       question: question,
       options: options,
       danger: danger,
+      blocked: blocked,
       onApprove: onApprove,
       onOption: onOption,
       onFreeText: onFreeText,
@@ -1164,6 +1202,7 @@ class _BlockedOptionsSheet extends StatefulWidget {
     required this.question,
     required this.options,
     required this.danger,
+    required this.blocked,
     required this.onApprove,
     required this.onOption,
     required this.onFreeText,
@@ -1172,6 +1211,9 @@ class _BlockedOptionsSheet extends StatefulWidget {
   final String question;
   final List<BlockedOption> options;
   final bool danger;
+
+  /// Live blocked-ness of the agent this sheet is answering for.
+  final ValueListenable<bool> blocked;
   final VoidCallback onApprove;
   final void Function(BlockedOption) onOption;
   final void Function(String) onFreeText;
@@ -1184,7 +1226,33 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
   final _answer = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    widget.blocked.addListener(_onBlockedChanged);
+  }
+
+  /// Close when the agent is no longer blocked.
+  ///
+  /// The block can be answered anywhere — the desktop Herdr UI, the tray's
+  /// Approve, another paired device — and none of those touch this sheet. Left
+  /// open it offers choices for a question that no longer exists; picking one
+  /// is a no-op (`/approve` is guarded by `state_change_seq`) but the UI has
+  /// already lied about the current state by then.
+  ///
+  /// The pop is deferred to the next frame: this fires from a ValueNotifier
+  /// during the parent's state update, and popping a route mid-build is not
+  /// allowed. `mounted` is re-checked after the frame because the user may have
+  /// tapped an option in the meantime, which pops the sheet itself.
+  void _onBlockedChanged() {
+    if (widget.blocked.value) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).maybePop();
+    });
+  }
+
+  @override
   void dispose() {
+    widget.blocked.removeListener(_onBlockedChanged);
     _answer.dispose();
     super.dispose();
   }

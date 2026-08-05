@@ -95,6 +95,39 @@ event that occurs while the snapshot is being fetched is queued and delivered as
 a delta right after the snapshot frame (its `seq > baseline`) — nothing is lost
 in the gap.
 
+### Heartbeat frames
+
+Interleaved with the above, the bridge sends a heartbeat every **20 s**:
+
+```json
+{ "type": "heartbeat", "ts": 1785677608858 }
+```
+
+It carries **no `seq`**, deliberately. A seq-bearing frame means *something
+changed*; a heartbeat means *nothing changed, I am still here*. Treating it as a
+change signal would trigger a pointless full re-snapshot every 20 seconds.
+
+**Handle it before your delta path:**
+
+```dart
+if (frame['type'] == 'heartbeat') return;   // not a change; do not re-snapshot
+```
+
+It exists because a quiet tailnet can go many minutes with no events, and a
+connection can die in a way neither end observes — the bridge killed behind
+`tailscale serve`, a phone's radio sleeping, a NAT entry expiring. That leaves a
+**half-open socket**: the client's stream never ends, so it never reconnects and
+serves stale state forever.
+
+It is an application-level frame, not a WebSocket ping, and that distinction is
+the whole point: a protocol ping is answered by the client's networking stack and
+never surfaces to app code, so it cannot drive a client-side liveness check — and
+in a half-open socket the client is exactly the side that learns nothing.
+
+**Clients should time out on silence.** The app treats **50 s** with no frame of
+any kind as a dead socket and reconnects (`app/lib/features/inbox/inbox_providers.dart`).
+Any threshold comfortably above 20 s works.
+
 ---
 
 ## 3. The unified envelope
