@@ -7,6 +7,7 @@ import '../../core/connection/connection.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../../data/db/db_providers.dart';
 import '../inbox/inbox_providers.dart';
 
 /// Persisted set of starred agents, keyed `"<serverId>::<paneId>"`. Stored in
@@ -141,6 +142,24 @@ final serverAgentsProvider = FutureProvider.autoDispose.family<ServerAgents, Str
     // it outlasts the refresh period, so a machine that is simply asleep would
     // keep this provider permanently unsettled instead of just saying so.
     final snap = await client.getSnapshot().timeout(_perServerBudget);
+
+    // Learn this bridge's identity the first time we successfully reach it.
+    //
+    // `GET /info` used to be asked only of the ACTIVE server, so a newly paired
+    // or newly upgraded bridge stayed unattributed until you happened to open
+    // it — and until then a notification from that machine could not be routed,
+    // because a push carries only the sender's server_id and the app had no
+    // reverse mapping for it. The servers list already talks to every server, so
+    // this is the natural place to close that gap.
+    //
+    // Once only: bridgeVersion is 0 until a bridge has reported one, so this
+    // costs a single extra round-trip per server for the life of the pairing
+    // rather than one per poll. An older bridge 404s and simply stays
+    // unattributed, exactly as before.
+    if (server.bridgeVersion == 0) {
+      unawaited(_learnIdentity(ref, client, server.id));
+    }
+
     return ServerAgents(server: server, agents: snap.agents, client: client);
   } catch (e) {
     return ServerAgents(server: server, error: e);
@@ -229,3 +248,26 @@ final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
   hits.sort((a, b) => a.agent.attention - b.agent.attention);
   return hits;
 });
+
+/// Ask a bridge who it is and remember the answer. Best-effort and fire-and-
+/// forget: it must never delay or fail the row it rides along with, and a
+/// bridge too old to answer just stays unattributed.
+Future<void> _learnIdentity(
+  Ref ref,
+  BridgeClient client,
+  String profileId,
+) async {
+  try {
+    final info = await client.info().timeout(_perServerBudget);
+    if (info.serverId.isEmpty) return;
+    await ref
+        .read(databaseProvider)
+        .setProfileIdentity(
+          profileId,
+          serverId: info.serverId,
+          bridgeVersion: info.version,
+        );
+  } catch (_) {
+    // Older bridge, asleep, or unreachable — try again on a later poll.
+  }
+}

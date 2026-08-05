@@ -57,7 +57,6 @@ class PushPayload {
     required this.serverName,
     required this.pane,
     required this.status,
-    required this.agentTitle,
     required this.title,
     required this.body,
     required this.question,
@@ -74,7 +73,6 @@ class PushPayload {
   /// The (possibly session-qualified) pane id — the deep-link target.
   final String pane;
   final String status; // "blocked" | "done"
-  final String agentTitle;
   final String title;
   final String body;
 
@@ -99,7 +97,6 @@ class PushPayload {
       serverName: s('server_name'),
       pane: s('agent'),
       status: s('status'),
-      agentTitle: s('agent_title'),
       title: s('title'),
       body: s('body'),
       question: s('question'),
