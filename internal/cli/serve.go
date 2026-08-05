@@ -97,7 +97,10 @@ func runServe(configPath string) error {
 
 	// The notification-clearer is the process-wide bus consumer that dismisses a
 	// stale "blocked" push once the pane leaves blocked or closes (from anywhere).
-	go notify.NewClearer(bus, pc, st, cfg.ServerID).Run(context.Background())
+	// It takes an authoritative reader rather than trusting the bus payload: the
+	// bus is a change signal, and its status can be stale or coarse depending on
+	// which Herdr subscription (if any) covers that pane.
+	go notify.NewClearer(bus, pc, st, cfg.ServerID, agentReader{mgr}).Run(context.Background())
 
 	var tr transport.Transport
 	switch cfg.Transport.Mode {
@@ -113,4 +116,23 @@ func runServe(configPath string) error {
 		"addr", cfg.Transport.Addr,
 		"public_url", cfg.Transport.PublicURL)
 	return tr.Serve(srv.Handler())
+}
+
+// agentReader adapts the Herdr session manager to the narrow read the
+// notification-clearer needs. It resolves a session-qualified pane id the same
+// way every other bridge caller does, then makes ONE `agent get`, so the status
+// and the seq it returns always describe the same instant.
+type agentReader struct{ mgr *herdr.Manager }
+
+func (a agentReader) AgentState(pane string) (string, int, error) {
+	session, bare := herdr.SplitTarget(pane)
+	c, err := a.mgr.Client(session)
+	if err != nil {
+		return "", 0, err
+	}
+	agent, err := c.Get(bare)
+	if err != nil {
+		return "", 0, err
+	}
+	return agent.Status, agent.StateChangeSeq, nil
 }

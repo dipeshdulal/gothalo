@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,77 @@ type fakeDevices []string
 
 func (d fakeDevices) FCMTokens() []string { return d }
 
+// fakeAgents stands in for Herdr: what an authoritative read would return right
+// now. Tests set it to whatever the agent's real state is, independently of what
+// the bus is saying — which is the whole point, since the two can disagree.
+type fakeAgents struct {
+	mu     sync.Mutex
+	status map[string]string
+	seq    map[string]int
+	err    error
+}
+
+func newFakeAgents() *fakeAgents {
+	return &fakeAgents{status: map[string]string{}, seq: map[string]int{}}
+}
+
+func (f *fakeAgents) set(pane, status string, seq int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status[pane] = status
+	f.seq[pane] = seq
+}
+
+// fail makes every read return an error, as an unreachable Herdr would.
+func (f *fakeAgents) fail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeAgents) AgentState(pane string) (string, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return "", 0, f.err
+	}
+	st, ok := f.status[pane]
+	if !ok {
+		return "", 0, errors.New("pane not found")
+	}
+	return st, f.seq[pane], nil
+}
+
+// fixture wires a Clearer over fakes and models the fact that Herdr's state and
+// the bus nudge about it are two separate things.
+type fixture struct {
+	bus    *events.Bus
+	send   *fakeSender
+	agents *fakeAgents
+	c      *Clearer
+}
+
+func newFixture(tokens ...string) *fixture {
+	f := &fixture{bus: events.New(), send: &fakeSender{}, agents: newFakeAgents()}
+	f.c = newClearer(f.bus, f.send, fakeDevices(tokens), testServerID, f.agents)
+	return f
+}
+
+// moveTo is a real transition: Herdr's state changes AND a bus event announces
+// it. Use this for anything that actually happened.
+func (f *fixture) moveTo(t *testing.T, pane, status string, seq int) {
+	t.Helper()
+	f.agents.set(pane, status, seq)
+	f.c.handle(statusChange(t, pane, status))
+}
+
+// nudge delivers a bus event WITHOUT changing Herdr's state — a stale or coarse
+// event, which is exactly what a pane created after connect produces.
+func (f *fixture) nudge(t *testing.T, pane, claimedStatus string) {
+	t.Helper()
+	f.c.handle(statusChange(t, pane, claimedStatus))
+}
+
 func raw(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -64,9 +136,13 @@ func raw(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-func blockedPush(t *testing.T, pane string) events.Envelope {
+func pushSent(t *testing.T, pane, status string, seq int) events.Envelope {
 	return events.Envelope{Source: events.SourceGothalo, Type: events.TypePushSent,
-		Payload: raw(t, map[string]any{"agent": pane, "status": "blocked"})}
+		Payload: raw(t, map[string]any{"agent": pane, "status": status, "seq": seq})}
+}
+
+func blockedPush(t *testing.T, pane string, seq int) events.Envelope {
+	return pushSent(t, pane, "blocked", seq)
 }
 
 func statusChange(t *testing.T, pane, status string) events.Envelope {
@@ -123,25 +199,61 @@ func assertNoCleared(t *testing.T, sub *events.Sub) {
 	}
 }
 
-// TestArmThenDismiss: a blocked push arms the pane; the resolving status change
+// TestStaleBusStatusIgnored is the regression test for the bug that made every
+// blocked notification self-destruct.
+//
+// The bus said "idle" while the agent was really blocked. That is not exotic: a
+// pane created after the bridge connected has no targeted Herdr subscription, so
+// its status is only ever scavenged out of structural events and lags — measured
+// at 57 seconds of silence across an idle→working→blocked run. The old code
+// compared that stale value against the push's announcement and concluded the
+// push had been overtaken, dismissing a notification for an agent that was
+// waiting on the user right then.
+func TestStaleBusStatusIgnored(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p25"
+	// Herdr's truth: blocked at seq 302. The bus, however, still believes idle.
+	f.agents.set(pane, "blocked", 302)
+	f.nudge(t, pane, "idle")
+
+	f.c.handle(blockedPush(t, pane, 302))
+
+	if got := f.send.count(); got != 0 {
+		t.Fatalf("dismiss sends = %d, want 0 — the agent is blocked right now", got)
+	}
+	assertNoCleared(t, sub)
+
+	f.c.mu.Lock()
+	a, armed := f.c.pending[pane]
+	f.c.mu.Unlock()
+	if !armed {
+		t.Fatal("pane not armed; the live notification has nothing to clear it later")
+	}
+	if a.seq != 302 {
+		t.Errorf("armed seq = %d, want 302", a.seq)
+	}
+}
+
+// TestArmThenDismiss: a blocked push arms the pane; the resolving transition
 // dismisses it (data-only "dismiss" to every device) and publishes
 // notification_cleared. A repeat of the same resolution does NOT dismiss again.
 func TestArmThenDismiss(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA", "tokB"}, testServerID)
-
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA", "tokB")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p2"
-	c.handle(blockedPush(t, pane))
-	c.handle(statusChange(t, pane, "idle"))
+	f.agents.set(pane, "blocked", 10)
+	f.c.handle(blockedPush(t, pane, 10))
+	f.moveTo(t, pane, "idle", 11)
 
-	if got := send.count(); got != 2 {
+	if got := f.send.count(); got != 2 {
 		t.Fatalf("dismiss sends = %d, want 2 (one per device)", got)
 	}
-	last := send.last()
+	last := f.send.last()
 	if last["type"] != "dismiss" || last["agent"] != pane {
 		t.Errorf("dismiss data = %v, want type=dismiss agent=%s", last, pane)
 	}
@@ -153,8 +265,8 @@ func TestArmThenDismiss(t *testing.T) {
 	}
 
 	// No double-dismiss: the pane was removed from the tracker on first resolve.
-	c.handle(statusChange(t, pane, "working"))
-	if got := send.count(); got != 2 {
+	f.moveTo(t, pane, "working", 12)
+	if got := f.send.count(); got != 2 {
 		t.Errorf("after second resolution sends = %d, want still 2 (no double-dismiss)", got)
 	}
 	assertNoCleared(t, sub)
@@ -163,25 +275,25 @@ func TestArmThenDismiss(t *testing.T) {
 // TestReArmOnNewBlock: after a dismiss, a fresh blocked push re-arms the pane so
 // the next resolution dismisses again.
 func TestReArmOnNewBlock(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p2"
-	c.handle(blockedPush(t, pane))
-	c.handle(statusChange(t, pane, "working"))
-	if send.count() != 1 {
-		t.Fatalf("first dismiss sends = %d, want 1", send.count())
+	f.agents.set(pane, "blocked", 10)
+	f.c.handle(blockedPush(t, pane, 10))
+	f.moveTo(t, pane, "working", 11)
+	if f.send.count() != 1 {
+		t.Fatalf("first dismiss sends = %d, want 1", f.send.count())
 	}
 	_ = waitCleared(t, sub)
 
 	// Re-arm on a new block, then close the pane -> dismiss again.
-	c.handle(blockedPush(t, pane))
-	c.handle(paneExited(t, pane))
-	if send.count() != 2 {
-		t.Fatalf("after re-arm dismiss sends = %d, want 2", send.count())
+	f.agents.set(pane, "blocked", 12)
+	f.c.handle(blockedPush(t, pane, 12))
+	f.c.handle(paneExited(t, pane))
+	if f.send.count() != 2 {
+		t.Fatalf("after re-arm dismiss sends = %d, want 2", f.send.count())
 	}
 	if got := waitCleared(t, sub); got != pane {
 		t.Errorf("second notification_cleared pane = %q, want %q", got, pane)
@@ -189,20 +301,19 @@ func TestReArmOnNewBlock(t *testing.T) {
 }
 
 // TestUnarmedResolutionIgnored: a resolution for a pane that never had a blocked
-// push (or a "blocked" status change itself) triggers nothing.
+// push triggers nothing — and must not cost a Herdr read either.
 func TestUnarmedResolutionIgnored(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
-	c.handle(statusChange(t, "wN:p9", "idle")) // never armed
-	c.handle(statusChange(t, "wN:p2", "blocked"))
-	c.handle(blockedPush(t, "wN:p2")) // arm, but no resolution yet
+	f.moveTo(t, "wN:p9", "idle", 1) // never armed
+	f.agents.set("wN:p2", "blocked", 2)
+	f.nudge(t, "wN:p2", "blocked")
+	f.c.handle(blockedPush(t, "wN:p2", 2)) // arm, but no resolution yet
 
-	if send.count() != 0 {
-		t.Errorf("dismiss sends = %d, want 0 (nothing resolved)", send.count())
+	if f.send.count() != 0 {
+		t.Errorf("dismiss sends = %d, want 0 (nothing resolved)", f.send.count())
 	}
 	assertNoCleared(t, sub)
 }
@@ -210,48 +321,51 @@ func TestUnarmedResolutionIgnored(t *testing.T) {
 // TestDonePushClearsOnlyWhenAgentMovesOn: a "done" push arms like a blocked one,
 // but a completion notice stays true for as long as the agent sits in done — it
 // is only stale once the agent starts working again.
+//
+// Worth knowing why that transition can happen with the agent doing nothing:
+// Herdr projects `done` as AgentState::Idle + seen == false, so merely focusing
+// the pane on the desktop flips it to `idle`. See docs/CONTRACT-notifications.md.
 func TestDonePushClearsOnlyWhenAgentMovesOn(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p2"
-	c.handle(events.Envelope{Source: events.SourceGothalo, Type: events.TypePushSent,
-		Payload: raw(t, map[string]any{"agent": pane, "status": "done"})})
+	f.agents.set(pane, "done", 20)
+	f.c.handle(pushSent(t, pane, "done", 20))
 
 	// The transition that raised the notice must not clear it.
-	c.handle(statusChange(t, pane, "done"))
-	if send.count() != 0 {
-		t.Fatalf("dismiss sends = %d, want 0 while the agent is still done", send.count())
+	f.moveTo(t, pane, "done", 20)
+	if f.send.count() != 0 {
+		t.Fatalf("dismiss sends = %d, want 0 while the agent is still done", f.send.count())
 	}
 	assertNoCleared(t, sub)
 
-	c.handle(statusChange(t, pane, "working"))
-	if send.count() != 1 {
-		t.Fatalf("dismiss sends = %d, want 1 once the agent moved on", send.count())
+	f.moveTo(t, pane, "working", 21)
+	if f.send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 once the agent moved on", f.send.count())
 	}
 	if got := waitCleared(t, sub); got != pane {
 		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
 	}
 }
 
-// TestBlockedNotClearedWhileStillBlocked: a repeated "blocked" status change
-// (Herdr re-emitting the same state) must not clear a live block.
+// TestBlockedNotClearedWhileStillBlocked: Herdr re-emits agent_status_changed on
+// presentation changes too (a terminal title update while blocked), so the same
+// status arrives repeatedly. That must never clear a live block.
 func TestBlockedNotClearedWhileStillBlocked(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p2"
-	c.handle(blockedPush(t, pane))
-	c.handle(statusChange(t, pane, "blocked"))
+	f.agents.set(pane, "blocked", 30)
+	f.c.handle(blockedPush(t, pane, 30))
+	f.moveTo(t, pane, "blocked", 30)
+	f.moveTo(t, pane, "blocked", 30)
 
-	if send.count() != 0 {
-		t.Errorf("dismiss sends = %d, want 0 (still blocked)", send.count())
+	if f.send.count() != 0 {
+		t.Errorf("dismiss sends = %d, want 0 (still blocked)", f.send.count())
 	}
 	assertNoCleared(t, sub)
 }
@@ -259,64 +373,106 @@ func TestBlockedNotClearedWhileStillBlocked(t *testing.T) {
 // TestResolutionBeforePush is the regression test for the race that left
 // notifications stuck in the tray forever.
 //
-// A status change reaches the bus over the Herdr socket in milliseconds, while
-// the matching push_sent only lands after the watcher has read the agent's
-// prompt and finished the FCM fan-out. Answer the prompt fast enough and the
-// resolving "working" arrives BEFORE the "blocked" push it resolves. The pane
-// isn't armed yet, so the old code dropped the resolution and then armed on a
-// push that was already stale — nothing ever cleared it.
+// Composing a push costs several Herdr reads, so the agent can be answered from
+// the desktop before the fan-out finishes. The resolving transition then arrives
+// while the pane is not yet armed and is dropped; arming afterwards would strand
+// a notification nothing will ever clear.
 func TestResolutionBeforePush(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p1W"
-	// The agent blocked, then was answered from the desktop — both observed
-	// before the push announcing the block has been composed and sent.
-	c.handle(statusChange(t, pane, "blocked"))
-	c.handle(statusChange(t, pane, "working"))
-	c.handle(blockedPush(t, pane))
+	f.moveTo(t, pane, "blocked", 40)
+	f.moveTo(t, pane, "working", 41) // answered at the desk, before the push landed
+	f.c.handle(blockedPush(t, pane, 40))
 
-	if send.count() != 1 {
-		t.Fatalf("dismiss sends = %d, want 1 (the push was overtaken in flight)", send.count())
+	if f.send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 (the push was overtaken in flight)", f.send.count())
 	}
 	if got := waitCleared(t, sub); got != pane {
 		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
 	}
 
-	c.mu.Lock()
-	_, stillArmed := c.pending[pane]
-	c.mu.Unlock()
+	f.c.mu.Lock()
+	_, stillArmed := f.c.pending[pane]
+	f.c.mu.Unlock()
 	if stillArmed {
 		t.Error("pane left armed after an overtaken push; it would never clear")
 	}
 }
 
-// TestPushInOrderStillArms guards the fix from over-firing: when the push
-// arrives while the pane really is still blocked, it must arm normally and NOT
-// dismiss itself.
-func TestPushInOrderStillArms(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+// TestReBlockedBeforeArmStaysArmed: blocked -> working -> blocked, all before the
+// first push arms. The notification still says "needs you", which is true, and a
+// newer push shares its tag and will replace the contents. Dismissing here would
+// race that push and could cancel the fresh notification.
+func TestReBlockedBeforeArmStaysArmed(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
-	const pane = "wN:p2"
-	c.handle(statusChange(t, pane, "blocked"))
-	c.handle(blockedPush(t, pane))
+	const pane = "wN:p3"
+	f.agents.set(pane, "blocked", 52) // re-entered blocked at a NEWER seq
+	f.c.handle(blockedPush(t, pane, 50))
 
-	if send.count() != 0 {
-		t.Fatalf("dismiss sends = %d, want 0 (the agent is still blocked)", send.count())
+	if f.send.count() != 0 {
+		t.Fatalf("dismiss sends = %d, want 0 — the agent still needs the user", f.send.count())
 	}
 	assertNoCleared(t, sub)
 
-	// ...and the later resolution still dismisses exactly once.
-	c.handle(statusChange(t, pane, "idle"))
-	if send.count() != 1 {
-		t.Errorf("dismiss sends = %d, want 1 after the real resolution", send.count())
+	f.c.mu.Lock()
+	a := f.c.pending[pane]
+	f.c.mu.Unlock()
+	if a.seq != 52 {
+		t.Errorf("armed seq = %d, want 52 (the freshly observed one, not the announced 50)", a.seq)
+	}
+}
+
+// TestReadFailureLeavesNotificationAlone: when Herdr can't be reached we cannot
+// know whether the notification is still true. Erring towards keeping it is
+// deliberate — a lingering alert is a nuisance, a vanished one is the failure
+// this subsystem exists to prevent.
+func TestReadFailureLeavesNotificationAlone(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p2"
+	f.agents.set(pane, "blocked", 60)
+	f.c.handle(blockedPush(t, pane, 60))
+
+	f.agents.fail(errors.New("herdr unreachable"))
+	f.nudge(t, pane, "idle")
+
+	if f.send.count() != 0 {
+		t.Errorf("dismiss sends = %d, want 0 (state unknown, so leave it alone)", f.send.count())
+	}
+	assertNoCleared(t, sub)
+
+	f.c.mu.Lock()
+	_, armed := f.c.pending[pane]
+	f.c.mu.Unlock()
+	if !armed {
+		t.Error("pane disarmed on an unreadable state; it could never be cleared afterwards")
+	}
+}
+
+// TestPaneGoneDismissesWithoutRead: a closed pane is unambiguous — there is no
+// state to read and nothing the notification could still be true about.
+func TestPaneGoneDismissesWithoutRead(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p2"
+	f.agents.set(pane, "blocked", 70)
+	f.c.handle(blockedPush(t, pane, 70))
+
+	f.agents.fail(errors.New("pane not found")) // it's gone
+	f.c.handle(paneExited(t, pane))
+
+	if f.send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 (the pane is gone)", f.send.count())
 	}
 	if got := waitCleared(t, sub); got != pane {
 		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
@@ -326,18 +482,17 @@ func TestPushInOrderStillArms(t *testing.T) {
 // TestDismissPayload asserts the shape the app depends on: a silent, data-only
 // message tagged with "<server>/<pane>" and scoped to this bridge.
 func TestDismissPayload(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
-	sub := bus.Subscribe(16)
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p2"
-	c.handle(blockedPush(t, pane))
-	c.handle(statusChange(t, pane, "idle"))
+	f.agents.set(pane, "blocked", 80)
+	f.c.handle(blockedPush(t, pane, 80))
+	f.moveTo(t, pane, "idle", 81)
 	_ = waitCleared(t, sub)
 
-	last := send.last()
+	last := f.send.last()
 	if last["__kind"] != "data" {
 		t.Errorf("dismiss kind = %q, want data-only (it must never draw a notification)", last["__kind"])
 	}
@@ -350,38 +505,36 @@ func TestDismissPayload(t *testing.T) {
 }
 
 // TestRunEndToEnd drives the full wiring: Run subscribes to a real bus, and
-// events are delivered via bus.Publish (not handle() directly). A blocked push
-// then a resolving status change must produce a dismiss send + a
-// notification_cleared delta on the same bus.
+// events are delivered via bus.Publish (not handle() directly).
 func TestRunEndToEnd(t *testing.T) {
-	bus := events.New()
-	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
+	f := newFixture("tokA")
 
 	// A watcher of the bus, to observe the notification_cleared the clearer emits.
-	watch := bus.Subscribe(32)
+	watch := f.bus.Subscribe(32)
 	defer watch.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go c.Run(ctx)
+	go f.c.Run(ctx)
 
 	const pane = "wN:p7"
 	// Give Run a moment to subscribe before publishing.
-	waitFor(t, func() bool { return bus.SubscriberCount() == 2 })
+	waitFor(t, func() bool { return f.bus.SubscriberCount() == 2 })
 
-	if _, err := bus.Publish(events.SourceGothalo, events.TypePushSent,
-		map[string]any{"agent": pane, "status": "blocked"}); err != nil {
+	f.agents.set(pane, "blocked", 90)
+	if _, err := f.bus.Publish(events.SourceGothalo, events.TypePushSent,
+		map[string]any{"agent": pane, "status": "blocked", "seq": 90}); err != nil {
 		t.Fatalf("publish push_sent: %v", err)
 	}
 	waitFor(t, func() bool {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		_, armed := c.pending[pane]
+		f.c.mu.Lock()
+		defer f.c.mu.Unlock()
+		_, armed := f.c.pending[pane]
 		return armed
 	})
 
-	if _, err := bus.Publish(events.SourceHerdr, events.TypePaneAgentStatusChanged,
+	f.agents.set(pane, "idle", 91)
+	if _, err := f.bus.Publish(events.SourceHerdr, events.TypePaneAgentStatusChanged,
 		map[string]any{"pane_id": pane, "agent_status": "idle"}); err != nil {
 		t.Fatalf("publish status change: %v", err)
 	}
@@ -389,8 +542,8 @@ func TestRunEndToEnd(t *testing.T) {
 	if got := waitCleared(t, watch); got != pane {
 		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
 	}
-	waitFor(t, func() bool { return send.count() == 1 })
-	if last := send.last(); last["type"] != "dismiss" || last["agent"] != pane {
+	waitFor(t, func() bool { return f.send.count() == 1 })
+	if last := f.send.last(); last["type"] != "dismiss" || last["agent"] != pane {
 		t.Errorf("dismiss data = %v, want type=dismiss agent=%s", last, pane)
 	}
 }
@@ -414,15 +567,68 @@ func waitFor(t *testing.T, cond func() bool) {
 // (no send, no panic) and still publishes the consistency event.
 func TestFCMDisabledNoOp(t *testing.T) {
 	bus := events.New()
-	c := newClearer(bus, nil, fakeDevices{"tokA"}, testServerID) // push == nil
+	agents := newFakeAgents()
+	c := newClearer(bus, nil, fakeDevices{"tokA"}, testServerID, agents) // push == nil
 	sub := bus.Subscribe(16)
 	defer sub.Close()
 
 	const pane = "wN:p2"
-	c.handle(blockedPush(t, pane))
+	agents.set(pane, "blocked", 100)
+	c.handle(blockedPush(t, pane, 100))
+	agents.set(pane, "idle", 101)
 	c.handle(statusChange(t, pane, "idle"))
 
 	if got := waitCleared(t, sub); got != pane {
 		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
 	}
+}
+
+// TestSweepDismissesWithoutAnyBusEvent is the other half of the fix.
+//
+// A pane created after the bridge connected has no targeted Herdr subscription,
+// so its resolution produces NO bus event whatsoever — verified on-device: the
+// agent went blocked -> idle and the tray notification stayed put because
+// nothing ever nudged the clearer. Correctness therefore cannot depend on the
+// bus; the periodic sweep is what actually guarantees the dismiss.
+func TestSweepDismissesWithoutAnyBusEvent(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p27"
+	f.agents.set(pane, "blocked", 386)
+	f.c.handle(blockedPush(t, pane, 386))
+
+	// The agent is answered at the desk. No bus event is delivered at all.
+	f.agents.set(pane, "idle", 387)
+
+	f.c.sweep()
+
+	if f.send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 — the sweep must clear it unaided", f.send.count())
+	}
+	if got := waitCleared(t, sub); got != pane {
+		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
+	}
+}
+
+// TestSweepLeavesLiveNotifications: a sweep must not clear a notification that is
+// still true, however many times it runs.
+func TestSweepLeavesLiveNotifications(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p2"
+	f.agents.set(pane, "blocked", 400)
+	f.c.handle(blockedPush(t, pane, 400))
+
+	f.c.sweep()
+	f.c.sweep()
+	f.c.sweep()
+
+	if f.send.count() != 0 {
+		t.Errorf("dismiss sends = %d, want 0 (still blocked)", f.send.count())
+	}
+	assertNoCleared(t, sub)
 }
