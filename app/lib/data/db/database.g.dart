@@ -70,6 +70,18 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
     requiredDuringInsert: false,
     defaultValue: const Constant(''),
   );
+  static const VerificationMeta _bridgeVersionMeta = const VerificationMeta(
+    'bridgeVersion',
+  );
+  @override
+  late final GeneratedColumn<int> bridgeVersion = GeneratedColumn<int>(
+    'bridge_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -78,6 +90,7 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
     deviceId,
     source,
     serverId,
+    bridgeVersion,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -130,6 +143,15 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
         serverId.isAcceptableOrUnknown(data['server_id']!, _serverIdMeta),
       );
     }
+    if (data.containsKey('bridge_version')) {
+      context.handle(
+        _bridgeVersionMeta,
+        bridgeVersion.isAcceptableOrUnknown(
+          data['bridge_version']!,
+          _bridgeVersionMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -163,6 +185,10 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
         DriftSqlType.string,
         data['${effectivePrefix}server_id'],
       )!,
+      bridgeVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}bridge_version'],
+      )!,
     );
   }
 
@@ -188,6 +214,11 @@ class Profile extends DataClass implements Insertable<Profile> {
   /// and therefore which server a notification tap should open. Empty until the
   /// bridge has been reached once (or for a bridge too old to report one).
   final String serverId;
+
+  /// The bridge's capability level from `GET /info`. Zero means it has never
+  /// answered — either too old to have the endpoint, or not reached yet — which
+  /// is also the state in which its pushes cannot be attributed or routed.
+  final int bridgeVersion;
   const Profile({
     required this.id,
     required this.name,
@@ -195,6 +226,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     this.deviceId,
     required this.source,
     required this.serverId,
+    required this.bridgeVersion,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -207,6 +239,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     }
     map['source'] = Variable<String>(source);
     map['server_id'] = Variable<String>(serverId);
+    map['bridge_version'] = Variable<int>(bridgeVersion);
     return map;
   }
 
@@ -220,6 +253,7 @@ class Profile extends DataClass implements Insertable<Profile> {
           : Value(deviceId),
       source: Value(source),
       serverId: Value(serverId),
+      bridgeVersion: Value(bridgeVersion),
     );
   }
 
@@ -235,6 +269,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       deviceId: serializer.fromJson<String?>(json['deviceId']),
       source: serializer.fromJson<String>(json['source']),
       serverId: serializer.fromJson<String>(json['serverId']),
+      bridgeVersion: serializer.fromJson<int>(json['bridgeVersion']),
     );
   }
   @override
@@ -247,6 +282,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       'deviceId': serializer.toJson<String?>(deviceId),
       'source': serializer.toJson<String>(source),
       'serverId': serializer.toJson<String>(serverId),
+      'bridgeVersion': serializer.toJson<int>(bridgeVersion),
     };
   }
 
@@ -257,6 +293,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     Value<String?> deviceId = const Value.absent(),
     String? source,
     String? serverId,
+    int? bridgeVersion,
   }) => Profile(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -264,6 +301,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     deviceId: deviceId.present ? deviceId.value : this.deviceId,
     source: source ?? this.source,
     serverId: serverId ?? this.serverId,
+    bridgeVersion: bridgeVersion ?? this.bridgeVersion,
   );
   Profile copyWithCompanion(ProfilesCompanion data) {
     return Profile(
@@ -273,6 +311,9 @@ class Profile extends DataClass implements Insertable<Profile> {
       deviceId: data.deviceId.present ? data.deviceId.value : this.deviceId,
       source: data.source.present ? data.source.value : this.source,
       serverId: data.serverId.present ? data.serverId.value : this.serverId,
+      bridgeVersion: data.bridgeVersion.present
+          ? data.bridgeVersion.value
+          : this.bridgeVersion,
     );
   }
 
@@ -284,14 +325,15 @@ class Profile extends DataClass implements Insertable<Profile> {
           ..write('baseUrl: $baseUrl, ')
           ..write('deviceId: $deviceId, ')
           ..write('source: $source, ')
-          ..write('serverId: $serverId')
+          ..write('serverId: $serverId, ')
+          ..write('bridgeVersion: $bridgeVersion')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode =>
-      Object.hash(id, name, baseUrl, deviceId, source, serverId);
+      Object.hash(id, name, baseUrl, deviceId, source, serverId, bridgeVersion);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -301,7 +343,8 @@ class Profile extends DataClass implements Insertable<Profile> {
           other.baseUrl == this.baseUrl &&
           other.deviceId == this.deviceId &&
           other.source == this.source &&
-          other.serverId == this.serverId);
+          other.serverId == this.serverId &&
+          other.bridgeVersion == this.bridgeVersion);
 }
 
 class ProfilesCompanion extends UpdateCompanion<Profile> {
@@ -311,6 +354,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
   final Value<String?> deviceId;
   final Value<String> source;
   final Value<String> serverId;
+  final Value<int> bridgeVersion;
   final Value<int> rowid;
   const ProfilesCompanion({
     this.id = const Value.absent(),
@@ -319,6 +363,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     this.deviceId = const Value.absent(),
     this.source = const Value.absent(),
     this.serverId = const Value.absent(),
+    this.bridgeVersion = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProfilesCompanion.insert({
@@ -328,6 +373,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     this.deviceId = const Value.absent(),
     this.source = const Value.absent(),
     this.serverId = const Value.absent(),
+    this.bridgeVersion = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        name = Value(name),
@@ -339,6 +385,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     Expression<String>? deviceId,
     Expression<String>? source,
     Expression<String>? serverId,
+    Expression<int>? bridgeVersion,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -348,6 +395,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
       if (deviceId != null) 'device_id': deviceId,
       if (source != null) 'source': source,
       if (serverId != null) 'server_id': serverId,
+      if (bridgeVersion != null) 'bridge_version': bridgeVersion,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -359,6 +407,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     Value<String?>? deviceId,
     Value<String>? source,
     Value<String>? serverId,
+    Value<int>? bridgeVersion,
     Value<int>? rowid,
   }) {
     return ProfilesCompanion(
@@ -368,6 +417,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
       deviceId: deviceId ?? this.deviceId,
       source: source ?? this.source,
       serverId: serverId ?? this.serverId,
+      bridgeVersion: bridgeVersion ?? this.bridgeVersion,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -393,6 +443,9 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     if (serverId.present) {
       map['server_id'] = Variable<String>(serverId.value);
     }
+    if (bridgeVersion.present) {
+      map['bridge_version'] = Variable<int>(bridgeVersion.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -408,6 +461,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
           ..write('deviceId: $deviceId, ')
           ..write('source: $source, ')
           ..write('serverId: $serverId, ')
+          ..write('bridgeVersion: $bridgeVersion, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1146,6 +1200,7 @@ typedef $$ProfilesTableCreateCompanionBuilder =
       Value<String?> deviceId,
       Value<String> source,
       Value<String> serverId,
+      Value<int> bridgeVersion,
       Value<int> rowid,
     });
 typedef $$ProfilesTableUpdateCompanionBuilder =
@@ -1156,6 +1211,7 @@ typedef $$ProfilesTableUpdateCompanionBuilder =
       Value<String?> deviceId,
       Value<String> source,
       Value<String> serverId,
+      Value<int> bridgeVersion,
       Value<int> rowid,
     });
 
@@ -1195,6 +1251,11 @@ class $$ProfilesTableFilterComposer
 
   ColumnFilters<String> get serverId => $composableBuilder(
     column: $table.serverId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get bridgeVersion => $composableBuilder(
+    column: $table.bridgeVersion,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1237,6 +1298,11 @@ class $$ProfilesTableOrderingComposer
     column: $table.serverId,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get bridgeVersion => $composableBuilder(
+    column: $table.bridgeVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ProfilesTableAnnotationComposer
@@ -1265,6 +1331,11 @@ class $$ProfilesTableAnnotationComposer
 
   GeneratedColumn<String> get serverId =>
       $composableBuilder(column: $table.serverId, builder: (column) => column);
+
+  GeneratedColumn<int> get bridgeVersion => $composableBuilder(
+    column: $table.bridgeVersion,
+    builder: (column) => column,
+  );
 }
 
 class $$ProfilesTableTableManager
@@ -1301,6 +1372,7 @@ class $$ProfilesTableTableManager
                 Value<String?> deviceId = const Value.absent(),
                 Value<String> source = const Value.absent(),
                 Value<String> serverId = const Value.absent(),
+                Value<int> bridgeVersion = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProfilesCompanion(
                 id: id,
@@ -1309,6 +1381,7 @@ class $$ProfilesTableTableManager
                 deviceId: deviceId,
                 source: source,
                 serverId: serverId,
+                bridgeVersion: bridgeVersion,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1319,6 +1392,7 @@ class $$ProfilesTableTableManager
                 Value<String?> deviceId = const Value.absent(),
                 Value<String> source = const Value.absent(),
                 Value<String> serverId = const Value.absent(),
+                Value<int> bridgeVersion = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProfilesCompanion.insert(
                 id: id,
@@ -1327,6 +1401,7 @@ class $$ProfilesTableTableManager
                 deviceId: deviceId,
                 source: source,
                 serverId: serverId,
+                bridgeVersion: bridgeVersion,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

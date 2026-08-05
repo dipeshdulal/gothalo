@@ -23,12 +23,23 @@ class ServerSummary {
     required this.name,
     required this.baseUrl,
     required this.isActive,
+    this.bridgeVersion = 0,
   });
 
   final String id;
   final String name;
   final String baseUrl;
   final bool isActive;
+
+  /// The bridge's capability level from `GET /info`; 0 when it has never
+  /// answered.
+  final int bridgeVersion;
+
+  /// A bridge that has not identified itself cannot have its notifications
+  /// attributed or routed — tapping one refuses rather than opening the wrong
+  /// machine's pane. Worth surfacing in the list, since the alternative is
+  /// discovering it only when a tap declines to go anywhere.
+  bool get needsUpgrade => bridgeVersion == 0;
 }
 
 /// The encrypted key/value store for secrets (bearers + the active-server id).
@@ -127,6 +138,7 @@ Stream<List<ServerSummary>> servers(Ref ref) {
                 name: r.name,
                 baseUrl: r.baseUrl,
                 isActive: r.id == activeId,
+                bridgeVersion: r.bridgeVersion,
               ),
             )
             .toList(),

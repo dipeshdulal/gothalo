@@ -326,7 +326,11 @@ class _ServerTile extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          _StatsLine(summary: summary, attention: attention),
+          _StatsLine(
+            summary: summary,
+            attention: attention,
+            needsUpgrade: server.needsUpgrade,
+          ),
         ],
       ),
       isThreeLine: true,
@@ -342,9 +346,16 @@ class _ServerTile extends StatelessWidget {
 }
 
 class _StatsLine extends StatelessWidget {
-  const _StatsLine({required this.summary, required this.attention});
+  const _StatsLine({
+    required this.summary,
+    required this.attention,
+    required this.needsUpgrade,
+  });
   final ServerAgents? summary;
   final int attention;
+
+  /// This bridge has never reported a version — see [ServerSummary.needsUpgrade].
+  final bool needsUpgrade;
 
   @override
   Widget build(BuildContext context) {
@@ -368,6 +379,35 @@ class _StatsLine extends StatelessWidget {
           '$count agent${count == 1 ? '' : 's'}',
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         ),
+        // A bridge that has never identified itself can't have its notifications
+        // attributed or routed. Worth showing — the alternative is discovering
+        // it only when a notification tap declines to open anything — but it is
+        // a nudge, not an alarm: everything else about the server works, so it
+        // sits quietly next to the agent count rather than beside the name.
+        if (needsUpgrade) ...[
+          const SizedBox(width: 6),
+          const Tooltip(
+            message: 'Update gothalo on this machine to route its notifications',
+            child: Icon(
+              Icons.warning_amber_rounded,
+              size: 15,
+              color: _warnColor,
+            ),
+          ),
+          const SizedBox(width: 4),
+          // Labelled, not icon-only: a tooltip needs a long-press on a phone, so
+          // a bare glyph says "something is wrong" without saying what — which
+          // is worse than saying nothing. Mirrors the "N need you" idiom used
+          // for attention on this same line.
+          const Text(
+            'update bridge',
+            style: TextStyle(
+              color: _warnColor,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
         if (attention > 0) ...[
           const SizedBox(width: 8),
           Container(
@@ -389,6 +429,11 @@ class _StatsLine extends StatelessWidget {
     );
   }
 }
+
+/// Amber for "works, but needs attention" — distinct from the error red used
+/// for an unreachable server, because this one is reachable and fine apart from
+/// notification routing.
+const _warnColor = Color(0xFFFFB300);
 
 /// host[:port] for the tile subtitle — keeps the port (e.g. :5338) visible.
 String _hostLabel(String baseUrl) {

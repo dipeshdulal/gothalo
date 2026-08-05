@@ -305,13 +305,17 @@ class BridgeClient {
   /// for attribution in the alerts log and for routing a notification tap. A
   /// bridge older than this endpoint 404s; callers treat that as "unknown" and
   /// carry on.
-  Future<({String serverId, String serverName})> info() async {
+  /// `version` is the bridge's capability level, hand-bumped on the bridge when
+  /// it gains something the app may branch on. Zero means a bridge old enough
+  /// not to report one.
+  Future<({String serverId, String serverName, int version})> info() async {
     try {
       final res = await _dio.get<Map<String, dynamic>>('/info');
       final body = res.data ?? const <String, dynamic>{};
       return (
         serverId: (body['server_id'] as String?) ?? '',
         serverName: (body['server_name'] as String?) ?? '',
+        version: (body['version'] as num?)?.toInt() ?? 0,
       );
     } on DioException catch (e) {
       throw _asBridgeException(e);

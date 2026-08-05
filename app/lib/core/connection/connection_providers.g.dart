@@ -215,7 +215,7 @@ final class ServersProvider
   }
 }
 
-String _$serversHash() => r'f32c0e5ec3c49516bb05d967efc556efbba8291e';
+String _$serversHash() => r'65cf9d8e0c6c20670bc10f703944e68551154019';
 
 /// The active [Connection] (with its bearer), assembled from the active id +
 /// its drift profile + its secure-storage bearer. Null when no server is

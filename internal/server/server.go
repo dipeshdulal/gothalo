@@ -293,17 +293,37 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /info -> this bridge's identity. Small on purpose: every push carries a
-// server_id, and the app needs a way to learn which of its saved servers that id
-// belongs to — including for servers paired before identity existed, which is
-// why this is a standalone endpoint and not only part of the pairing response.
+// BridgeVersion is what this bridge can do, as one number the app can compare
+// against. Hand-maintained: bump it when the surface the app depends on gains
+// something the app would want to branch on, and leave it alone otherwise.
+//
+// Deliberately NOT derived from the build or from git. A version that changes
+// with every commit tells a client nothing about capability — it would have to
+// be mapped back to features somewhere, which is the job this number exists to
+// do directly.
+//
+// History:
+//
+//	1 — server identity (/info), notification rework, /events heartbeat.
+const BridgeVersion = 1
+
+// GET /info -> this bridge's identity and capability level.
+//
+// Small on purpose: every push carries a server_id, and the app needs a way to
+// learn which of its saved servers that id belongs to — including for servers
+// paired before identity existed, which is why this is a standalone endpoint and
+// not only part of the pairing response.
+//
+// Its absence is itself informative: a bridge that 404s here predates identity
+// entirely, and the app treats it as unidentified.
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
 	}
-	writeJSON(w, map[string]string{
+	writeJSON(w, map[string]any{
 		"server_id":   s.cfg.ServerID,
 		"server_name": s.cfg.ServerName,
+		"version":     BridgeVersion,
 	})
 }
 
