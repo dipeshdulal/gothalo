@@ -105,6 +105,53 @@ Moshi's crop/scribble and Omnara's screenshot-to-agent. Attach a screenshot to a
 ### #10 — "Start a new agent task" flow  *Bigger project*
 Omnara/Orca let you *launch* parallel agents, not just watch them. You already have `worktree.create` and `pane/new`; a guided "new task → creates worktree + starts agent with this prompt" flow would close the loop from *monitor* to *dispatch*. Bigger because it needs a start-agent contract on the bridge, but it's the natural next act for a fleet controller.
 
+### #11 — Subagent view in the transcript  *Medium* — added 2026-08-05
+
+Agents increasingly fan work out to **subagents**: Claude Code's Task tool, and
+OpenCode's subagents. Today the transcript flattens that — you see the parent
+invoke a tool and then, minutes later, a result, with no visibility into what
+happened in between. On a phone, where the whole point is answering *"what is it
+doing right now?"*, a long-running subagent is exactly the case where the current
+view goes dark.
+
+**On-disk layout — verified against live files on 2026-08-05**, not guessed.
+Claude Code does *not* inline subagent turns in the session file. It writes each
+subagent to a sibling directory named after the session:
+
+```
+~/.claude/projects/<encoded-cwd>/
+    <session>.jsonl                      main transcript
+    <session>/subagents/
+        agent-<agentID>.jsonl            subagent transcript, same line format
+        agent-<agentID>.meta.json        {agentType, description, toolUseId, spawnDepth}
+```
+
+The join is clean and needs no heuristics: `meta.json`'s **`toolUseId` equals the
+`tool_use` id of the `Task` call in the main transcript**, which the reader
+already captures as `Tool.ID`. `spawnDepth` gives nesting for free, and
+`agentType` + `description` are exactly the label a collapsed row wants
+("general-purpose · Build mobile Phase-3 control surface").
+
+*(An earlier draft of this entry claimed the mechanism was an `isSidechain` flag
+inline in `<session>.jsonl`. That was wrong — `isSidechain` exists as a field but
+the subagent bodies live in the separate files above. Recorded so the mistake is
+not repeated.)*
+
+Shape: discover the sibling `subagents/` dir when resolving a session, attach a
+subagent reference to the `Task` `tool_call` entry via the `toolUseId` join, and
+let the app fetch a subagent's transcript on demand rather than inlining it
+(these files are large — the sampled one was part of a 1.4 MB session). Render
+collapsed-by-default with a live count and status — "3 subagents · 1 working".
+`Entry` already carries `KindToolCall`/`KindToolResult` and the WS framing does
+not change, so this is reader work plus one nesting level in the transcript
+screen.
+
+Worth doing because it compounds the differentiator: no competing Herdr client
+reads transcripts at all, and a fleet controller that goes blind precisely when
+an agent parallelizes has a hole in it. `opencode.go` needs the equivalent
+treatment — check whether its SQLite store models subagents as separate sessions,
+which would make the join different from Claude's.
+
 ---
 
 ### Deliberately deprioritized
@@ -142,6 +189,40 @@ No code was changed — this is research and ideation only.
 
 ## Status (tracked here, updated as work lands)
 
-- [ ] #4 Diff/working-tree review screen — **in progress** (2026-08-04)
-- [ ] #7 Quick-commands/snippets above composer — **in progress** (2026-08-04)
-- Everything else: deferred, revisit later per user direction (2026-08-04).
+- [x] #4 Diff/working-tree review screen — landed (`features/diff`)
+- [x] #7 Quick-commands/snippets above composer — landed (`quick_commands_providers.dart`)
+- [ ] #9 Image/screenshot into prompt — **in progress**, branch `feat/image-to-agent` (2026-08-05)
+- [ ] #8 Recent-activity timeline — **in progress**, branch `feat/activity-timeline` (2026-08-05)
+- [ ] #10 Start/restart/stop an agent — **in progress**, branch `feat/agent-lifecycle` (2026-08-05)
+- [ ] #11 Subagent view in the transcript — queued (2026-08-05)
+- [ ] Slash-command typeahead in the composer — queued (2026-08-05)
+- [ ] Copy from the transcript screen — queued, small (2026-08-05)
+
+Decided against / deferred (2026-08-05):
+
+- **Audit log of phone writes** — rejected; won't be used. Both merino and
+  herdr-remote ship one, but this is a small trusted team on a private tailnet.
+- **Bridge self-update** — deferred until there is release wiring to hang it on.
+- **Telegram bot** (herdr-remote) — skipped deliberately: it exists there because
+  they could not ship native push. gothalo has FCM/APNs.
+- **Codex transcripts** — deferred until there is a Codex subscription and a
+  machine with real `~/.codex` rollout files. The format must be read off a live
+  machine, not guessed; see the stub comment in `internal/transcript/codex.go`.
+- **`GOTHALO_MODE=relay`** — keeping the stub as-is by decision, not oversight.
+
+### Second competitive sweep (2026-08-05) — Herdr-specific clients
+
+Four Herdr-specific projects, none of which existed at the first sweep:
+
+| Project | Shape | Notable |
+|---|---|---|
+| [herdr-remote](https://github.com/dcolinmorgan/herdr-remote) (186★) | Python relay + native macOS + Telegram | agent timeline, digests, web push w/ auto-clear, 11 themes |
+| [herdr-mobile-relay](https://github.com/0cv/herdr-mobile-relay) (27★) | Go+Node PWA, per-machine relay | multi-machine merge, 3 terminal fit modes, screenshots→agent, self-update w/ rollback, E2EE |
+| [merino](https://github.com/LoneExile/merino) (5★) | Go+Wails menu bar + phone dashboard | inline Kitty images, slash-command typeahead, launch-agent button, audit log |
+| [herdr-tether](https://github.com/moneycaringcoder/herdr-tether) (5★) | Rust plugin, tmux+SSH | durable sessions — orthogonal, potentially complementary |
+
+They converge on the same three primitives gothalo already has: list agents
+blocked-first, stream a pane, tap to approve. **None of them reads agent
+transcripts** — they all show terminal output only. Combined with native APNs
+push and a tailnet-only transport (two of the three route terminal traffic
+through Cloudflare), that remains the differentiated core worth protecting.
