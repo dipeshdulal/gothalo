@@ -209,13 +209,14 @@ Future<void> _logToDb(AppDatabase db, PushPayload p) async {
   );
 }
 
-/// Apply a push to the durable alert log: record an alert, or resolve the ones a
-/// dismiss makes stale.
+/// Apply a push to the durable alert log.
+///
+/// A dismiss clears the tray but writes nothing: the log records that an alert
+/// happened, and that stays true after the block is answered. Whether it still
+/// wants you is live state, shown by Priority — marking the row read here would
+/// hide it from the history you never looked at.
 Future<void> _applyToDb(AppDatabase db, PushPayload p) async {
-  if (p.isDismiss) {
-    await db.markResolved(serverId: p.serverId, paneId: p.pane);
-    return;
-  }
+  if (p.isDismiss) return;
   await _logToDb(db, p);
 }
 

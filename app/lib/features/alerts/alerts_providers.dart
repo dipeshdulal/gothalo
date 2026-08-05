@@ -12,22 +12,20 @@ final alertsProvider = StreamProvider<List<AgentEvent>>(
   (ref) => ref.watch(databaseProvider).watchAllEvents(),
 );
 
-/// Count of alerts still asking something of you — drives the bell badge on the
-/// Flock screen.
+/// Count of alerts you haven't looked at yet — drives the bell badge.
 ///
-/// Counts blocked alerts only. A `done` notice is a completion, not a request:
-/// including it made the badge claim things needed you when nothing did. An
-/// alert drops out of the count when you open Alerts, and also the moment the
-/// bridge reports the block resolved — from any device, or by the agent moving
-/// on — so the number decays on its own instead of only when you look at it.
+/// Deliberately "unseen", not "needs you". Priority already answers *what needs
+/// you* from live state, across every server; a second count derived from stored
+/// alert rows was a worse answer to the same question, and the two could
+/// disagree — a resolved block whose row was never marked would keep inflating
+/// the badge while Priority correctly showed nothing.
+///
+/// So the two surfaces split the work: Priority owns urgency, and the bell owns
+/// "something happened since you last looked" — including the completions and
+/// the already-resolved blocks that Priority, being a view of the present,
+/// cannot show at all.
 final unreadAlertsProvider = StreamProvider<int>(
-  (ref) => ref.watch(databaseProvider).watchNeedsYouCount(),
-);
-
-/// The same count split by originating bridge, keyed by `server_id`. Lets the
-/// servers list say *which* machine wants you.
-final needsYouByServerProvider = StreamProvider<Map<String, int>>(
-  (ref) => ref.watch(databaseProvider).watchNeedsYouByServer(),
+  (ref) => ref.watch(databaseProvider).watchUnreadCount(),
 );
 
 /// How an alert should read *now*, given the agent's live state.

@@ -166,96 +166,20 @@ class AppDatabase extends _$AppDatabase {
             ..limit(limit))
           .watch();
 
-  /// Number of unread (unhandled) alerts of any kind.
+  /// Number of alerts you haven't looked at yet — the bell badge.
+  ///
+  /// `handled` means *seen*, and only opening the Alerts screen sets it. It
+  /// deliberately does NOT mean *resolved*: whether a block still wants you is
+  /// live state, answered by Priority from the current snapshot, and a stored
+  /// row is the wrong place to keep an answer that goes out of date. An alert
+  /// you never looked at stays unread even after its block is over — that is
+  /// what "unseen" means, and reading it is exactly the point of the log.
   Stream<int> watchUnreadCount() {
     final count = agentEvents.rowId.count();
     final query = selectOnly(agentEvents)
       ..addColumns([count])
       ..where(agentEvents.handled.equals(false));
     return query.map((row) => row.read(count) ?? 0).watchSingle();
-  }
-
-  /// Number of alerts still **asking** something of you — drives the bell badge.
-  ///
-  /// Deliberately narrower than [watchUnreadCount]: a `done` notice is a
-  /// completion, not a request, and counting it made the badge read as "3 things
-  /// need you" when nothing did. A blocked alert stops counting once it is
-  /// handled — which now happens both when you open Alerts and when the bridge
-  /// tells us the block resolved anywhere (see [markResolved]).
-  Stream<int> watchNeedsYouCount() {
-    final count = agentEvents.rowId.count();
-    final query = selectOnly(agentEvents)
-      ..addColumns([count])
-      ..where(
-        agentEvents.handled.equals(false) & agentEvents.status.equals('blocked'),
-      );
-    return query.map((row) => row.read(count) ?? 0).watchSingle();
-  }
-
-  /// The same needs-you count, split by originating bridge, so the servers list
-  /// can show which machine wants you rather than one undifferentiated number.
-  /// Keyed by `server_id`; alerts from a bridge too old to send one group under
-  /// the empty string.
-  Stream<Map<String, int>> watchNeedsYouByServer() {
-    final count = agentEvents.rowId.count();
-    final query = selectOnly(agentEvents)
-      ..addColumns([agentEvents.serverId, count])
-      ..where(
-        agentEvents.handled.equals(false) & agentEvents.status.equals('blocked'),
-      )
-      ..groupBy([agentEvents.serverId]);
-    return query.map((row) {
-      return MapEntry(row.read(agentEvents.serverId) ?? '', row.read(count) ?? 0);
-    }).watch().map(Map.fromEntries);
-  }
-
-  /// Reconcile the needs-you count against live state: mark every outstanding
-  /// blocked alert handled whose pane is no longer blocked on the server.
-  ///
-  /// The dismiss push ([markResolved]) is the fast path, but it is a *push* — a
-  /// frozen, offline or force-stopped app never sees it, and that alert then
-  /// counts against the badge forever. A snapshot says what is true right now,
-  /// so reconciling against it lets the count heal itself instead of drifting
-  /// upward every time a message is missed.
-  ///
-  /// Scoped to one server: [stillBlocked] comes from that server's snapshot and
-  /// says nothing about any other machine's panes.
-  Future<int> resolveStaleBlocked({
-    required String serverId,
-    required Set<String> stillBlocked,
-  }) {
-    if (serverId.isEmpty) return Future.value(0);
-    final q = update(agentEvents)
-      ..where(
-        (t) =>
-            t.handled.equals(false) &
-            t.status.equals('blocked') &
-            // Alerts predating server attribution carry an empty id; they can
-            // only have come from the one server this phone was paired with.
-            (t.serverId.equals(serverId) | t.serverId.equals('')) &
-            t.paneId.isNotIn(stillBlocked.toList()),
-      );
-    return q.write(const AgentEventsCompanion(handled: Value(true)));
-  }
-
-  /// Mark a pane's outstanding blocked alerts as handled, because the block is
-  /// over — whoever answered it. Called when the bridge pushes a dismiss, which
-  /// is what keeps the badge honest without the user opening the app.
-  Future<int> markResolved({
-    required String serverId,
-    required String paneId,
-  }) {
-    final q = update(agentEvents)
-      ..where(
-        (t) =>
-            t.paneId.equals(paneId) &
-            t.handled.equals(false) &
-            t.status.equals('blocked') &
-            // An empty server id means the alert predates attribution; don't let
-            // one bridge clear another's alerts, but do clear the unattributed.
-            (t.serverId.equals(serverId) | t.serverId.equals('')),
-      );
-    return q.write(const AgentEventsCompanion(handled: Value(true)));
   }
 
   Future<void> markAllHandled() =>

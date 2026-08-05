@@ -85,9 +85,6 @@ Future<ActionOutcome> runNotificationAction({
       }
     }
 
-    // Whoever answered it, this pane is no longer asking — keep the badge
-    // honest without waiting for the bridge's dismiss push to arrive.
-    await db.markResolved(serverId: target.serverId, paneId: target.pane);
     return ActionOutcome.applied;
   } catch (e) {
     debugPrint('gothalo: notification action failed: $e');
