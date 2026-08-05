@@ -106,19 +106,37 @@ happened in between. On a phone, where the whole point is answering *"what is it
 doing right now?"*, a long-running subagent is exactly the case where the current
 view goes dark.
 
-Concretely, `internal/transcript/claude.go` parses `parentUuid` but has **no
-`isSidechain` handling at all**. Claude Code writes subagent turns into the same
-`<session>.jsonl` flagged `isSidechain: true`, chained by `parentUuid` — so that
-material is currently either flattened into the main thread as if the parent had
-said it, or dropped. Either way it is wrong, and the fix lives in the reader, not
-the UI.
+**On-disk layout — verified against live files on 2026-08-05**, not guessed.
+Claude Code does *not* inline subagent turns in the session file. It writes each
+subagent to a sibling directory named after the session:
 
-Shape: add a sidechain notion to the normalized `Entry` (a parent link plus a
-"this is a subagent turn" marker), group sidechain turns under the spawning tool
-call, and render them collapsed-by-default with a live count and status —
-"3 subagents · 1 working". `Entry` already carries `KindToolCall`/`KindToolResult`
-and the WS framing does not change, so this is mostly reader work plus one
-nesting level in the transcript screen.
+```
+~/.claude/projects/<encoded-cwd>/
+    <session>.jsonl                      main transcript
+    <session>/subagents/
+        agent-<agentID>.jsonl            subagent transcript, same line format
+        agent-<agentID>.meta.json        {agentType, description, toolUseId, spawnDepth}
+```
+
+The join is clean and needs no heuristics: `meta.json`'s **`toolUseId` equals the
+`tool_use` id of the `Task` call in the main transcript**, which the reader
+already captures as `Tool.ID`. `spawnDepth` gives nesting for free, and
+`agentType` + `description` are exactly the label a collapsed row wants
+("general-purpose · Build mobile Phase-3 control surface").
+
+*(An earlier draft of this entry claimed the mechanism was an `isSidechain` flag
+inline in `<session>.jsonl`. That was wrong — `isSidechain` exists as a field but
+the subagent bodies live in the separate files above. Recorded so the mistake is
+not repeated.)*
+
+Shape: discover the sibling `subagents/` dir when resolving a session, attach a
+subagent reference to the `Task` `tool_call` entry via the `toolUseId` join, and
+let the app fetch a subagent's transcript on demand rather than inlining it
+(these files are large — the sampled one was part of a 1.4 MB session). Render
+collapsed-by-default with a live count and status — "3 subagents · 1 working".
+`Entry` already carries `KindToolCall`/`KindToolResult` and the WS framing does
+not change, so this is reader work plus one nesting level in the transcript
+screen.
 
 Worth doing because it compounds the differentiator: no competing Herdr client
 reads transcripts at all, and a fleet controller that goes blind precisely when

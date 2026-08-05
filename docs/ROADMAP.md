@@ -76,10 +76,11 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
   subscription and a machine with real `~/.codex` rollout files: the format must
   be read off a live machine, not guessed. This is the one hole in the transcript
   feature, which is otherwise gothalo's strongest differentiator.
-- **Subagent turns are mishandled.** `internal/transcript/claude.go` parses
-  `parentUuid` but ignores `isSidechain`, so Claude Code subagent work is
-  flattened into the parent thread or dropped. See #11 in
-  `docs/RESEARCH-feature-ideas.md`.
+- **Subagent transcripts are invisible.** Claude Code writes each subagent to
+  `<session>/subagents/agent-<id>.jsonl` beside the session file, joined to the
+  parent's `Task` call by `meta.json`'s `toolUseId`. The reader never looks
+  there, so when an agent fans work out the phone goes dark exactly when it
+  should be most useful. See #11 in `docs/RESEARCH-feature-ideas.md`.
 - `GOTHALO_MODE=relay` stays a stub **by decision** (2026-08-05), not oversight.
 - No self-update. Deferred until there is release wiring to hang it on. Bridge/app
   version skew is still the likeliest real-world failure with more than one user.
