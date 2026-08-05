@@ -46,10 +46,11 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ✅ Tap-to-approve (`features/approvals`)
 - ✅ Saved bridge hosts (`features/servers`, multi-bridge since #83)
 - ✅ Theme (`ThemeMode.system`; no in-app picker, which is fine)
-- ⬜ **Biometric gate** — never built. `local_auth: ^3.0.2` is declared in
-      `app/pubspec.yaml` but imported **nowhere** in `lib/`. Either build the
-      gate or drop the dependency; leaving it declared implies a protection
-      that does not exist.
+- ⬜ **Biometric gate** — never built, and **deferred by decision** (2026-08-05):
+      not needed yet. Note `local_auth: ^3.0.2` is still declared in
+      `app/pubspec.yaml` but imported **nowhere** in `lib/`. The dependency is
+      being kept for when the gate is built; until then it implies a protection
+      that does not exist, so do not read its presence as auth being handled.
 
 ## Phase 4 — Polish
 - ✅ Actionable notification buttons (`features/push/notification_actions.dart`)
