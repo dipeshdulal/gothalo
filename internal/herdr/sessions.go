@@ -271,16 +271,16 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 				results[i] = result{err: err}
 				return
 			}
+			// SnapshotRaw returns the socket's result object — the same
+			// {type, snapshot} the CLI printed inside its `result` envelope.
 			var env struct {
-				Result struct {
-					Snapshot map[string]any `json:"snapshot"`
-				} `json:"result"`
+				Snapshot map[string]any `json:"snapshot"`
 			}
-			if err := json.Unmarshal(raw, &env); err != nil || env.Result.Snapshot == nil {
+			if err := json.Unmarshal(raw, &env); err != nil || env.Snapshot == nil {
 				results[i] = result{err: fmt.Errorf("parse snapshot: %w", err)}
 				return
 			}
-			results[i] = result{node: env.Result.Snapshot}
+			results[i] = result{node: env.Snapshot}
 		}(i, c)
 	}
 	wg.Wait()

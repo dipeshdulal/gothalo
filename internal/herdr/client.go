@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -132,10 +131,14 @@ func (c *Client) runFor(d time.Duration, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-// SnapshotRaw returns the raw `herdr api snapshot` JSON, for endpoints that
-// pass Herdr state straight through to the client.
+// SnapshotRaw returns this session's snapshot payload (`session.snapshot`) — the
+// `{type, snapshot}` result object, which is what `herdr api snapshot` prints
+// inside its `result` envelope.
+//
+// This is the hottest read the app drives: every event nudges a debounced
+// /snapshot refetch, so it ran once per change burst as a process spawn.
 func (c *Client) SnapshotRaw() ([]byte, error) {
-	return c.run("api", "snapshot")
+	return c.Request("session.snapshot", struct{}{})
 }
 
 // Agent is the subset of snapshot agent fields gothalo uses.
@@ -267,21 +270,28 @@ func asSocketAgentError(err error) error {
 // ANSI for --format text. Returns ErrAgentNotFound when the pane has no agent,
 // and ErrAgentNotIdle when a scrollback source is asked of a working pane.
 func (c *Client) ReadText(pane, source string, lines int) (string, error) {
-	args := []string{"agent", "read", pane, "--source", source, "--format", "text"}
+	params := struct {
+		Target string `json:"target"`
+		Source string `json:"source"`
+		Format string `json:"format"`
+		Lines  *int   `json:"lines,omitempty"`
+	}{Target: pane, Source: source, Format: "text"}
 	if lines > 0 {
-		args = append(args, "--lines", strconv.Itoa(lines))
+		params.Lines = &lines
 	}
-	out, err := c.run(args...)
-	// A text read still emits a JSON error object (exit 0) when the target is gone.
-	if bytes.HasPrefix(bytes.TrimSpace(out), []byte(`{"error"`)) {
-		if aerr := asAgentError(out); aerr != nil {
-			return "", aerr
-		}
-	}
+	res, err := c.Request("agent.read", params)
 	if err != nil {
-		return "", err
+		return "", asSocketAgentError(err)
 	}
-	return string(out), nil
+	var body struct {
+		Read struct {
+			Text string `json:"text"`
+		} `json:"read"`
+	}
+	if err := json.Unmarshal(res, &body); err != nil {
+		return "", fmt.Errorf("parse agent.read: %w", err)
+	}
+	return body.Read.Text, nil
 }
 
 // Send types text into a pane (`herdr pane send-text`).

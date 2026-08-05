@@ -1,7 +1,11 @@
-# Design — PaneStore: one writer, one truth
+# Design — how the bridge learns Herdr state
 
-Status: **proposal**. Supersedes nothing yet; describes a staged rewrite of how
-the bridge learns Herdr state and how it drives notifications and `/events`.
+Status: **decided**. Steps 1-4 shipped. The `PaneStore` this document was
+originally written to propose was **not built**, and should not be — see
+[Decision: no PaneStore](#decision-no-panestore) at the end for the numbers.
+
+The short version: the bridge reads state from Herdr directly, over the control
+socket, and caches nothing.
 
 ## Why
 
@@ -205,3 +209,63 @@ step 6 — and step 6 can break freely since both sides ship together.
 - Does the store need to persist across bridge restarts, or is a cold rebuild
   from `agent.list` + structural snapshot sufficient? Currently assuming the
   latter.
+
+## Decision: no PaneStore
+
+This document opened by proposing an authoritative in-bridge store as the single
+writer. After steps 1-4 shipped, that no longer earns its complexity. Recording
+why, so the case is not rebuilt from scratch.
+
+### The original justification is gone
+
+The store's headline argument was *"the clearer bug becomes unrepresentable"* —
+no second opinion to disagree with. But step 1 fixed that a different way: the
+clearer asks Herdr and compares against a fresh read.
+
+A store is a **cache**. Pointing the clearer at one would reintroduce precisely
+the shape that caused the bug. `lastStatus` *was* a cache of agent state, and it
+dismissed live notifications on every post-connect pane.
+
+### The performance argument does not survive measurement
+
+Measured against the live socket after step 3:
+
+| call | median | payload |
+| --- | --- | --- |
+| `session.snapshot` | **1.18 ms** | 19 KB |
+| `agent.list` | 0.33 ms | 3 KB |
+| `agent.get` | 0.15 ms | — |
+| `herdr api snapshot` (the CLI path we replaced) | ~7 ms | + a process spawn |
+
+A store would take a snapshot read from 1.18 ms to perhaps 0.05 ms. The app
+refetches at most ~4×/s (250 ms debounce), so the saving is single-digit
+milliseconds of CPU per second. Caching exists to hide a slow or remote source;
+this source is a local Unix socket in the same machine's memory.
+
+### Herdr already caches, and better than we would
+
+Its targeted `pane.agent_status_changed` subscriptions fall back to polling the
+pane and diffing when the event hub had nothing (`api/subscriptions.rs:454`),
+guarded against torn reads. A store in front of that would be a second,
+less-correct copy of a mechanism that already works.
+
+### What remains true from this document
+
+The Herdr API constraints table is the durable part — it was established by
+reading `herdr` 0.8.0 and testing against the live socket, and it is what the
+shipped design rests on. Also still true:
+
+- `state_change_seq` is the only cross-component ordering token that exists, and
+  anything comparing facts from two sources must use it.
+- The event bus is a **change signal**, not a state feed. Consumers must treat a
+  payload as a nudge and read truth themselves. That is the single rule that
+  would have prevented every bug found in this work.
+- The app's debounced-refetch model is self-correcting and should stay that way
+  until measurements say otherwise.
+
+### If this is ever revisited
+
+The two things that would change the answer: an app that applies deltas instead
+of refetching (needs enriched deltas, which needs a writer that owns derived
+state), or agent counts high enough that two socket connections per agent
+becomes a real cost. Neither is true at present.
