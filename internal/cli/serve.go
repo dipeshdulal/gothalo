@@ -52,6 +52,11 @@ func runServe(configPath string) error {
 		// Never log the token value; point the operator at the file.
 		log.Info("generated admin token", "config", cfg.ConfigPath())
 	}
+	if saved, err := cfg.EnsureServerID(); err != nil {
+		return err
+	} else if saved {
+		log.Info("generated server id", "id", cfg.ServerID, "name", cfg.ServerName)
+	}
 
 	st, err := store.Open(cfg.DevicesPath())
 	if err != nil {
@@ -92,7 +97,7 @@ func runServe(configPath string) error {
 
 	// The notification-clearer is the process-wide bus consumer that dismisses a
 	// stale "blocked" push once the pane leaves blocked or closes (from anywhere).
-	go notify.NewClearer(bus, pc, st).Run(context.Background())
+	go notify.NewClearer(bus, pc, st, cfg.ServerID).Run(context.Background())
 
 	var tr transport.Transport
 	switch cfg.Transport.Mode {

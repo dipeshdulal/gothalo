@@ -6,10 +6,8 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +72,7 @@ func (s *Server) publish(typ string, payload any) {
 // before the catch-all static file server at "/".
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/info", s.handleInfo)
 	mux.HandleFunc("/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/send", s.handleSend)
 	mux.HandleFunc("/approve", s.handleApprove)
@@ -285,7 +284,27 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info("paired device", "name", d.Name, "id", d.ID)
 	s.publish(events.TypeDevicePaired, map[string]any{"id": d.ID, "name": d.Name})
-	writeJSON(w, map[string]string{"id": d.ID, "bearer": d.Bearer, "name": d.Name})
+	// The bridge identity goes back with the pairing result: it is what lets the
+	// phone attribute an incoming push to this server rather than one of the
+	// others it is paired with.
+	writeJSON(w, map[string]string{
+		"id": d.ID, "bearer": d.Bearer, "name": d.Name,
+		"server_id": s.cfg.ServerID, "server_name": s.cfg.ServerName,
+	})
+}
+
+// GET /info -> this bridge's identity. Small on purpose: every push carries a
+// server_id, and the app needs a way to learn which of its saved servers that id
+// belongs to — including for servers paired before identity existed, which is
+// why this is a standalone endpoint and not only part of the pairing response.
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuth(w, r); !ok {
+		return
+	}
+	writeJSON(w, map[string]string{
+		"server_id":   s.cfg.ServerID,
+		"server_name": s.cfg.ServerName,
+	})
 }
 
 // POST /admin/pairing -> mint a one-time code + return the deep-link URL the QR
@@ -334,44 +353,6 @@ func (s *Server) handleAdminDevicesRevoke(w http.ResponseWriter, r *http.Request
 
 // Notify fans a transition out to every registered device. It is the callback
 // the watcher fires. Always logs; pushes only when FCM is configured.
-func (s *Server) Notify(paneID, status, title string, seq int) {
-	log.Info("notify", "agent", paneID, "status", status, "title", title, "seq", seq)
-	if s.push == nil {
-		return
-	}
-	tokens := s.store.FCMTokens()
-	if len(tokens) == 0 {
-		return
-	}
-	pushTitle := fmt.Sprintf("Herdr agent %s", status)
-	body := title
-	if body == "" {
-		body = paneID
-	}
-	// state_change_seq rides along so a lock-screen approve can echo it back to
-	// POST /approve, which no-ops if the agent has since moved past this seq (D8).
-	data := map[string]string{
-		"agent":            paneID,
-		"status":           status,
-		"state_change_seq": strconv.Itoa(seq),
-	}
-	sent := 0
-	for _, t := range tokens {
-		if err := s.push.Send(t, pushTitle, body, data); err != nil {
-			log.Error("push failed", "token", t[:min(8, len(t))]+"…", "err", err)
-			continue
-		}
-		sent++
-	}
-	log.Info("pushed", "sent", sent, "total", len(tokens), "agent", paneID, "status", status)
-	// The bus mirrors the FCM fan-out as a gothalo.push_sent system event. (Later,
-	// FCM can move to being a bus SUBSCRIBER instead of the watcher calling Notify
-	// directly; this event keeps app clients aware of what was pushed either way.)
-	s.publish(events.TypePushSent, map[string]any{
-		"agent": paneID, "status": status, "title": title, "seq": seq, "sent": sent, "total": len(tokens),
-	})
-}
-
 func principal(id string) string {
 	if id == "" {
 		return "admin/web"
