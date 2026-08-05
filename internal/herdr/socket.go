@@ -154,16 +154,61 @@ func (e *SocketError) Error() string {
 // from an HTTP body. Safe for concurrent use: each call gets its own connection
 // and a unique id.
 func (c *Client) Request(method string, params any) (json.RawMessage, error) {
-	path, err := c.ServerSocketPath()
+	return c.RequestFor(requestTimeout, method, params)
+}
+
+// RequestFor is Request under an explicit deadline, for calls that legitimately
+// block. `agent.wait` parks until the agent transitions — up to its own
+// timeout_ms — so the default 15s would abort a perfectly healthy wait.
+func (c *Client) RequestFor(d time.Duration, method string, params any) (json.RawMessage, error) {
+	path, err := c.socketPath()
 	if err != nil {
 		return nil, err
 	}
 	conn, err := DialSocket(path)
 	if err != nil {
+		// A stale memoised path (Herdr restarted onto a new socket) looks exactly
+		// like this. Drop it so the next call re-resolves instead of failing
+		// forever against a socket that no longer exists.
+		c.forgetSocketPath(path)
 		return nil, err
 	}
 	defer conn.Close()
-	return conn.Do(method, params)
+	return conn.DoFor(d, method, params)
+}
+
+// socketPath returns the memoised control-socket path, resolving it once.
+func (c *Client) socketPath() (string, error) {
+	c.sockMu.Lock()
+	cached := c.sockPath
+	c.sockMu.Unlock()
+	if cached != "" {
+		return cached, nil
+	}
+
+	// Resolved outside the lock: it shells out, and holding a mutex across an
+	// exec would serialise every caller behind the slowest one.
+	path, err := c.ServerSocketPath()
+	if err != nil {
+		return "", err
+	}
+	c.sockMu.Lock()
+	if c.sockPath == "" {
+		c.sockPath = path
+	}
+	path = c.sockPath
+	c.sockMu.Unlock()
+	return path, nil
+}
+
+// forgetSocketPath clears the memo if it still holds stale, so a concurrent
+// caller that already re-resolved isn't undone.
+func (c *Client) forgetSocketPath(stale string) {
+	c.sockMu.Lock()
+	if c.sockPath == stale {
+		c.sockPath = ""
+	}
+	c.sockMu.Unlock()
 }
 
 // Do sends one request on this connection and reads back the response whose id
@@ -171,13 +216,18 @@ func (c *Client) Request(method string, params any) (json.RawMessage, error) {
 // lines (there should be none without a subscription) are skipped. A read/write
 // deadline bounds the round-trip.
 func (s *SocketConn) Do(method string, params any) (json.RawMessage, error) {
+	return s.DoFor(requestTimeout, method, params)
+}
+
+// DoFor is Do under an explicit deadline. See [Client.RequestFor].
+func (s *SocketConn) DoFor(d time.Duration, method string, params any) (json.RawMessage, error) {
 	id := fmt.Sprintf("gothalo-req-%d", reqSeq.Add(1))
 	req := socketRequest{ID: id, Method: method, Params: params}
 	line, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
-	if err := s.conn.SetDeadline(time.Now().Add(requestTimeout)); err != nil {
+	if err := s.conn.SetDeadline(time.Now().Add(d)); err != nil {
 		return nil, err
 	}
 	if _, err := s.conn.Write(append(line, '\n')); err != nil {
