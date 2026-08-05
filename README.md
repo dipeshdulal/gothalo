@@ -5,17 +5,16 @@ coding agents (Claude Code, Codex, Gemini, Cursor, …) from your phone: see whi
 agents are blocked/working/done, get pushed when one needs you, approve or type a
 reply, and drop into a full terminal — all over your own Tailscale network.
 
-Think "a mini Moshi that I own," built on Herdr's open socket API instead of a
-paid client.
-
 ## Why this exists
 
-[Moshi](https://getmoshi.app) is a polished commercial mobile client for Herdr.
-Its Pro tier ($7.99/mo · $69.99/yr · $199 lifetime) unlocks mosh, multiplexer
-pairing, image paste, diff viewer, etc. But the **data and control all come from
-Herdr's open, documented socket API** — which is free. gothalo consumes that API
-directly, so the only thing left to build is the client experience, for me + a
-few teammates, with no per-seat cost.
+Herdr exposes an open, documented socket API for driving agent sessions. gothalo is
+a small self-hosted client on top of it — a Go bridge plus a Flutter app — shaped
+around how my team actually works, and kept on our own Tailscale network so session
+data and terminal traffic never leave it.
+
+It's built for me and a few teammates rather than as a product. If you want a
+polished, supported mobile client for Herdr, look at [Moshi](https://getmoshi.app),
+which is considerably more capable than this.
 
 ## Architecture
 
