@@ -7,6 +7,37 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 
+/// Last known line per pane, surviving the tiles that display it.
+///
+/// The line used to live in each tile's State, so it died whenever the tile
+/// did — and tiles die constantly: switching between Agents and Spaces disposes
+/// the whole list. Every row then came back blank and refetched, so the list
+/// was empty for a beat each time you changed tab, for information the app had
+/// already fetched seconds earlier.
+///
+/// Deliberately NOT autoDispose: outliving the widget is the entire point. It
+/// holds one short string per pane, and entries are simply overwritten by the
+/// next poll.
+final _activityLines = NotifierProvider<_ActivityLines, Map<String, String>>(
+  _ActivityLines.new,
+);
+
+class _ActivityLines extends Notifier<Map<String, String>> {
+  @override
+  Map<String, String> build() => const {};
+
+  void set(String pane, String? line) {
+    if (line == null || line.isEmpty) {
+      // Keep the previous line rather than blanking the row. An empty read is
+      // almost always transient (the agent between messages), and a row that
+      // flickers to nothing reads as a bug.
+      return;
+    }
+    if (state[pane] == line) return;
+    state = {...state, pane: line};
+  }
+}
+
 /// A one-line "what's it doing right now" under a working agent's tile —
 /// Vercel's live build-step pattern applied to agents (see
 /// docs/RESEARCH-feature-ideas.md, #3). Lazily polls `GET /agent-state` for
@@ -33,8 +64,7 @@ import '../../data/bridge/models/snapshot.dart';
 /// that scrolled the operator's pane and cost a herdr round-trip. It is now
 /// served from the agent's own transcript, so showing it everywhere is cheap.
 ///
-/// It renders nothing until the first successful fetch, and again if a fetch
-/// comes back empty, rather than holding a stale line after the agent moves on.
+/// The line survives the tile: see [_activityLines].
 class LiveActivityLine extends ConsumerStatefulWidget {
   const LiveActivityLine({
     super.key,
@@ -67,7 +97,6 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
   static const _pollEvery = Duration(seconds: 5);
 
   Timer? _timer;
-  String? _line;
 
   @override
   void initState() {
@@ -127,8 +156,7 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
       // across a whole list of working agents.
       final state = await client.getAgentState(widget.paneId);
       if (!mounted) return;
-      final line = _lineFor(state);
-      setState(() => _line = line.isEmpty ? null : line);
+      ref.read(_activityLines.notifier).set(widget.paneId, _lineFor(state));
     } on BridgeException {
       // Best-effort — a transient failure just leaves the last known line
       // (or none) rather than flashing an error into a list tile.
@@ -137,32 +165,53 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
 
   @override
   Widget build(BuildContext context) {
-    final line = _line;
-    if (line == null) return const SizedBox.shrink();
+    final line = ref.watch(_activityLines)[widget.paneId];
     final scheme = Theme.of(context).colorScheme;
+
+    // The space is reserved whether or not there is a line yet.
+    //
+    // Collapsing to zero height when empty made every tile change size twice:
+    // once when the first poll landed, and again whenever a fetch came back
+    // empty. Because this widget is per-tile and fetches on mount, switching
+    // between Agents and Spaces remounted the whole list and every row grew a
+    // few pixels a moment later — the list visibly resettling under your thumb
+    // each time you changed tab.
+    //
+    // Visibility with maintainSize is what keeps the row's height in the layout
+    // while there is nothing to show, so a tile is the same height from its
+    // first frame. The text is already maxLines: 1, so the *content* never
+    // affected height — only its presence did.
     return Padding(
       padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Icon(Icons.circle, size: 6, color: scheme.primary),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              line,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                fontStyle: FontStyle.italic,
-                color: scheme.onSurfaceVariant,
+      child: Visibility(
+        visible: line != null,
+        maintainSize: true,
+        maintainAnimation: true,
+        maintainState: true,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Icon(Icons.circle, size: 6, color: scheme.primary),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                // A space, not an empty string: an empty Text can collapse to
+                // zero height, which would defeat the whole point.
+                line ?? ' ',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
