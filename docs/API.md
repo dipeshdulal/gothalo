@@ -324,13 +324,20 @@ just hide the mode control for those kinds (their `/agent-state` omits
 `permission_mode` too).
 
 ## WS /agent-transcript — streamed structured chat (agent panes)
-`GET /agent-transcript?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**.
+`GET /agent-transcript?pane=<pane_id>&token=<bearer>[&subagent=<agent_id>]` upgraded
+to a **WebSocket**.
 This is the *chat view* data source: instead of scraping the terminal (like
 `/agent-state`) or streaming raw PTY bytes (like `/attach`), the bridge reads the
 agent's **own transcript file** (Claude Code writes JSONL at
 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) and streams it **normalized**
 into a kind-agnostic chat schema — messages, thinking, tool calls (command + diff),
 and tool results.
+
+`hello` also carries `subagents`: the session's flat roster of conversations
+delegated via the `Task` tool, joined to their spawning tool call by
+`tool_use_id`. Pass one back as `?subagent=<agent_id>` to stream that child
+conversation through identical framing. See
+[`CONTRACT-agent-transcript.md`](CONTRACT-agent-transcript.md#subagents).
 
 Frames are **text JSON**, one entry per frame (contrast `/attach`'s binary raw
 bytes). On connect it sends a `hello`, replays the **newest page** (`entry` frames,

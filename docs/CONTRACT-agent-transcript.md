@@ -261,11 +261,79 @@ Per-connection state is only a byte offset into the file (for the tail) plus the
 running `seq` counter; closing the socket stops the tail. Auth is re-checked on
 connect (not per frame).
 
-> **`protocol` is `2`.** The backlog is now **paginated**: connect sends only the
+> **`protocol` is `3`.** `hello` now carries the session's **subagent roster**,
+> and `?subagent=<agent_id>` streams a delegated conversation instead of the
+> session's own. Everything else is unchanged.
+>
+> **`protocol` `2`** made the backlog **paginated**: connect sends only the
 > newest page (~150), reports the cursor in `hello`, and older history is fetched
 > on demand with a `load_older` control frame. Inbound frames are no longer
 > end-of-stream — a `load_older` is serviced; anything else closes the socket
 > cleanly.
+
+### Subagents
+
+When an agent delegates with the `Task` tool, the child's conversation is **not**
+appended to the parent transcript. Claude Code writes it beside the session:
+
+```
+~/.claude/projects/<encoded-cwd>/
+    <session>.jsonl                    the parent transcript
+    <session>/subagents/
+        agent-<agentID>.jsonl          the child transcript, same line format
+        agent-<agentID>.meta.json      {agentType, description, toolUseId, spawnDepth}
+```
+
+Before this, the app saw a `Task` `tool_call` and then — minutes later — its
+result, with nothing in between: the view went dark exactly when the agent
+parallelized.
+
+Two properties of the layout, **verified against live files**, define the
+contract:
+
+1. **The directory is flat.** A subagent that itself spawns a subagent does not
+   nest on disk — the grandchild lands in the same `subagents/` dir carrying
+   `spawn_depth: 2`. Observed live: four depth-1 agents beside one depth-2
+   `Explore` spawned by one of them.
+2. **`tool_use_id` is the join key**, and it points at a `Task` call in whichever
+   transcript spawned it — the session's for a depth-1 child, another
+   subagent's for a depth-2 one.
+
+Together these mean **one flat roster serves every level**: to find the direct
+children of the transcript currently on screen, match `tool_use_id` against the
+`tool.id` of its `Task` calls. No depth arithmetic, and drilling down needs no
+extra round trip. `hello.subagents` is therefore the whole session's roster, not
+just the streamed conversation's children.
+
+The roster is metadata only — enough to render a collapsed row
+(`"general-purpose · Build recent-activity timeline"`) without opening anything.
+Child transcripts are fetched **on demand**: one live session dir held five
+subagents beside a 1.4 MB parent, and a phone should not pay for that to draw a
+one-line summary.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `agent_id` | string | Handle to stream this subagent (pass back as `?subagent=`). Unique per session. |
+| `tool_use_id` | string | The `tool.id` of the `Task` call that spawned it. The join key. |
+| `agent_type` | string | Configured agent that ran (`general-purpose`, `Explore`, …). Primary label. |
+| `description` | string | Task description given at spawn time. Secondary label. |
+| `spawn_depth` | int | `1` for a child of the session, `2` for a child of a subagent. Display only. |
+
+Ordering of the roster is `spawn_depth` then `agent_id`, **for determinism only —
+it is not spawn order.** The authoritative order is the position of each matching
+`Task` call in the transcript being rendered.
+
+**Degradation is deliberate.** A session that delegated nothing omits
+`subagents` entirely (the common case). Discovery failure is logged and the
+transcript still streams — losing the roster must never cost the user their
+conversation. A metadata file whose JSON is unreadable still yields a row (the
+transcript is streamable; it just loses its labels), while metadata with no
+matching `.jsonl` is dropped rather than advertising a row that cannot open.
+
+**Security.** `?subagent=` is client input and is **never used to build a path**.
+Discovery runs first and the id is matched against what was found, so traversal
+(`../../secret`, `/etc/passwd`) resolves to `ErrNoTranscript` → `404` rather than
+being filtered. It is unrepresentable by construction, not blocked by a check.
 
 ---
 
@@ -303,11 +371,13 @@ and the live tail.
 
 ### `hello`
 ```json
-{"type":"hello","protocol":2,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true}
+{"type":"hello","protocol":3,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true,"subagents":[{"agent_id":"aa4832e5ce82b16f0","tool_use_id":"toolu_01F9bssr6JjRZXjvEumqMwuR","agent_type":"general-purpose","description":"Build recent-activity timeline","spawn_depth":1},{"agent_id":"a9adcab7329a772ac","tool_use_id":"toolu_013gpQcoGTMVRYdciecEq7rZ","agent_type":"Explore","description":"Explore Flutter app conventions","spawn_depth":2}]}
 ```
 | Field | Type | Notes |
 |---|---|---|
-| `protocol` | int | Wire version. **`2`** (paginated backlog + `load_older`). |
+| `protocol` | int | Wire version. **`3`** (subagent roster + `?subagent=`). |
+| `subagent` | string | Echoes the `?subagent=` being streamed; absent for the session's own transcript. |
+| `subagents` | array | The session's **flat** subagent roster, every depth. Absent when nothing was delegated. See [Subagents](#subagents). |
 | `pane` | string | Echoes the requested pane. |
 | `agent_kind` | string | `claude` (later `codex`/`opencode`). |
 | `session_id` | string | The resolved transcript session id (see *Resolution*). |
