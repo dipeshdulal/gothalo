@@ -51,9 +51,11 @@ Future<String?> serverIdentity(Ref ref) async {
   try {
     final info = await client.info();
     if (info.serverId.isEmpty) return null;
-    await ref
-        .read(databaseProvider)
-        .setProfileServerId(client.connection.id, info.serverId);
+    await ref.read(databaseProvider).setProfileIdentity(
+          client.connection.id,
+          serverId: info.serverId,
+          bridgeVersion: info.version,
+        );
     return info.serverId;
   } catch (_) {
     return null;

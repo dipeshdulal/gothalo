@@ -29,6 +29,11 @@ class Profiles extends Table {
   /// bridge has been reached once (or for a bridge too old to report one).
   TextColumn get serverId => text().withDefault(const Constant(''))();
 
+  /// The bridge's capability level from `GET /info`. Zero means it has never
+  /// answered — either too old to have the endpoint, or not reached yet — which
+  /// is also the state in which its pushes cannot be attributed or routed.
+  IntColumn get bridgeVersion => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -73,7 +78,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _open());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   /// v1 → v2 adds server attribution: which bridge a saved profile is, and which
   /// bridge each pushed alert came from. All three columns default to empty, so
@@ -87,6 +92,12 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(profiles, profiles.serverId);
         await m.addColumn(agentEvents, agentEvents.serverId);
         await m.addColumn(agentEvents, agentEvents.serverName);
+      }
+      // v2 → v3 records what each bridge can do, so an out-of-date one is
+      // visible in the servers list rather than only discovered by a
+      // notification tap that refuses to route.
+      if (from < 3) {
+        await m.addColumn(profiles, profiles.bridgeVersion);
       }
     },
   );
@@ -115,10 +126,19 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
-  /// Record the bridge id a saved server reported from `GET /info`.
-  Future<void> setProfileServerId(String id, String serverId) =>
-      (update(profiles)..where((t) => t.id.equals(id)))
-          .write(ProfilesCompanion(serverId: Value(serverId)));
+  /// Record what a saved server reported from `GET /info` — its bridge id and
+  /// capability level.
+  Future<void> setProfileIdentity(
+    String id, {
+    required String serverId,
+    required int bridgeVersion,
+  }) =>
+      (update(profiles)..where((t) => t.id.equals(id))).write(
+        ProfilesCompanion(
+          serverId: Value(serverId),
+          bridgeVersion: Value(bridgeVersion),
+        ),
+      );
 
   Future<Profile?> profileByBaseUrl(String baseUrl) =>
       (select(profiles)..where((t) => t.baseUrl.equals(baseUrl)))

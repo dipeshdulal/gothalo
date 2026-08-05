@@ -310,6 +310,14 @@ class _ServerTile extends StatelessWidget {
             const SizedBox(width: 8),
             _ActivePill(scheme: scheme),
           ],
+          // A bridge that has never identified itself can't have its
+          // notifications attributed or routed. Say so here, where it can be
+          // acted on, rather than leaving it to be discovered by a notification
+          // tap that declines to open anything.
+          if (server.needsUpgrade) ...[
+            const SizedBox(width: 8),
+            _UpgradePill(scheme: scheme),
+          ],
         ],
       ),
       subtitle: Column(
@@ -413,6 +421,33 @@ class _ActivePill extends StatelessWidget {
         'Active',
         style: TextStyle(
           color: scheme.primary,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// Marks a bridge that has never reported an identity — it predates `GET /info`,
+/// or has not been reached since. Its alerts can't be attributed or routed until
+/// it is updated and opened once.
+class _UpgradePill extends StatelessWidget {
+  const _UpgradePill({required this.scheme});
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.tertiary.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        'Update bridge',
+        style: TextStyle(
+          color: scheme.tertiary,
           fontSize: 11,
           fontWeight: FontWeight.w700,
         ),

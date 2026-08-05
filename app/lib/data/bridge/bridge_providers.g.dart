@@ -58,7 +58,7 @@ final class BridgeClientProvider
   }
 }
 
-String _$bridgeClientHash() => r'e1c3737ce4724fede6f0defd96faf6e46f0bb21d';
+String _$bridgeClientHash() => r'5e3824e9a68821869ab0bcdd8f5fca3f66bdbc49';
 
 /// Learn (and remember) which bridge the active server actually is.
 ///
@@ -120,4 +120,4 @@ final class ServerIdentityProvider
   }
 }
 
-String _$serverIdentityHash() => r'7c7753d615d9c26d8e3efe3527ef080348454eff';
+String _$serverIdentityHash() => r'60e69b271b5ab4315e8b7097d5e68d300dfce82c';
