@@ -6,11 +6,13 @@
 package gitdiff
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -251,13 +253,26 @@ func untrackedDiff(cwd, path string) (string, int) {
 	return strings.TrimRight(b.String(), "\n"), len(lines)
 }
 
+// gitTimeout bounds a single git invocation. git can block indefinitely on
+// things that have nothing to do with the repo being large — an index.lock held
+// by another process, a filesystem that stops answering, a credential prompt on
+// a misconfigured remote. Unbounded, that hangs the HTTP request serving it and
+// ties up the handler for as long as git sulks.
+const gitTimeout = 30 * time.Second
+
 // gitRaw runs git in cwd and returns stdout. Errors carry stderr for
 // diagnosability (mirrors internal/herdr's run()).
 func gitRaw(cwd string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return out, fmt.Errorf("git %s: timed out after %s", strings.Join(args, " "), gitTimeout)
+		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(ee.Stderr)))
 		}
