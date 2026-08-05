@@ -5,12 +5,14 @@ package herdr
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrAgentNotFound is returned by Get/ReadText when the pane has no agent (or the
@@ -62,10 +64,43 @@ func (c *Client) args(a ...string) []string {
 	return append([]string{"--session", c.session}, a...)
 }
 
+// cliTimeout bounds an ordinary herdr CLI call. Every one of these is a
+// request/response that should answer in milliseconds; 30s is "the CLI is not
+// coming back" rather than "the CLI is slow".
+//
+// The bound matters more than the number. Without one, a wedged herdr blocks the
+// caller forever, and several callers guard work with a flag they only clear on
+// return — the watcher marks a pane as watched and releases it when its goroutine
+// ends, so a permanently blocked `agent wait` silently retires that agent for the
+// life of the process. An unbounded exec turns a temporary hang into a permanent
+// one.
+const cliTimeout = 30 * time.Second
+
+// cliWaitTimeout bounds `agent wait`, which legitimately blocks until the agent
+// transitions. It passes --timeout 600000 (10 min) and loops on that, so this
+// sits just past it: herdr's own timeout should always win, and this only fires
+// when herdr has stopped honouring it.
+const cliWaitTimeout = 11 * time.Minute
+
 func (c *Client) run(args ...string) ([]byte, error) {
+	return c.runFor(cliTimeout, args...)
+}
+
+// runFor executes the herdr CLI under a deadline. A timeout is reported as an
+// ordinary error, which every caller already handles: the watcher drops the pane
+// and rediscovers it within 10s, the ingester's liveness probe reports "can't
+// tell" rather than guessing, and the notification path degrades to the pane
+// title instead of the parsed prompt.
+func (c *Client) runFor(d time.Duration, args ...string) ([]byte, error) {
 	args = c.args(args...)
-	out, err := exec.Command(c.bin, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, c.bin, args...).CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return out, fmt.Errorf("herdr %s: timed out after %s", strings.Join(args, " "), d)
+		}
 		return out, fmt.Errorf("herdr %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
 	}
 	return out, nil
@@ -399,7 +434,8 @@ func (c *Client) Wait(pane string, until ...string) (WaitResult, bool) {
 	args = append(args, "--timeout", "600000") // 10 min; loop on timeout
 
 	for {
-		out, err := c.run(args...)
+		// The long bound: this call is *supposed* to block until the agent moves.
+		out, err := c.runFor(cliWaitTimeout, args...)
 		if err == nil {
 			var w waitEnvelope
 			_ = json.Unmarshal(out, &w)

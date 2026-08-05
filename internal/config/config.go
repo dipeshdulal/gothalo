@@ -23,6 +23,16 @@ type Config struct {
 	// if empty.
 	AdminToken string `json:"admin_token"`
 
+	// ServerID is this bridge's stable identity. A phone pairs with several
+	// bridges and registers the SAME FCM token with each, so every push has to
+	// say which machine it came from — otherwise an alert is unattributable and
+	// its deep-link can't know which server to open. Generated on first serve.
+	ServerID string `json:"server_id"`
+
+	// ServerName is the human label for this machine ("Mac Studio"), shown as the
+	// notification title and in the app's server list. Defaults to the hostname.
+	ServerName string `json:"server_name"`
+
 	Transport Transport `json:"transport"`
 	Push      Push      `json:"push"`
 }
@@ -97,6 +107,16 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("GOTHALO_PUBLIC_URL"); v != "" {
 		cfg.Transport.PublicURL = v
 	}
+	if v := os.Getenv("GOTHALO_SERVER_NAME"); v != "" {
+		cfg.ServerName = v
+	}
+	if cfg.ServerName == "" {
+		if h, err := os.Hostname(); err == nil {
+			cfg.ServerName = h
+		} else {
+			cfg.ServerName = "gothalo"
+		}
+	}
 
 	return cfg, nil
 }
@@ -120,6 +140,25 @@ func (c *Config) EnsureAdminToken() (bool, error) {
 		return false, err
 	}
 	c.AdminToken = hex.EncodeToString(b)
+	if err := c.Save(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// EnsureServerID generates and persists a stable server id if none is set, so
+// this bridge identifies itself the same way across restarts (a phone keys its
+// paired servers, alerts and notification deep-links by it). Returns whether it
+// saved.
+func (c *Config) EnsureServerID() (bool, error) {
+	if c.ServerID != "" {
+		return false, nil
+	}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return false, err
+	}
+	c.ServerID = hex.EncodeToString(b)
 	if err := c.Save(); err != nil {
 		return false, err
 	}

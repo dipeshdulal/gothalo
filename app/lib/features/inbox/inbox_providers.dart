@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -36,10 +37,23 @@ class SnapshotController extends _$SnapshotController {
   StreamSubscription<dynamic>? _sub;
   Timer? _reconnectTimer;
   Timer? _resnapTimer;
+  Timer? _watchdog;
+  AppLifecycleListener? _lifecycle;
   int _attempts = 0;
   int _lastSeq = -1;
   bool _disposed = false;
   Connection? _conn;
+
+  /// How long the stream may be silent before we assume the socket is dead.
+  ///
+  /// The bridge sends a heartbeat frame every 20s, so silence past this means
+  /// frames have stopped arriving — which is the ONLY way to notice a half-open
+  /// socket. When the bridge is killed behind `tailscale serve`, or the phone's
+  /// radio sleeps, or a NAT entry expires, the connection dies without either
+  /// side sending a close: `onDone` never fires, the existing reconnect logic is
+  /// never invoked, and the app serves stale state indefinitely while believing
+  /// it is live. Generous enough (2.5x) to ride out a slow tailnet.
+  static const _silenceTimeout = Duration(seconds: 50);
 
   @override
   Future<Snapshot> build() async {
@@ -48,7 +62,20 @@ class SnapshotController extends _$SnapshotController {
     // navigation gaps, heavy rebuilds), which tears the socket down and
     // reconnects in a loop, so live updates never land. One durable connection.
     ref.keepAlive();
+    // Rebuilding (a different active server, a re-pair) runs the previous
+    // build's onDispose first, which latches _disposed. Clear it so the new
+    // connection can arm its watchdog and reconnect — otherwise switching
+    // servers yields a socket that can never heal itself.
+    _disposed = false;
     ref.onDispose(_teardown);
+    // A phone suspends sockets while the screen is off, and the death is rarely
+    // announced. Coming back to the app is the one moment we know for certain
+    // the connection may be stale, so re-establish it rather than trust it.
+    _lifecycle ??= AppLifecycleListener(
+      onResume: () {
+        if (!_disposed) _scheduleReconnect(immediate: true);
+      },
+    );
     final client = ref.watch(bridgeClientProvider);
     if (client == null) {
       throw BridgeException('No bridge connection configured yet.');
@@ -81,6 +108,7 @@ class SnapshotController extends _$SnapshotController {
     final ch = WebSocketChannel.connect(_eventsUri(_conn!));
     _ch = ch;
     await ch.ready;
+    _armWatchdog();
     final seed = Completer<Snapshot>();
     _sub = ch.stream.listen(
       (message) => _onFrame(message, seed),
@@ -95,8 +123,22 @@ class SnapshotController extends _$SnapshotController {
     );
   }
 
+  /// Restart the silence timer. Called for every frame — a heartbeat counts, and
+  /// that is the whole point of it.
+  void _armWatchdog() {
+    _watchdog?.cancel();
+    if (_disposed) return;
+    _watchdog = Timer(_silenceTimeout, () {
+      if (_disposed) return;
+      // Nothing for 50s on a link that heartbeats every 20s: the socket is gone
+      // even though the stream never told us.
+      _scheduleReconnect(immediate: true);
+    });
+  }
+
   void _onFrame(dynamic message, Completer<Snapshot> seed) {
     if (message is! String) return;
+    _armWatchdog();
     final Map<String, dynamic> frame;
     try {
       final decoded = jsonDecode(message);
@@ -105,6 +147,11 @@ class SnapshotController extends _$SnapshotController {
     } catch (_) {
       return;
     }
+
+    // "Still here" — it exists to be received, nothing more. It deliberately
+    // carries no seq, so returning here keeps it from being read as a change
+    // signal and triggering a pointless re-snapshot every 20 seconds.
+    if (frame['type'] == 'heartbeat') return;
 
     final seq = (frame['seq'] as num?)?.toInt();
 
@@ -172,20 +219,40 @@ class SnapshotController extends _$SnapshotController {
     _scheduleReconnect();
   }
 
-  void _scheduleReconnect() {
+  /// Tear the socket down and queue another attempt. [immediate] skips the
+  /// backoff for a reconnect we triggered ourselves (resume, silence timeout)
+  /// rather than one caused by a failure.
+  void _scheduleReconnect({bool immediate = false}) {
+    _watchdog?.cancel();
+    _watchdog = null;
     _sub?.cancel();
     _sub = null;
     _ch?.sink.close();
     _ch = null;
     if (_disposed) return;
-    _attempts++;
-    final delay = Duration(seconds: _attempts.clamp(1, 8));
+    if (immediate) {
+      _attempts = 0;
+    } else {
+      _attempts++;
+    }
+    final delay = immediate
+        ? Duration.zero
+        : Duration(seconds: _attempts.clamp(1, 8));
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, _reconnectRun);
   }
 
   Future<void> _reconnectRun() async {
-    if (_disposed || _conn == null) return;
+    if (_disposed) return;
+    // Re-read the active connection rather than giving up on the cached one.
+    // Returning early here used to end the retry loop permanently: no further
+    // attempt was ever scheduled, so one unlucky tick left the app offline for
+    // the rest of the session.
+    _conn ??= ref.read(bridgeClientProvider)?.connection;
+    if (_conn == null) {
+      _scheduleReconnect();
+      return;
+    }
     try {
       state = AsyncData(await _connectAndSeed());
     } catch (_) {
@@ -208,6 +275,9 @@ class SnapshotController extends _$SnapshotController {
     _disposed = true;
     _reconnectTimer?.cancel();
     _resnapTimer?.cancel();
+    _watchdog?.cancel();
+    _lifecycle?.dispose();
+    _lifecycle = null;
     _sub?.cancel();
     _ch?.sink.close();
   }

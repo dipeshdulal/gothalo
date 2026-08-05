@@ -139,6 +139,30 @@ func (s *Store) FCMTokens() []string {
 	return out
 }
 
+// ClearFCMToken drops a push token from every device holding it, and reports how
+// many it cleared. Called when FCM rejects the token as unregistered: the app was
+// uninstalled or the token expired, so keeping it means every future fan-out
+// spends a doomed request on it. The device row itself stays — it is still paired
+// and will re-register a fresh token on next launch.
+func (s *Store) ClearFCMToken(token string) int {
+	if token == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, d := range s.byID {
+		if d.FCMToken == token {
+			d.FCMToken = ""
+			n++
+		}
+	}
+	if n > 0 {
+		_ = s.saveLocked()
+	}
+	return n
+}
+
 // SetFCMToken updates a device's push token (they rotate). Returns true if the
 // device exists.
 func (s *Store) SetFCMToken(id, token string, now time.Time) bool {

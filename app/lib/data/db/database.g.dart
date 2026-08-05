@@ -58,8 +58,27 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
     requiredDuringInsert: false,
     defaultValue: const Constant('manual'),
   );
+  static const VerificationMeta _serverIdMeta = const VerificationMeta(
+    'serverId',
+  );
   @override
-  List<GeneratedColumn> get $columns => [id, name, baseUrl, deviceId, source];
+  late final GeneratedColumn<String> serverId = GeneratedColumn<String>(
+    'server_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    name,
+    baseUrl,
+    deviceId,
+    source,
+    serverId,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -105,6 +124,12 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
         source.isAcceptableOrUnknown(data['source']!, _sourceMeta),
       );
     }
+    if (data.containsKey('server_id')) {
+      context.handle(
+        _serverIdMeta,
+        serverId.isAcceptableOrUnknown(data['server_id']!, _serverIdMeta),
+      );
+    }
     return context;
   }
 
@@ -134,6 +159,10 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
         DriftSqlType.string,
         data['${effectivePrefix}source'],
       )!,
+      serverId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_id'],
+      )!,
     );
   }
 
@@ -149,12 +178,23 @@ class Profile extends DataClass implements Insertable<Profile> {
   final String baseUrl;
   final String? deviceId;
   final String source;
+
+  /// The bridge's own id (`GET /info` → `server_id`), as opposed to [id], which
+  /// is this phone's local id for the saved entry.
+  ///
+  /// Every push carries the sending bridge's `server_id`, and a phone is paired
+  /// with several bridges under the *same* FCM token — so this column is the
+  /// only thing that can answer "which of my servers did this alert come from",
+  /// and therefore which server a notification tap should open. Empty until the
+  /// bridge has been reached once (or for a bridge too old to report one).
+  final String serverId;
   const Profile({
     required this.id,
     required this.name,
     required this.baseUrl,
     this.deviceId,
     required this.source,
+    required this.serverId,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -166,6 +206,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       map['device_id'] = Variable<String>(deviceId);
     }
     map['source'] = Variable<String>(source);
+    map['server_id'] = Variable<String>(serverId);
     return map;
   }
 
@@ -178,6 +219,7 @@ class Profile extends DataClass implements Insertable<Profile> {
           ? const Value.absent()
           : Value(deviceId),
       source: Value(source),
+      serverId: Value(serverId),
     );
   }
 
@@ -192,6 +234,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       baseUrl: serializer.fromJson<String>(json['baseUrl']),
       deviceId: serializer.fromJson<String?>(json['deviceId']),
       source: serializer.fromJson<String>(json['source']),
+      serverId: serializer.fromJson<String>(json['serverId']),
     );
   }
   @override
@@ -203,6 +246,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       'baseUrl': serializer.toJson<String>(baseUrl),
       'deviceId': serializer.toJson<String?>(deviceId),
       'source': serializer.toJson<String>(source),
+      'serverId': serializer.toJson<String>(serverId),
     };
   }
 
@@ -212,12 +256,14 @@ class Profile extends DataClass implements Insertable<Profile> {
     String? baseUrl,
     Value<String?> deviceId = const Value.absent(),
     String? source,
+    String? serverId,
   }) => Profile(
     id: id ?? this.id,
     name: name ?? this.name,
     baseUrl: baseUrl ?? this.baseUrl,
     deviceId: deviceId.present ? deviceId.value : this.deviceId,
     source: source ?? this.source,
+    serverId: serverId ?? this.serverId,
   );
   Profile copyWithCompanion(ProfilesCompanion data) {
     return Profile(
@@ -226,6 +272,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       baseUrl: data.baseUrl.present ? data.baseUrl.value : this.baseUrl,
       deviceId: data.deviceId.present ? data.deviceId.value : this.deviceId,
       source: data.source.present ? data.source.value : this.source,
+      serverId: data.serverId.present ? data.serverId.value : this.serverId,
     );
   }
 
@@ -236,13 +283,15 @@ class Profile extends DataClass implements Insertable<Profile> {
           ..write('name: $name, ')
           ..write('baseUrl: $baseUrl, ')
           ..write('deviceId: $deviceId, ')
-          ..write('source: $source')
+          ..write('source: $source, ')
+          ..write('serverId: $serverId')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, name, baseUrl, deviceId, source);
+  int get hashCode =>
+      Object.hash(id, name, baseUrl, deviceId, source, serverId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -251,7 +300,8 @@ class Profile extends DataClass implements Insertable<Profile> {
           other.name == this.name &&
           other.baseUrl == this.baseUrl &&
           other.deviceId == this.deviceId &&
-          other.source == this.source);
+          other.source == this.source &&
+          other.serverId == this.serverId);
 }
 
 class ProfilesCompanion extends UpdateCompanion<Profile> {
@@ -260,6 +310,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
   final Value<String> baseUrl;
   final Value<String?> deviceId;
   final Value<String> source;
+  final Value<String> serverId;
   final Value<int> rowid;
   const ProfilesCompanion({
     this.id = const Value.absent(),
@@ -267,6 +318,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     this.baseUrl = const Value.absent(),
     this.deviceId = const Value.absent(),
     this.source = const Value.absent(),
+    this.serverId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProfilesCompanion.insert({
@@ -275,6 +327,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     required String baseUrl,
     this.deviceId = const Value.absent(),
     this.source = const Value.absent(),
+    this.serverId = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        name = Value(name),
@@ -285,6 +338,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     Expression<String>? baseUrl,
     Expression<String>? deviceId,
     Expression<String>? source,
+    Expression<String>? serverId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -293,6 +347,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
       if (baseUrl != null) 'base_url': baseUrl,
       if (deviceId != null) 'device_id': deviceId,
       if (source != null) 'source': source,
+      if (serverId != null) 'server_id': serverId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -303,6 +358,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     Value<String>? baseUrl,
     Value<String?>? deviceId,
     Value<String>? source,
+    Value<String>? serverId,
     Value<int>? rowid,
   }) {
     return ProfilesCompanion(
@@ -311,6 +367,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
       baseUrl: baseUrl ?? this.baseUrl,
       deviceId: deviceId ?? this.deviceId,
       source: source ?? this.source,
+      serverId: serverId ?? this.serverId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -333,6 +390,9 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     if (source.present) {
       map['source'] = Variable<String>(source.value);
     }
+    if (serverId.present) {
+      map['server_id'] = Variable<String>(serverId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -347,6 +407,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
           ..write('baseUrl: $baseUrl, ')
           ..write('deviceId: $deviceId, ')
           ..write('source: $source, ')
+          ..write('serverId: $serverId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -382,6 +443,30 @@ class $AgentEventsTable extends AgentEvents
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _serverIdMeta = const VerificationMeta(
+    'serverId',
+  );
+  @override
+  late final GeneratedColumn<String> serverId = GeneratedColumn<String>(
+    'server_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _serverNameMeta = const VerificationMeta(
+    'serverName',
+  );
+  @override
+  late final GeneratedColumn<String> serverName = GeneratedColumn<String>(
+    'server_name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
   );
   static const VerificationMeta _agentMeta = const VerificationMeta('agent');
   @override
@@ -473,6 +558,8 @@ class $AgentEventsTable extends AgentEvents
   List<GeneratedColumn> get $columns => [
     rowId,
     profileId,
+    serverId,
+    serverName,
     agent,
     paneId,
     workspaceId,
@@ -507,6 +594,18 @@ class $AgentEventsTable extends AgentEvents
       );
     } else if (isInserting) {
       context.missing(_profileIdMeta);
+    }
+    if (data.containsKey('server_id')) {
+      context.handle(
+        _serverIdMeta,
+        serverId.isAcceptableOrUnknown(data['server_id']!, _serverIdMeta),
+      );
+    }
+    if (data.containsKey('server_name')) {
+      context.handle(
+        _serverNameMeta,
+        serverName.isAcceptableOrUnknown(data['server_name']!, _serverNameMeta),
+      );
     }
     if (data.containsKey('agent')) {
       context.handle(
@@ -587,6 +686,14 @@ class $AgentEventsTable extends AgentEvents
         DriftSqlType.string,
         data['${effectivePrefix}profile_id'],
       )!,
+      serverId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_id'],
+      )!,
+      serverName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_name'],
+      )!,
       agent: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}agent'],
@@ -631,6 +738,13 @@ class $AgentEventsTable extends AgentEvents
 class AgentEvent extends DataClass implements Insertable<AgentEvent> {
   final int rowId;
   final String profileId;
+
+  /// The bridge that sent the push (its `server_id`). Recorded straight from the
+  /// payload because a push arrives in a background isolate that has no notion
+  /// of an "active" server — attribution has to come from the message itself,
+  /// not from whatever the UI happened to be showing.
+  final String serverId;
+  final String serverName;
   final String agent;
   final String paneId;
   final String workspaceId;
@@ -650,6 +764,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
   const AgentEvent({
     required this.rowId,
     required this.profileId,
+    required this.serverId,
+    required this.serverName,
     required this.agent,
     required this.paneId,
     required this.workspaceId,
@@ -664,6 +780,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
     final map = <String, Expression>{};
     map['row_id'] = Variable<int>(rowId);
     map['profile_id'] = Variable<String>(profileId);
+    map['server_id'] = Variable<String>(serverId);
+    map['server_name'] = Variable<String>(serverName);
     map['agent'] = Variable<String>(agent);
     map['pane_id'] = Variable<String>(paneId);
     map['workspace_id'] = Variable<String>(workspaceId);
@@ -681,6 +799,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
     return AgentEventsCompanion(
       rowId: Value(rowId),
       profileId: Value(profileId),
+      serverId: Value(serverId),
+      serverName: Value(serverName),
       agent: Value(agent),
       paneId: Value(paneId),
       workspaceId: Value(workspaceId),
@@ -702,6 +822,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
     return AgentEvent(
       rowId: serializer.fromJson<int>(json['rowId']),
       profileId: serializer.fromJson<String>(json['profileId']),
+      serverId: serializer.fromJson<String>(json['serverId']),
+      serverName: serializer.fromJson<String>(json['serverName']),
       agent: serializer.fromJson<String>(json['agent']),
       paneId: serializer.fromJson<String>(json['paneId']),
       workspaceId: serializer.fromJson<String>(json['workspaceId']),
@@ -718,6 +840,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
     return <String, dynamic>{
       'rowId': serializer.toJson<int>(rowId),
       'profileId': serializer.toJson<String>(profileId),
+      'serverId': serializer.toJson<String>(serverId),
+      'serverName': serializer.toJson<String>(serverName),
       'agent': serializer.toJson<String>(agent),
       'paneId': serializer.toJson<String>(paneId),
       'workspaceId': serializer.toJson<String>(workspaceId),
@@ -732,6 +856,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
   AgentEvent copyWith({
     int? rowId,
     String? profileId,
+    String? serverId,
+    String? serverName,
     String? agent,
     String? paneId,
     String? workspaceId,
@@ -743,6 +869,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
   }) => AgentEvent(
     rowId: rowId ?? this.rowId,
     profileId: profileId ?? this.profileId,
+    serverId: serverId ?? this.serverId,
+    serverName: serverName ?? this.serverName,
     agent: agent ?? this.agent,
     paneId: paneId ?? this.paneId,
     workspaceId: workspaceId ?? this.workspaceId,
@@ -758,6 +886,10 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
     return AgentEvent(
       rowId: data.rowId.present ? data.rowId.value : this.rowId,
       profileId: data.profileId.present ? data.profileId.value : this.profileId,
+      serverId: data.serverId.present ? data.serverId.value : this.serverId,
+      serverName: data.serverName.present
+          ? data.serverName.value
+          : this.serverName,
       agent: data.agent.present ? data.agent.value : this.agent,
       paneId: data.paneId.present ? data.paneId.value : this.paneId,
       workspaceId: data.workspaceId.present
@@ -780,6 +912,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
     return (StringBuffer('AgentEvent(')
           ..write('rowId: $rowId, ')
           ..write('profileId: $profileId, ')
+          ..write('serverId: $serverId, ')
+          ..write('serverName: $serverName, ')
           ..write('agent: $agent, ')
           ..write('paneId: $paneId, ')
           ..write('workspaceId: $workspaceId, ')
@@ -796,6 +930,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
   int get hashCode => Object.hash(
     rowId,
     profileId,
+    serverId,
+    serverName,
     agent,
     paneId,
     workspaceId,
@@ -811,6 +947,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
       (other is AgentEvent &&
           other.rowId == this.rowId &&
           other.profileId == this.profileId &&
+          other.serverId == this.serverId &&
+          other.serverName == this.serverName &&
           other.agent == this.agent &&
           other.paneId == this.paneId &&
           other.workspaceId == this.workspaceId &&
@@ -824,6 +962,8 @@ class AgentEvent extends DataClass implements Insertable<AgentEvent> {
 class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
   final Value<int> rowId;
   final Value<String> profileId;
+  final Value<String> serverId;
+  final Value<String> serverName;
   final Value<String> agent;
   final Value<String> paneId;
   final Value<String> workspaceId;
@@ -835,6 +975,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
   const AgentEventsCompanion({
     this.rowId = const Value.absent(),
     this.profileId = const Value.absent(),
+    this.serverId = const Value.absent(),
+    this.serverName = const Value.absent(),
     this.agent = const Value.absent(),
     this.paneId = const Value.absent(),
     this.workspaceId = const Value.absent(),
@@ -847,6 +989,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
   AgentEventsCompanion.insert({
     this.rowId = const Value.absent(),
     required String profileId,
+    this.serverId = const Value.absent(),
+    this.serverName = const Value.absent(),
     required String agent,
     required String paneId,
     this.workspaceId = const Value.absent(),
@@ -863,6 +1007,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
   static Insertable<AgentEvent> custom({
     Expression<int>? rowId,
     Expression<String>? profileId,
+    Expression<String>? serverId,
+    Expression<String>? serverName,
     Expression<String>? agent,
     Expression<String>? paneId,
     Expression<String>? workspaceId,
@@ -875,6 +1021,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
     return RawValuesInsertable({
       if (rowId != null) 'row_id': rowId,
       if (profileId != null) 'profile_id': profileId,
+      if (serverId != null) 'server_id': serverId,
+      if (serverName != null) 'server_name': serverName,
       if (agent != null) 'agent': agent,
       if (paneId != null) 'pane_id': paneId,
       if (workspaceId != null) 'workspace_id': workspaceId,
@@ -889,6 +1037,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
   AgentEventsCompanion copyWith({
     Value<int>? rowId,
     Value<String>? profileId,
+    Value<String>? serverId,
+    Value<String>? serverName,
     Value<String>? agent,
     Value<String>? paneId,
     Value<String>? workspaceId,
@@ -901,6 +1051,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
     return AgentEventsCompanion(
       rowId: rowId ?? this.rowId,
       profileId: profileId ?? this.profileId,
+      serverId: serverId ?? this.serverId,
+      serverName: serverName ?? this.serverName,
       agent: agent ?? this.agent,
       paneId: paneId ?? this.paneId,
       workspaceId: workspaceId ?? this.workspaceId,
@@ -920,6 +1072,12 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
     }
     if (profileId.present) {
       map['profile_id'] = Variable<String>(profileId.value);
+    }
+    if (serverId.present) {
+      map['server_id'] = Variable<String>(serverId.value);
+    }
+    if (serverName.present) {
+      map['server_name'] = Variable<String>(serverName.value);
     }
     if (agent.present) {
       map['agent'] = Variable<String>(agent.value);
@@ -953,6 +1111,8 @@ class AgentEventsCompanion extends UpdateCompanion<AgentEvent> {
     return (StringBuffer('AgentEventsCompanion(')
           ..write('rowId: $rowId, ')
           ..write('profileId: $profileId, ')
+          ..write('serverId: $serverId, ')
+          ..write('serverName: $serverName, ')
           ..write('agent: $agent, ')
           ..write('paneId: $paneId, ')
           ..write('workspaceId: $workspaceId, ')
@@ -985,6 +1145,7 @@ typedef $$ProfilesTableCreateCompanionBuilder =
       required String baseUrl,
       Value<String?> deviceId,
       Value<String> source,
+      Value<String> serverId,
       Value<int> rowid,
     });
 typedef $$ProfilesTableUpdateCompanionBuilder =
@@ -994,6 +1155,7 @@ typedef $$ProfilesTableUpdateCompanionBuilder =
       Value<String> baseUrl,
       Value<String?> deviceId,
       Value<String> source,
+      Value<String> serverId,
       Value<int> rowid,
     });
 
@@ -1028,6 +1190,11 @@ class $$ProfilesTableFilterComposer
 
   ColumnFilters<String> get source => $composableBuilder(
     column: $table.source,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverId => $composableBuilder(
+    column: $table.serverId,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1065,6 +1232,11 @@ class $$ProfilesTableOrderingComposer
     column: $table.source,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get serverId => $composableBuilder(
+    column: $table.serverId,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ProfilesTableAnnotationComposer
@@ -1090,6 +1262,9 @@ class $$ProfilesTableAnnotationComposer
 
   GeneratedColumn<String> get source =>
       $composableBuilder(column: $table.source, builder: (column) => column);
+
+  GeneratedColumn<String> get serverId =>
+      $composableBuilder(column: $table.serverId, builder: (column) => column);
 }
 
 class $$ProfilesTableTableManager
@@ -1125,6 +1300,7 @@ class $$ProfilesTableTableManager
                 Value<String> baseUrl = const Value.absent(),
                 Value<String?> deviceId = const Value.absent(),
                 Value<String> source = const Value.absent(),
+                Value<String> serverId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProfilesCompanion(
                 id: id,
@@ -1132,6 +1308,7 @@ class $$ProfilesTableTableManager
                 baseUrl: baseUrl,
                 deviceId: deviceId,
                 source: source,
+                serverId: serverId,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1141,6 +1318,7 @@ class $$ProfilesTableTableManager
                 required String baseUrl,
                 Value<String?> deviceId = const Value.absent(),
                 Value<String> source = const Value.absent(),
+                Value<String> serverId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProfilesCompanion.insert(
                 id: id,
@@ -1148,6 +1326,7 @@ class $$ProfilesTableTableManager
                 baseUrl: baseUrl,
                 deviceId: deviceId,
                 source: source,
+                serverId: serverId,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -1176,6 +1355,8 @@ typedef $$AgentEventsTableCreateCompanionBuilder =
     AgentEventsCompanion Function({
       Value<int> rowId,
       required String profileId,
+      Value<String> serverId,
+      Value<String> serverName,
       required String agent,
       required String paneId,
       Value<String> workspaceId,
@@ -1189,6 +1370,8 @@ typedef $$AgentEventsTableUpdateCompanionBuilder =
     AgentEventsCompanion Function({
       Value<int> rowId,
       Value<String> profileId,
+      Value<String> serverId,
+      Value<String> serverName,
       Value<String> agent,
       Value<String> paneId,
       Value<String> workspaceId,
@@ -1215,6 +1398,16 @@ class $$AgentEventsTableFilterComposer
 
   ColumnFilters<String> get profileId => $composableBuilder(
     column: $table.profileId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverId => $composableBuilder(
+    column: $table.serverId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverName => $composableBuilder(
+    column: $table.serverName,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1278,6 +1471,16 @@ class $$AgentEventsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get serverId => $composableBuilder(
+    column: $table.serverId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get serverName => $composableBuilder(
+    column: $table.serverName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get agent => $composableBuilder(
     column: $table.agent,
     builder: (column) => ColumnOrderings(column),
@@ -1333,6 +1536,14 @@ class $$AgentEventsTableAnnotationComposer
 
   GeneratedColumn<String> get profileId =>
       $composableBuilder(column: $table.profileId, builder: (column) => column);
+
+  GeneratedColumn<String> get serverId =>
+      $composableBuilder(column: $table.serverId, builder: (column) => column);
+
+  GeneratedColumn<String> get serverName => $composableBuilder(
+    column: $table.serverName,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get agent =>
       $composableBuilder(column: $table.agent, builder: (column) => column);
@@ -1398,6 +1609,8 @@ class $$AgentEventsTableTableManager
               ({
                 Value<int> rowId = const Value.absent(),
                 Value<String> profileId = const Value.absent(),
+                Value<String> serverId = const Value.absent(),
+                Value<String> serverName = const Value.absent(),
                 Value<String> agent = const Value.absent(),
                 Value<String> paneId = const Value.absent(),
                 Value<String> workspaceId = const Value.absent(),
@@ -1409,6 +1622,8 @@ class $$AgentEventsTableTableManager
               }) => AgentEventsCompanion(
                 rowId: rowId,
                 profileId: profileId,
+                serverId: serverId,
+                serverName: serverName,
                 agent: agent,
                 paneId: paneId,
                 workspaceId: workspaceId,
@@ -1422,6 +1637,8 @@ class $$AgentEventsTableTableManager
               ({
                 Value<int> rowId = const Value.absent(),
                 required String profileId,
+                Value<String> serverId = const Value.absent(),
+                Value<String> serverName = const Value.absent(),
                 required String agent,
                 required String paneId,
                 Value<String> workspaceId = const Value.absent(),
@@ -1433,6 +1650,8 @@ class $$AgentEventsTableTableManager
               }) => AgentEventsCompanion.insert(
                 rowId: rowId,
                 profileId: profileId,
+                serverId: serverId,
+                serverName: serverName,
                 agent: agent,
                 paneId: paneId,
                 workspaceId: workspaceId,

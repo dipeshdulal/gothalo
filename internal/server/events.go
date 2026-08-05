@@ -22,6 +22,13 @@ const eventsBufferSize = 256
 // its own stream (the bus already protects other clients via the bounded buffer).
 const eventsWriteTimeout = 10 * time.Second
 
+// eventsPingInterval is how often an idle connection is pinged. It has to be
+// short enough that a client notices a dead socket in seconds rather than
+// whenever the next agent happens to change state — which on a quiet tailnet
+// can be never. It also keeps NAT/proxy idle timers from reaping the connection
+// underneath us.
+const eventsPingInterval = 20 * time.Second
+
 // resyncCloseCode is the WS close code sent when a client is dropped for lagging
 // (or the Herdr side is being torn down): reconnect and re-snapshot. 4000 is in
 // the private-use range so it can't collide with a protocol code.
@@ -37,6 +44,15 @@ type snapshotFrame struct {
 	Seq      uint64          `json:"seq"`
 	TS       int64           `json:"ts"`
 	Snapshot json.RawMessage `json:"snapshot"` // identical JSON to GET /snapshot
+}
+
+// heartbeatFrame is the periodic "still here" frame. It has no seq on purpose:
+// clients treat a seq-bearing frame as a change signal and re-snapshot, and a
+// heartbeat means nothing changed. Clients that don't recognise the type can
+// ignore it — receiving it at all is the point.
+type heartbeatFrame struct {
+	Type string `json:"type"` // always "heartbeat"
+	TS   int64  `json:"ts"`
 }
 
 // GET /events?token=<bearer> — upgraded to a WebSocket carrying the unified
@@ -99,12 +115,37 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info("events: client attached", "baseline_seq", baseline, "subscribers", s.bus.SubscriberCount())
 
+	// Heartbeat. A quiet tailnet can go many minutes without an event, and a
+	// connection that dies in a way neither side observes — the bridge killed
+	// behind `tailscale serve`, a phone's radio sleeping, a NAT entry expiring —
+	// leaves a HALF-OPEN socket: the client's stream never ends, so it never
+	// reconnects and silently serves stale state forever. Regular pings give both
+	// ends traffic to fail on, which is what turns a dead socket into a
+	// detectable one.
+	ticker := time.NewTicker(eventsPingInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("events: client detached")
 			conn.Close(websocket.StatusNormalClosure, "")
 			return
+		case <-ticker.C:
+			// An application-level frame, not just a protocol ping. A WS ping is
+			// answered by the client's networking stack and never surfaces to app
+			// code, so it cannot drive a client-side liveness check — and in a
+			// half-open socket the client is exactly the side that learns nothing.
+			// A real frame the client can observe is what lets it time out and
+			// reconnect. Deliberately carries no seq: it means "still here", not
+			// "something changed", so it must not trigger a re-snapshot.
+			if err := writeJSONFrame(ctx, conn, heartbeatFrame{
+				Type: "heartbeat",
+				TS:   time.Now().UnixMilli(),
+			}); err != nil {
+				log.Info("events: client unreachable, closing", "err", err)
+				return
+			}
 		case env, ok := <-sub.C():
 			if !ok {
 				// Dropped for lagging: tell the client to reconnect + re-snapshot.

@@ -23,20 +23,26 @@ optionally react to the `gothalo.notification_cleared` delta on `WS /events`).
 ## 1. The `dismiss` FCM message (what the app receives)
 
 A **data-only** FCM message (no `notification` block, so the app's background
-handler runs and cancels silently). Exactly two data keys:
+handler runs and cancels silently), sent at high priority so Doze does not sit on
+it. Three data keys:
 
 ```json
-{ "type": "dismiss", "agent": "<pane_id>" }
+{ "type": "dismiss", "agent": "<pane_id>", "server_id": "<server_id>" }
 ```
 
 | Key | Value |
 |---|---|
-| `type` | always `"dismiss"` — the **discriminator**. A normal push has **no** `type` key; match on it to tell the two apart. |
-| `agent` | the **pane_id** — the same key the `blocked` push carries. The app cancels the notification keyed to that pane. |
+| `type` | always `"dismiss"` — the **discriminator**. An alert carries `"alert"`. |
+| `agent` | the **pane_id** — the same key an alert carries. |
+| `server_id` | the sending bridge. The app cancels the notification tagged `<server_id>/<pane_id>`, so a dismiss from one machine never clears another machine's alert about a pane of the same name. |
 
 There is **no** `title` / `body` / `status` / `state_change_seq` on a dismiss — it
-is purely data-only. If `type` is absent, treat the message as a normal push (see
-the "Push messages" section of [`API.md`](API.md)).
+is purely data-only. The full payload contract for both message kinds is in
+[`CONTRACT-notifications.md`](CONTRACT-notifications.md).
+
+Beyond cancelling the tray notification, the app marks the matching alert-log
+entries resolved, which is what keeps the bell badge honest without the user
+opening the app.
 
 ## 2. Target devices
 
@@ -52,7 +58,7 @@ delta on [`WS /events`](../CONTRACT.md):
 
 ```json
 { "source":"gothalo", "type":"notification_cleared", "seq":<uint>, "ts":<ms>,
-  "payload": { "pane": "<pane_id>" } }
+  "payload": { "pane": "<pane_id>", "server_id": "<server_id>" } }
 ```
 
 It is a **consistency/bonus** signal: a **foreground** app can clear its own UI
@@ -63,13 +69,14 @@ registered (in which case only this event fires).
 
 ## 4. Trigger conditions (when a dismiss is sent)
 
-A pane is **armed** the moment a `blocked` push goes out for it
-(`gothalo.push_sent` with `status == "blocked"`). An armed pane is **dismissed
-exactly once** on the **first** of these bus events:
+A pane is **armed** the moment a push goes out for it (`gothalo.push_sent` with
+`status` of `blocked` **or** `done`), and the clearer remembers *which* status
+the notification announced. An armed pane is **dismissed exactly once** on the
+**first** of these bus events:
 
 | Bus event | Condition |
 |---|---|
-| `herdr.pane_agent_status_changed` | `agent_status != "blocked"` (i.e. `idle` / `working` / `done` / `unknown`) — the agent left blocked |
+| `herdr.pane_agent_status_changed` | `agent_status` differs from the status the notification announced — the agent left the state it was notified about |
 | `pane_closed` | the pane was closed (either `herdr.pane_closed` or `gothalo.pane_closed`) |
 | `pane_exited` | the pane's process exited (`herdr.pane_exited`) |
 
@@ -80,8 +87,10 @@ Guarantees:
   dismisses only once. A resolution for a pane that was never armed is ignored.
 - **Re-arm on a new block.** A pane that flips `blocked → working → blocked` is
   armed again by the new `blocked` push, so the next resolution dismisses again.
-- **Only `blocked` arms.** A `done` push (`gothalo.push_sent status:"done"`) does
-  **not** arm — done notifications are not auto-cleared.
+- **A `done` notice clears too, but only once the agent moves on.** Because the
+  armed status is remembered, the `pane_agent_status_changed → done` event that
+  *raised* the completion notice does not also clear it; the agent starting work
+  again does. Previously `done` notifications stayed in the tray forever.
 - **In-memory, resets on restart.** The tracker is a small in-memory set; it's
   cleared on bridge restart. A gap there is acceptable — the app re-snapshots on
   reconnect. If FCM is disabled (no creds) the consumer no-ops cleanly (logs

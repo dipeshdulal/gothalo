@@ -183,3 +183,109 @@ func TestPaneAgentDetectedDerivesStatus(t *testing.T) {
 		t.Errorf("second = %s, want pane_agent_status_changed", got[1].Type)
 	}
 }
+
+// ingesterWith builds an Ingester whose published-status baseline is `seen`.
+func ingesterWith(seen map[string]string) *Ingester {
+	i := NewIngester(nil, events.New())
+	for pane, status := range seen {
+		i.lastStatus[pane] = status
+	}
+	return i
+}
+
+// TestLivenessProbeAgreementIsNotStale: while what we published matches Herdr,
+// the subscription is delivering and must be left alone. Silence on its own is
+// NOT evidence of trouble — an idle Herdr is legitimately quiet for long
+// stretches, and reconnecting on quiet would churn the socket on any machine
+// nobody is using.
+func TestLivenessProbeAgreementIsNotStale(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle", "wN:p2": "working"})
+
+	agents := []Agent{
+		{PaneID: "wN:p1", Status: "idle"},
+		{PaneID: "wN:p2", Status: "working"},
+	}
+	if i.staleAgainst(agents) {
+		t.Error("agreement reported as stale; a quiet subscription would be reconnected in a loop")
+	}
+	// No agents at all is agreement too, not a reason to reconnect.
+	if i.staleAgainst(nil) {
+		t.Error("an empty agent list reported as stale")
+	}
+}
+
+// TestLivenessProbeDetectsMissedTransition is the failure this exists for: the
+// subscription reported success and then delivered nothing, so Herdr moved on
+// while our published view stayed frozen.
+func TestLivenessProbeDetectsMissedTransition(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	agents := []Agent{{PaneID: "wN:p1", Status: "blocked"}}
+	if !i.staleAgainst(agents) {
+		t.Error("a status Herdr changed without telling us was not detected")
+	}
+}
+
+// TestLivenessProbeDetectsUnseenPane: a pane Herdr knows about that we never
+// published means its pane_created/agent_detected never arrived.
+func TestLivenessProbeDetectsUnseenPane(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	agents := []Agent{
+		{PaneID: "wN:p1", Status: "idle"},
+		{PaneID: "wN:p9", Status: "idle"}, // never seen
+	}
+	if !i.staleAgainst(agents) {
+		t.Error("an agent pane we never published was not detected")
+	}
+}
+
+// TestLivenessProbeIgnoresClosedPanes: our baseline may still hold panes Herdr
+// has dropped. That is not evidence of a dead subscription — the close event may
+// simply be what we are about to receive — and must not force a reconnect.
+func TestLivenessProbeIgnoresClosedPanes(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle", "wN:pGone": "working"})
+
+	agents := []Agent{{PaneID: "wN:p1", Status: "idle"}}
+	if i.staleAgainst(agents) {
+		t.Error("a pane missing from Herdr's list reported as stale")
+	}
+}
+
+// TestLivenessProbeIgnoresDriftWhileEventsFlow is the regression test for a
+// false positive that resubscribed the socket every 60 seconds in production.
+//
+// The snapshot and the event stream are sampled at different instants, so an
+// agent that is actively working differs between them almost constantly.
+// Treating that as proof of a dead subscription made a BUSY machine — the exact
+// case the ingester exists for — tear its socket down in a loop. Disagreement
+// only counts once the socket has also gone quiet.
+func TestLivenessProbeIgnoresDriftWhileEventsFlow(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+	i.sawEvent() // something arrived just now
+
+	// Herdr has moved on, and we disagree — but events are still flowing.
+	if i.silentFor(probeSilence) {
+		t.Fatal("a socket that just delivered is reported as silent")
+	}
+	if i.stale() {
+		t.Error("drift treated as a dead subscription while events are arriving")
+	}
+}
+
+// TestLivenessProbeNeedsSilence: the silence gate is what makes drift meaningful.
+func TestLivenessProbeNeedsSilence(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	i.sawEvent()
+	if i.silentFor(time.Millisecond * 50) {
+		t.Error("reported silent immediately after an event")
+	}
+
+	i.mu.Lock()
+	i.lastEventAt = time.Now().Add(-2 * probeSilence)
+	i.mu.Unlock()
+	if !i.silentFor(probeSilence) {
+		t.Error("a socket quiet for twice the window is not reported silent")
+	}
+}

@@ -19,6 +19,16 @@ class Profiles extends Table {
   TextColumn get deviceId => text().nullable()();
   TextColumn get source => text().withDefault(const Constant('manual'))();
 
+  /// The bridge's own id (`GET /info` → `server_id`), as opposed to [id], which
+  /// is this phone's local id for the saved entry.
+  ///
+  /// Every push carries the sending bridge's `server_id`, and a phone is paired
+  /// with several bridges under the *same* FCM token — so this column is the
+  /// only thing that can answer "which of my servers did this alert come from",
+  /// and therefore which server a notification tap should open. Empty until the
+  /// bridge has been reached once (or for a bridge too old to report one).
+  TextColumn get serverId => text().withDefault(const Constant(''))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -33,6 +43,13 @@ class Profiles extends Table {
 class AgentEvents extends Table {
   IntColumn get rowId => integer().autoIncrement()();
   TextColumn get profileId => text()();
+
+  /// The bridge that sent the push (its `server_id`). Recorded straight from the
+  /// payload because a push arrives in a background isolate that has no notion
+  /// of an "active" server — attribution has to come from the message itself,
+  /// not from whatever the UI happened to be showing.
+  TextColumn get serverId => text().withDefault(const Constant(''))();
+  TextColumn get serverName => text().withDefault(const Constant(''))();
   TextColumn get agent => text()();
   TextColumn get paneId => text()();
   TextColumn get workspaceId => text().withDefault(const Constant(''))();
@@ -56,7 +73,23 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _open());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  /// v1 → v2 adds server attribution: which bridge a saved profile is, and which
+  /// bridge each pushed alert came from. All three columns default to empty, so
+  /// existing rows stay valid and simply read as "unattributed" until the app
+  /// next reaches that bridge.
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        await m.addColumn(profiles, profiles.serverId);
+        await m.addColumn(agentEvents, agentEvents.serverId);
+        await m.addColumn(agentEvents, agentEvents.serverName);
+      }
+    },
+  );
 
   /// Saved connection profiles, most recently named first.
   Stream<List<Profile>> watchProfiles() =>
@@ -71,6 +104,22 @@ class AppDatabase extends _$AppDatabase {
 
   /// Look up a saved server by its base URL, so re-adding/re-pairing the same
   /// bridge updates the existing entry instead of creating a duplicate.
+  /// Look up a saved server by the *bridge's* id — the reverse map a push needs:
+  /// payload `server_id` → the local profile whose base URL and bearer can act
+  /// on it.
+  Future<Profile?> profileByServerId(String serverId) async {
+    if (serverId.isEmpty) return null;
+    return (select(profiles)
+          ..where((t) => t.serverId.equals(serverId))
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
+  /// Record the bridge id a saved server reported from `GET /info`.
+  Future<void> setProfileServerId(String id, String serverId) =>
+      (update(profiles)..where((t) => t.id.equals(id)))
+          .write(ProfilesCompanion(serverId: Value(serverId)));
+
   Future<Profile?> profileByBaseUrl(String baseUrl) =>
       (select(profiles)..where((t) => t.baseUrl.equals(baseUrl)))
           .getSingleOrNull();
@@ -117,7 +166,14 @@ class AppDatabase extends _$AppDatabase {
             ..limit(limit))
           .watch();
 
-  /// Number of unread (unhandled) alerts — drives the bell badge.
+  /// Number of alerts you haven't looked at yet — the bell badge.
+  ///
+  /// `handled` means *seen*, and only opening the Alerts screen sets it. It
+  /// deliberately does NOT mean *resolved*: whether a block still wants you is
+  /// live state, answered by Priority from the current snapshot, and a stored
+  /// row is the wrong place to keep an answer that goes out of date. An alert
+  /// you never looked at stays unread even after its block is over — that is
+  /// what "unseen" means, and reading it is exactly the point of the log.
   Stream<int> watchUnreadCount() {
     final count = agentEvents.rowId.count();
     final query = selectOnly(agentEvents)

@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/connection/connection_providers.dart';
+import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../../data/db/database.dart';
 import '../../data/db/db_providers.dart';
@@ -12,7 +12,18 @@ final alertsProvider = StreamProvider<List<AgentEvent>>(
   (ref) => ref.watch(databaseProvider).watchAllEvents(),
 );
 
-/// Count of unread alerts — drives the bell badge on the Flock screen.
+/// Count of alerts you haven't looked at yet — drives the bell badge.
+///
+/// Deliberately "unseen", not "needs you". Priority already answers *what needs
+/// you* from live state, across every server; a second count derived from stored
+/// alert rows was a worse answer to the same question, and the two could
+/// disagree — a resolved block whose row was never marked would keep inflating
+/// the badge while Priority correctly showed nothing.
+///
+/// So the two surfaces split the work: Priority owns urgency, and the bell owns
+/// "something happened since you last looked" — including the completions and
+/// the already-resolved blocks that Priority, being a view of the present,
+/// cannot show at all.
 final unreadAlertsProvider = StreamProvider<int>(
   (ref) => ref.watch(databaseProvider).watchUnreadCount(),
 );
@@ -28,24 +39,24 @@ final unreadAlertsProvider = StreamProvider<int>(
 enum AlertLiveness { needsYou, resolved, done }
 
 /// Current agents of the **active** server keyed by pane id, plus that server's
-/// profile id — the material for judging an alert's [AlertLiveness]. Watching
+/// bridge id — the material for judging an alert's [AlertLiveness]. Watching
 /// the snapshot here means opening Alerts pulls a fresh state to check against.
 final activeAgentsByPaneProvider =
-    Provider<({String? profileId, Map<String, Agent> byPane})>((ref) {
-  final profileId = ref.watch(activeServerIdProvider).asData?.value;
+    Provider<({String? serverId, Map<String, Agent> byPane})>((ref) {
+  final serverId = ref.watch(serverIdentityProvider).asData?.value;
   final snap = ref.watch(snapshotControllerProvider).asData?.value;
   final byPane = snap == null
       ? const <String, Agent>{}
       : {for (final a in snap.agents) a.paneId: a};
-  return (profileId: profileId, byPane: byPane);
+  return (serverId: serverId, byPane: byPane);
 });
 
 /// Judge a single alert against live state. Only the active server's alerts can
-/// be judged (that's the only snapshot we hold); everything else is [unknown]
-/// and rendered normally.
+/// be judged (that's the only snapshot we hold); everything else stays
+/// [AlertLiveness.needsYou] and is rendered normally.
 AlertLiveness alertLiveness(
   AgentEvent e, {
-  required String? activeProfileId,
+  required String? activeServerId,
   required Map<String, Agent> byPane,
 }) {
   // A completion notice is terminal and non-actionable — always its own kind,
@@ -53,13 +64,13 @@ AlertLiveness alertLiveness(
   if (e.status == 'done') return AlertLiveness.done;
   if (e.status != 'blocked') return AlertLiveness.done;
 
-  // From here it's a `blocked` alert. Pushes are logged without a profile id
-  // (they arrive via FCM, background included), so an empty profile is assumed
-  // to be the active connection — the one server whose live snapshot we hold.
-  // When we can't confirm (a different server, or no snapshot yet), keep it as
-  // needs-you rather than guess it away.
-  final matchesActive = activeProfileId != null &&
-      (e.profileId.isEmpty || e.profileId == activeProfileId);
+  // From here it's a `blocked` alert. It can only be judged against the snapshot
+  // of the bridge it came from; an alert from another machine, or one predating
+  // server attribution (empty server id), stays needs-you rather than being
+  // guessed away against the wrong server's panes.
+  final matchesActive = activeServerId != null &&
+      activeServerId.isNotEmpty &&
+      (e.serverId.isEmpty || e.serverId == activeServerId);
   if (!matchesActive || byPane.isEmpty) return AlertLiveness.needsYou;
 
   final agent = byPane[e.paneId];

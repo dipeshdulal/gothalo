@@ -8,7 +8,11 @@ import (
 	"time"
 
 	"github.com/dipeshdulal/gothalo/internal/events"
+	"github.com/dipeshdulal/gothalo/internal/push"
 )
+
+// testServerID is the bridge identity every dismiss in these tests is scoped to.
+const testServerID = "srv1"
 
 // fakeSender records every dismiss send so a test can assert the exact payload
 // and count.
@@ -17,11 +21,14 @@ type fakeSender struct {
 	sends []map[string]string
 }
 
-func (f *fakeSender) Send(token, title, body string, data map[string]string) error {
+func (f *fakeSender) SendMessage(m push.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cp := map[string]string{"__token": token, "__title": title, "__body": body}
-	for k, v := range data {
+	cp := map[string]string{
+		"__token": m.Token, "__title": m.Title, "__body": m.Body,
+		"__kind": string(m.Kind), "__tag": m.Tag,
+	}
+	for k, v := range m.Data {
 		cp[k] = v
 	}
 	f.sends = append(f.sends, cp)
@@ -122,7 +129,7 @@ func assertNoCleared(t *testing.T, sub *events.Sub) {
 func TestArmThenDismiss(t *testing.T) {
 	bus := events.New()
 	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA", "tokB"})
+	c := newClearer(bus, send, fakeDevices{"tokA", "tokB"}, testServerID)
 
 	sub := bus.Subscribe(16)
 	defer sub.Close()
@@ -158,7 +165,7 @@ func TestArmThenDismiss(t *testing.T) {
 func TestReArmOnNewBlock(t *testing.T) {
 	bus := events.New()
 	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"})
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
 	sub := bus.Subscribe(16)
 	defer sub.Close()
 
@@ -186,7 +193,7 @@ func TestReArmOnNewBlock(t *testing.T) {
 func TestUnarmedResolutionIgnored(t *testing.T) {
 	bus := events.New()
 	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"})
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
 	sub := bus.Subscribe(16)
 	defer sub.Close()
 
@@ -200,22 +207,146 @@ func TestUnarmedResolutionIgnored(t *testing.T) {
 	assertNoCleared(t, sub)
 }
 
-// TestDoneStatusPushDoesNotArm: only "blocked" pushes arm; a "done" push must not.
-func TestDoneStatusPushDoesNotArm(t *testing.T) {
+// TestDonePushClearsOnlyWhenAgentMovesOn: a "done" push arms like a blocked one,
+// but a completion notice stays true for as long as the agent sits in done — it
+// is only stale once the agent starts working again.
+func TestDonePushClearsOnlyWhenAgentMovesOn(t *testing.T) {
 	bus := events.New()
 	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"})
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
 	sub := bus.Subscribe(16)
 	defer sub.Close()
 
+	const pane = "wN:p2"
 	c.handle(events.Envelope{Source: events.SourceGothalo, Type: events.TypePushSent,
-		Payload: raw(t, map[string]any{"agent": "wN:p2", "status": "done"})})
-	c.handle(statusChange(t, "wN:p2", "idle"))
+		Payload: raw(t, map[string]any{"agent": pane, "status": "done"})})
 
+	// The transition that raised the notice must not clear it.
+	c.handle(statusChange(t, pane, "done"))
 	if send.count() != 0 {
-		t.Errorf("dismiss sends = %d, want 0 (a done push does not arm)", send.count())
+		t.Fatalf("dismiss sends = %d, want 0 while the agent is still done", send.count())
 	}
 	assertNoCleared(t, sub)
+
+	c.handle(statusChange(t, pane, "working"))
+	if send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 once the agent moved on", send.count())
+	}
+	if got := waitCleared(t, sub); got != pane {
+		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
+	}
+}
+
+// TestBlockedNotClearedWhileStillBlocked: a repeated "blocked" status change
+// (Herdr re-emitting the same state) must not clear a live block.
+func TestBlockedNotClearedWhileStillBlocked(t *testing.T) {
+	bus := events.New()
+	send := &fakeSender{}
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
+	sub := bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p2"
+	c.handle(blockedPush(t, pane))
+	c.handle(statusChange(t, pane, "blocked"))
+
+	if send.count() != 0 {
+		t.Errorf("dismiss sends = %d, want 0 (still blocked)", send.count())
+	}
+	assertNoCleared(t, sub)
+}
+
+// TestResolutionBeforePush is the regression test for the race that left
+// notifications stuck in the tray forever.
+//
+// A status change reaches the bus over the Herdr socket in milliseconds, while
+// the matching push_sent only lands after the watcher has read the agent's
+// prompt and finished the FCM fan-out. Answer the prompt fast enough and the
+// resolving "working" arrives BEFORE the "blocked" push it resolves. The pane
+// isn't armed yet, so the old code dropped the resolution and then armed on a
+// push that was already stale — nothing ever cleared it.
+func TestResolutionBeforePush(t *testing.T) {
+	bus := events.New()
+	send := &fakeSender{}
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
+	sub := bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p1W"
+	// The agent blocked, then was answered from the desktop — both observed
+	// before the push announcing the block has been composed and sent.
+	c.handle(statusChange(t, pane, "blocked"))
+	c.handle(statusChange(t, pane, "working"))
+	c.handle(blockedPush(t, pane))
+
+	if send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 (the push was overtaken in flight)", send.count())
+	}
+	if got := waitCleared(t, sub); got != pane {
+		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
+	}
+
+	c.mu.Lock()
+	_, stillArmed := c.pending[pane]
+	c.mu.Unlock()
+	if stillArmed {
+		t.Error("pane left armed after an overtaken push; it would never clear")
+	}
+}
+
+// TestPushInOrderStillArms guards the fix from over-firing: when the push
+// arrives while the pane really is still blocked, it must arm normally and NOT
+// dismiss itself.
+func TestPushInOrderStillArms(t *testing.T) {
+	bus := events.New()
+	send := &fakeSender{}
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
+	sub := bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p2"
+	c.handle(statusChange(t, pane, "blocked"))
+	c.handle(blockedPush(t, pane))
+
+	if send.count() != 0 {
+		t.Fatalf("dismiss sends = %d, want 0 (the agent is still blocked)", send.count())
+	}
+	assertNoCleared(t, sub)
+
+	// ...and the later resolution still dismisses exactly once.
+	c.handle(statusChange(t, pane, "idle"))
+	if send.count() != 1 {
+		t.Errorf("dismiss sends = %d, want 1 after the real resolution", send.count())
+	}
+	if got := waitCleared(t, sub); got != pane {
+		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
+	}
+}
+
+// TestDismissPayload asserts the shape the app depends on: a silent, data-only
+// message tagged with "<server>/<pane>" and scoped to this bridge.
+func TestDismissPayload(t *testing.T) {
+	bus := events.New()
+	send := &fakeSender{}
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
+	sub := bus.Subscribe(16)
+	defer sub.Close()
+
+	const pane = "wN:p2"
+	c.handle(blockedPush(t, pane))
+	c.handle(statusChange(t, pane, "idle"))
+	_ = waitCleared(t, sub)
+
+	last := send.last()
+	if last["__kind"] != "data" {
+		t.Errorf("dismiss kind = %q, want data-only (it must never draw a notification)", last["__kind"])
+	}
+	if want := testServerID + "/" + pane; last["__tag"] != want {
+		t.Errorf("dismiss tag = %q, want %q", last["__tag"], want)
+	}
+	if last["server_id"] != testServerID {
+		t.Errorf("dismiss server_id = %q, want %q", last["server_id"], testServerID)
+	}
 }
 
 // TestRunEndToEnd drives the full wiring: Run subscribes to a real bus, and
@@ -225,7 +356,7 @@ func TestDoneStatusPushDoesNotArm(t *testing.T) {
 func TestRunEndToEnd(t *testing.T) {
 	bus := events.New()
 	send := &fakeSender{}
-	c := newClearer(bus, send, fakeDevices{"tokA"})
+	c := newClearer(bus, send, fakeDevices{"tokA"}, testServerID)
 
 	// A watcher of the bus, to observe the notification_cleared the clearer emits.
 	watch := bus.Subscribe(32)
@@ -283,7 +414,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // (no send, no panic) and still publishes the consistency event.
 func TestFCMDisabledNoOp(t *testing.T) {
 	bus := events.New()
-	c := newClearer(bus, nil, fakeDevices{"tokA"}) // push == nil
+	c := newClearer(bus, nil, fakeDevices{"tokA"}, testServerID) // push == nil
 	sub := bus.Subscribe(16)
 	defer sub.Close()
 

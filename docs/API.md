@@ -51,6 +51,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 ## Endpoints (per-device bearer)
 | Method | Path | Body | Response | Notes |
 |---|---|---|---|---|
+| GET  | `/info` | — | `{server_id, server_name}` | this bridge's identity — map an incoming push's `server_id` to a saved server |
 | GET  | `/snapshot` | — | raw Herdr snapshot JSON | live agent state (shape below) |
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
@@ -94,35 +95,56 @@ re-derive priority per screen. `branch` is likewise gothalo-added; both are
 described in full in [`CONTRACT.md`](../CONTRACT.md).
 
 ## Push messages (what your FCM handler receives)
-Messages are **data-only** (no `notification` block) so your handler always runs
-and renders the notification itself (reliable on locked Android). Data keys:
+Each alert arrives as **two** messages, both at `android.priority: "high"` and
+sharing one `tag`, told apart by the `render` key:
+
+- `render:"os"` — carries a `notification` block. Android draws it with no app
+  process involved, which is what makes it survive the app being killed. Android
+  does **not** hand this one to your handler while backgrounded, so it can never
+  have buttons.
+- `render:"app"` — data-only, so your handler *does* run. Redraw the same tag
+  (id `0`) with action buttons; it replaces the one above in place.
+
+**Ignore `render:"os"` in your handler**: rendering it duplicates what Android
+drew, and logging it double-counts, since a foreground app receives both.
+
 ```
-title             e.g. "Herdr agent blocked"
-body              the agent's terminal title
+type              "alert"
+render            "os" | "app"
 agent             the pane_id (e.g. "wN:p2")  -> deep-link target
 status            "blocked" | "done"
 state_change_seq  the agent's seq at this transition (string int) -> pass to /approve
+server_id         which bridge sent this  -> which server the tap should open
+server_name       that bridge's name, e.g. "Mac Studio"
+agent_title       the pane's terminal title
+title, body       the composed notification text
+question          (blocked, best-effort) what the agent is actually asking
+options           (blocked, best-effort) JSON [{index,label,selected,key}]
+category          (blocked, best-effort) e.g. "dangerous_command_approval"
 ```
-Render a local notification from `title`/`body`; tapping it should deep-link to
-the agent identified by `agent` (== `pane_id`). Carry `state_change_seq` into any
-lock-screen/banner **Approve** action so `/approve` can no-op a stale tap (D8).
 
-### `dismiss` — auto-clear a stale "blocked" notification
-A **second, data-only** message shape the bridge sends when a `blocked` agent is
+`server_id` matters because one phone registers the **same** FCM token with every
+bridge it pairs with: without it an alert can't be attributed and its tap can't
+be routed. Resolve it against `GET /info`. Carry `state_change_seq` into any
+lock-screen **Approve** so `/approve` can no-op a stale tap (D8).
+
+### `dismiss` — auto-clear a stale notification
+A **second, data-only** message the bridge sends when a notified agent is
 **resolved from anywhere** (this phone, another device, the desktop Herdr app, or
 the agent just moving on). It tells every device to cancel the tray notification
-it raised for that pane, so a handled block doesn't linger on other phones.
+it raised for that pane.
 ```
-type    "dismiss"           <- the discriminator; normal pushes have NO type key
-agent   the pane_id (e.g. "wN:p2")  <- cancel the notification keyed to this pane
+type       "dismiss"    <- the discriminator; an alert carries "alert"
+agent      the pane_id (e.g. "wN:p2")
+server_id  the sending bridge; cancel the notification tagged "<server_id>/<pane_id>"
 ```
 There is **no** `title`/`body`/`status` (data-only, so your background handler
-runs and cancels silently). Match on `data["type"] == "dismiss"`; if absent, treat
-it as a normal push (above). It targets the **same** device set as the blocked
-push (all registered devices). Triggered when the bus shows the pane leaving
-`blocked` (`pane_agent_status_changed` with `agent_status != "blocked"`) or the
-pane closing (`pane_closed` / `pane_exited`) — full contract in
-[`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md).
+runs and cancels silently). Triggered when the bus shows the pane leaving the
+state it was notified about, or the pane closing (`pane_closed` / `pane_exited`)
+— full contract in [`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md).
+
+The complete payload, channel, tag, action and routing contract lives in
+[`CONTRACT-notifications.md`](CONTRACT-notifications.md).
 
 ### Native FCM setup
 Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
