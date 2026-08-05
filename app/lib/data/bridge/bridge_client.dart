@@ -227,6 +227,32 @@ class AgentState {
   }
 }
 
+/// Where an uploaded image landed, from `POST /image`.
+///
+/// [path] is the whole point: an absolute path inside the agent's own working
+/// directory. Coding agents read an image when handed a path, so pasting this
+/// into the composer *is* the attachment — no agent protocol is involved. See
+/// docs/CONTRACT-image.md.
+class ImageDrop {
+  const ImageDrop({
+    required this.path,
+    required this.relativePath,
+    required this.contentType,
+    required this.bytes,
+  });
+
+  /// Absolute path to the written file — what goes into the composer.
+  final String path;
+
+  /// The same file relative to the agent's cwd (`.gothalo/images/…`). Display
+  /// only; the agent gets [path], since its cwd isn't necessarily the shell's.
+  final String relativePath;
+
+  /// What the bridge *sniffed* the bytes as, not what we claimed they were.
+  final String contentType;
+  final int bytes;
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
@@ -511,6 +537,110 @@ class BridgeClient {
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
+  }
+
+  /// The largest upload `POST /image` accepts (10 MiB, inclusive) — mirrors
+  /// `imagedrop.MaxBytes` on the bridge. Checked client-side in [uploadImage]
+  /// so the common mistake ("I picked the 40 MP one") fails instantly instead
+  /// of after a slow tailnet upload that ends in a 413.
+  static const int maxImageBytes = 10 * 1024 * 1024;
+
+  /// `POST /image?pane=…` with the raw bytes → the absolute path the bridge
+  /// wrote inside that agent's working directory.
+  ///
+  /// The body is raw bytes, **not** multipart: a filename is the one thing the
+  /// endpoint refuses to accept, so we have nothing to name a part with. The
+  /// bridge sniffs the type from the bytes and derives both the extension and
+  /// the filename itself (CONTRACT-image.md).
+  ///
+  /// [onProgress] reports sent/total. A phone pushing a few megabytes over a
+  /// tailnet is slow enough that a silent upload reads as a hang, so the caller
+  /// is expected to show it. The timeouts are raised well past the client's
+  /// 8-second default for the same reason — that default is tuned for small
+  /// JSON calls and would abort a perfectly healthy photo upload.
+  ///
+  /// Throws [BridgeException]; a `404` here means the bridge predates the
+  /// endpoint rather than "no such agent", so it gets its own message.
+  Future<ImageDrop> uploadImage(
+    String pane,
+    List<int> bytes, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    if (bytes.isEmpty) {
+      throw BridgeException('That image is empty.');
+    }
+    if (bytes.length > maxImageBytes) {
+      final mb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
+      throw BridgeException(
+        'That image is ${mb}MB — the limit is '
+        '${maxImageBytes ~/ (1024 * 1024)}MB.',
+      );
+    }
+    try {
+      // Typed `dynamic`, not `Map`, on purpose: a 200 whose body isn't the JSON
+      // we expect (a captive portal, a proxy's HTML) would fail the cast
+      // *outside* the DioException catch below and surface as a raw TypeError.
+      // Shape-check it here instead so every failure is a BridgeException.
+      final res = await _dio.post<dynamic>(
+        '/image',
+        data: Stream.fromIterable([bytes]),
+        queryParameters: {'pane': pane},
+        onSendProgress: onProgress,
+        options: Options(
+          headers: {
+            Headers.contentTypeHeader: 'application/octet-stream',
+            // Dio won't length a raw stream by itself, and the bridge's
+            // over-cap fast path keys off Content-Length — without this an
+            // oversized body would be buffered before being refused.
+            Headers.contentLengthHeader: bytes.length,
+          },
+          sendTimeout: const Duration(seconds: 90),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
+      final data = res.data;
+      if (data is! Map) {
+        throw BridgeException('The bridge returned an unexpected response.');
+      }
+      final body = Map<String, dynamic>.from(data);
+      final path = body['path'] as String?;
+      if (path == null || path.isEmpty) {
+        throw BridgeException(
+          'The bridge stored the image but returned no path.',
+        );
+      }
+      return ImageDrop(
+        path: path,
+        relativePath: (body['relative_path'] as String?) ?? path,
+        contentType: (body['content_type'] as String?) ?? '',
+        bytes: (body['bytes'] as num?)?.toInt() ?? bytes.length,
+      );
+    } on DioException catch (e) {
+      throw _asImageException(e);
+    }
+  }
+
+  /// [uploadImage]'s error mapping. `/image` has failure modes the generic
+  /// mapper has no words for — and its `404` means something different here
+  /// (an old bridge, not a missing agent), which is exactly the case a user
+  /// would otherwise spend a while misreading.
+  BridgeException _asImageException(DioException e) {
+    final code = e.response?.statusCode;
+    final message = switch (code) {
+      404 =>
+        'This bridge is too old to accept images. Update it and try again.',
+      413 => 'That image is too large for the bridge (10MB limit).',
+      415 => 'That file isn\'t a PNG, JPEG, GIF or WebP.',
+      _ => null,
+    };
+    if (message != null) return BridgeException(message, statusCode: code);
+    if (e.type == DioExceptionType.sendTimeout) {
+      return BridgeException(
+        'Upload timed out. The tailnet may be slow — try again.',
+        statusCode: code,
+      );
+    }
+    return _asBridgeException(e);
   }
 
   BridgeException _asBridgeException(DioException e) {

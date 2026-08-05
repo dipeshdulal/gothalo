@@ -57,6 +57,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
 | GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
+| POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into an **agent** pane's tree and get the path back, to paste into a prompt (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
@@ -251,6 +252,45 @@ Field notes for the app:
 Parsing never fails the request: an unrecognised layout degrades to `parsed:false`
 rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` no
 agent in that pane · `502` herdr command failed.
+
+## POST /image — attach a screenshot to a prompt
+Upload an image from the phone; the bridge writes it into the target agent's
+working directory and returns the **absolute path** it wrote. Coding agents read
+an image when handed a path, so that path — pasted into the composer as ordinary
+text — is the whole attachment mechanism. No agent protocol is involved.
+```
+POST /image?pane=wN:p2
+Authorization: Bearer <bearer>
+Content-Type: application/octet-stream
+
+<raw image bytes>
+```
+Response `200`:
+```json
+{ "path": "/Users/dipesh/projects/gothalo/.gothalo/images/20260805-142530-9f86d081.png",
+  "relative_path": ".gothalo/images/20260805-142530-9f86d081.png",
+  "content_type": "image/png",
+  "bytes": 184320 }
+```
+The body is **raw bytes, not multipart** — deliberately, because a filename is
+the one thing this endpoint must never accept. Nothing about the written file is
+client-controlled: the pane picks the directory, the **sniffed** content type
+(`http.DetectContentType`, never the declared one) picks the extension, and the
+bridge picks the name. `?name=`, `?filename=` and `Content-Disposition` are not
+read at all.
+
+Accepts **png/jpeg/gif/webp** only, capped at **10 MiB** inclusive. Files land in
+`<agent cwd>/.gothalo/images/`, which is self-gitignored on first write and
+pruned on every write (7 days / 40 files). The app inserts `path` into the
+composer and **does not send** — the user writes the prompt around it.
+
+**Scoped to agent panes** (a plain shell pane has no `cwd` → `404`), and accepts
+the session-qualified `<session>/<pane>` id form, same as `/diff`.
+
+Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` no agent in
+that pane · `405` non-POST · `413` over the cap · `415` not an accepted image
+type · `500` the drop directory couldn't be written · `502` herdr command failed.
+Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
 
 ## POST /agent-mode/cycle — change a Claude agent's permission mode
 The mobile remote for Claude's **Shift+Tab** key: it advances a Claude pane's
@@ -502,7 +542,10 @@ other Herdr error.
 (`/herdr`) · `400` bad body ·
 `404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
 `/agent-mode/cycle`, `/agent-transcript`), or no transcript file / unsupported
-kind (`/agent-transcript`) · `405` wrong method (`/agent-mode/cycle` non-POST) ·
+kind (`/agent-transcript`) · `405` wrong method (`/agent-mode/cycle` non-POST,
+`/image` non-POST) ·
 `409` mode switching not supported for the agent kind (`/agent-mode/cycle` on a
-non-Claude pane) · `500` transcript read failed (`/agent-transcript`) · `502`
-herdr command failed.
+non-Claude pane) · `413` upload over the 10 MiB cap (`/image`) · `415` body is
+not an accepted image type (`/image`) · `500` transcript read failed
+(`/agent-transcript`), drop directory unwritable (`/image`) · `502` herdr command
+failed.

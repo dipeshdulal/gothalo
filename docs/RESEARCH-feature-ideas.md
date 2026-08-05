@@ -94,6 +94,14 @@ A **day-grouped activity timeline**: turn completions, tool errors, agents start
 ### #9 — Image paste / screenshot into prompt  *Medium*
 Moshi's crop/scribble and Omnara's screenshot-to-agent. Attach a screenshot to a prompt for design/bug feedback. *Requires* the bridge + target agent to accept image input (Claude Code supports it), so it's gated on backend/agent support — hence Medium, not quick.
 
+> **Shipped** — `POST /image` + an "Image" chip on the composer. The gating
+> assumption above turned out not to hold: **no agent-side image input is
+> needed**. Agents read an image when handed a *path*, so the bridge writes the
+> upload into the agent's own working directory and returns that path, which the
+> app inserts into the composer (without sending) for the user to write around.
+> Crop/scribble is the remaining Moshi delta. See
+> [`CONTRACT-image.md`](CONTRACT-image.md).
+
 ### #10 — "Start a new agent task" flow  *Bigger project*
 Omnara/Orca let you *launch* parallel agents, not just watch them. You already have `worktree.create` and `pane/new`; a guided "new task → creates worktree + starts agent with this prompt" flow would close the loop from *monitor* to *dispatch*. Bigger because it needs a start-agent contract on the bridge, but it's the natural next act for a fleet controller.
 

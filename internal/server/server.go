@@ -40,6 +40,9 @@ type Server struct {
 	bus      *events.Bus // unified event bus; may be nil (WS /events disabled)
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
+	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
+	// production, where the agent is fetched from the pane's own session client.
+	agents agentGetter
 }
 
 // New constructs a Server. push and bus may be nil.
@@ -78,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/approve", s.handleApprove)
 	mux.HandleFunc("/agent-state", s.handleAgentState)
 	mux.HandleFunc("/diff", s.handleDiff)
+	mux.HandleFunc("/image", s.handleImage)
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
 	mux.HandleFunc("/attach", s.handleAttach)
@@ -305,7 +309,8 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 // History:
 //
 //	1 — server identity (/info), notification rework, /events heartbeat.
-const BridgeVersion = 1
+//	2 — POST /image: attach a screenshot to a prompt.
+const BridgeVersion = 2
 
 // GET /info -> this bridge's identity and capability level.
 //
