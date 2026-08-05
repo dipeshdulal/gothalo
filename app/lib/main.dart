@@ -3,8 +3,11 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/connection/server_switch.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
+import 'data/bridge/bridge_providers.dart';
+import 'features/push/push_payload.dart';
 import 'features/push/push_service.dart';
 
 Future<void> main() async {
@@ -41,13 +44,25 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
     });
   }
 
-  /// Navigate to a blocked/done agent's terminal when a push notification was
-  /// tapped. `pane_id` is carried as the notification payload.
+  /// Navigate to the agent a tapped notification is about.
+  ///
+  /// The alert names the bridge it came from, which need not be the server the
+  /// app is currently pointed at — so this switches servers first when they
+  /// differ. Without that, tapping an alert from one machine opened whatever
+  /// pane happened to share that id on another, or nothing at all.
   void _handleDeepLink() {
-    final pane = pendingDeepLink.value;
-    if (pane == null || pane.isEmpty) return;
+    final target = pendingDeepLink.value;
+    if (target == null || target.pane.isEmpty) return;
     pendingDeepLink.value = null;
-    ref.read(routerProvider).push('/transcript/${Uri.encodeComponent(pane)}');
+    unawaited(_navigateTo(target));
+  }
+
+  Future<void> _navigateTo(DeepLinkTarget target) async {
+    await activateServer(ref, target.serverId);
+    if (!mounted) return;
+    ref
+        .read(routerProvider)
+        .push('/transcript/${Uri.encodeComponent(target.pane)}');
   }
 
   @override
@@ -58,6 +73,12 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
 
   @override
   Widget build(BuildContext context) {
+    // Learn which bridge each server is, so a push can be attributed to one.
+    // WATCHED, not read once: at first frame the active connection is still
+    // loading and the bridge client is null, and a read would cache that null
+    // for the whole session — leaving every server unidentified and every
+    // notification action unroutable.
+    ref.watch(serverIdentityProvider);
     return MaterialApp.router(
       title: 'gothalo',
       debugShowCheckedModeBanner: false,

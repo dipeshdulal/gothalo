@@ -298,6 +298,26 @@ class BridgeClient {
     }
   }
 
+  /// `GET /info` → this bridge's own identity: `server_id` and `server_name`.
+  ///
+  /// The app stores the id against the saved server so an incoming push, which
+  /// carries only `server_id`, can be traced back to the server it came from —
+  /// for attribution in the alerts log and for routing a notification tap. A
+  /// bridge older than this endpoint 404s; callers treat that as "unknown" and
+  /// carry on.
+  Future<({String serverId, String serverName})> info() async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>('/info');
+      final body = res.data ?? const <String, dynamic>{};
+      return (
+        serverId: (body['server_id'] as String?) ?? '',
+        serverName: (body['server_name'] as String?) ?? '',
+      );
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
   /// `POST /send {pane, text}` → types [text] into the given Herdr pane. Include
   /// a trailing `\n` in [text] to submit.
   Future<void> sendText(String pane, String text) async {

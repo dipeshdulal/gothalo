@@ -30,6 +30,16 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Handles Approve/Reject tapped on a notification. The
+             flutter_local_notifications plugin ships the class but NOT this
+             declaration, so without it Android resolves the action broadcast to
+             no component: the button appears, animates on tap, and silently does
+             nothing. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

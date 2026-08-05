@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/connection/server_switch.dart';
 import '../../core/theme.dart';
 import '../../data/db/database.dart';
 import '../../data/db/db_providers.dart';
@@ -76,7 +77,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                     unread: _unreadOnOpen!.contains(e.rowId),
                     liveness: alertLiveness(
                       e,
-                      activeProfileId: live.profileId,
+                      activeServerId: live.serverId,
                       byPane: live.byPane,
                     ),
                   ),
@@ -90,7 +91,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
   }
 }
 
-class _AlertTile extends StatelessWidget {
+class _AlertTile extends ConsumerWidget {
   const _AlertTile({
     required this.event,
     required this.unread,
@@ -105,7 +106,7 @@ class _AlertTile extends StatelessWidget {
   final AlertLiveness liveness;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     // Only a still-blocked alert wants you; done and resolved are both settled,
     // so both recede (dimmed, muted title) — just with different markers.
@@ -125,10 +126,14 @@ class _AlertTile extends StatelessWidget {
     final tile = ListTile(
       onTap: event.paneId.isEmpty
           ? null
-          : () => context.push(
+          : () async {
+              // The alerts log spans every paired machine, so point the app at
+              // the one this alert came from before opening the agent.
+              await activateServer(ref, event.serverId);
+              if (!context.mounted) return;
               // Alerts are always about an agent → open its chat view.
-              '/transcript/${Uri.encodeComponent(event.paneId)}',
-            ),
+              context.push('/transcript/${Uri.encodeComponent(event.paneId)}');
+            },
       // A needs-you alert gets an urgent filled dot; done a completion check;
       // resolved a hollow ring — the kind reads at a glance without the label.
       leading: SizedBox(
@@ -178,6 +183,22 @@ class _AlertTile extends StatelessWidget {
             ),
           ),
           Text('  ·  ', style: TextStyle(color: scheme.onSurfaceVariant)),
+          // Which machine this came from. The log is cross-server, so without it
+          // an alert is just a pane id that could belong to any of them.
+          if (event.serverName.isNotEmpty) ...[
+            Flexible(
+              child: Text(
+                event.serverName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            Text('  ·  ', style: TextStyle(color: scheme.onSurfaceVariant)),
+          ],
           Flexible(
             child: Text(
               event.paneId,

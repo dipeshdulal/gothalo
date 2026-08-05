@@ -9,23 +9,23 @@ part of 'push_service.dart';
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
 /// Owns the push lifecycle: notification permission, the FCM token, foreground
-/// rendering, and (re)registering the token with the active bridge. Its value
-/// is the current FCM token (null if unavailable), which the pairing flow reads
-/// to send as `fcm_token`.
+/// handling, and (re)registering the token with the active bridge. Its value is
+/// the current FCM token (null if unavailable), which the pairing flow reads to
+/// send as `fcm_token`.
 
 @ProviderFor(PushController)
 final pushControllerProvider = PushControllerProvider._();
 
 /// Owns the push lifecycle: notification permission, the FCM token, foreground
-/// rendering, and (re)registering the token with the active bridge. Its value
-/// is the current FCM token (null if unavailable), which the pairing flow reads
-/// to send as `fcm_token`.
+/// handling, and (re)registering the token with the active bridge. Its value is
+/// the current FCM token (null if unavailable), which the pairing flow reads to
+/// send as `fcm_token`.
 final class PushControllerProvider
     extends $AsyncNotifierProvider<PushController, String?> {
   /// Owns the push lifecycle: notification permission, the FCM token, foreground
-  /// rendering, and (re)registering the token with the active bridge. Its value
-  /// is the current FCM token (null if unavailable), which the pairing flow reads
-  /// to send as `fcm_token`.
+  /// handling, and (re)registering the token with the active bridge. Its value is
+  /// the current FCM token (null if unavailable), which the pairing flow reads to
+  /// send as `fcm_token`.
   PushControllerProvider._()
     : super(
         from: null,
@@ -45,12 +45,12 @@ final class PushControllerProvider
   PushController create() => PushController();
 }
 
-String _$pushControllerHash() => r'bc01eebabe38908460de53a4d15385edda5d21c1';
+String _$pushControllerHash() => r'cbf9442d5d0a3da4bc5dfdbe63c759a80343efc2';
 
 /// Owns the push lifecycle: notification permission, the FCM token, foreground
-/// rendering, and (re)registering the token with the active bridge. Its value
-/// is the current FCM token (null if unavailable), which the pairing flow reads
-/// to send as `fcm_token`.
+/// handling, and (re)registering the token with the active bridge. Its value is
+/// the current FCM token (null if unavailable), which the pairing flow reads to
+/// send as `fcm_token`.
 
 abstract class _$PushController extends $AsyncNotifier<String?> {
   FutureOr<String?> build();
