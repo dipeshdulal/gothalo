@@ -1,6 +1,7 @@
 package herdr
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func TestForwardsGlobalEventSessionTagged(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane_focused", samplerPaneFocused))
+	ing.handle(context.Background(), msg("pane_focused", samplerPaneFocused))
 
 	e := collect(t, sub, 1)[0]
 	if e.Source != events.SourceHerdr || e.Type != events.TypePaneFocused {
@@ -77,7 +78,7 @@ func TestForwardsGlobalEventQualifiedForNamedSession(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(NewForSession("acme"), bus)
 
-	ing.handle(msg("pane_focused", samplerPaneFocused))
+	ing.handle(context.Background(), msg("pane_focused", samplerPaneFocused))
 
 	e := collect(t, sub, 1)[0]
 	var p struct {
@@ -98,7 +99,7 @@ func TestPaneUpdatedForwardsAndDerivesStatus(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane_updated", samplerPaneUpdatedAgent))
+	ing.handle(context.Background(), msg("pane_updated", samplerPaneUpdatedAgent))
 
 	got := collect(t, sub, 2)
 	if got[0].Type != events.TypePaneUpdated || got[0].Source != events.SourceHerdr {
@@ -126,7 +127,7 @@ func TestDottedAgentStatusSynthesizedNotForwarded(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane.agent_status_changed", samplerDottedAgentStatus))
+	ing.handle(context.Background(), msg("pane.agent_status_changed", samplerDottedAgentStatus))
 
 	e := collect(t, sub, 1)[0]
 	if e.Type != events.TypePaneAgentStatusChanged || e.Source != events.SourceHerdr {
@@ -173,7 +174,7 @@ func TestPaneAgentDetectedDerivesStatus(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane_agent_detected", samplerPaneAgentDetected))
+	ing.handle(context.Background(), msg("pane_agent_detected", samplerPaneAgentDetected))
 
 	got := collect(t, sub, 2) // verbatim + derived
 	if got[0].Type != events.TypePaneAgentDetected {

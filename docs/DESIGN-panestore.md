@@ -170,10 +170,10 @@ regardless, because it fixes something broken right now.
 
 | # | Step | Contract change | Notes |
 | --- | --- | --- | --- |
-| 1 | Clearer compares `state_change_seq` | none | Fixes a live bug. Independent of everything else; correct under both old and new architecture. |
-| 2 | Document the `heartbeat` frame and `done` semantics | docs only | Both are undocumented today; see below. |
-| 3 | Socket transport for all Herdr calls; retire `runFor`/`exec` | none | Deletes N subprocesses, the 10s discovery poll, and the unbounded-exec hazard class. |
-| 4 | Per-pane subscriptions, opened on `pane.agent_detected` | none | Fixes post-connect panes going dark. |
+| 1 | Clearer decides from an authoritative read + sweep | none | **Done.** Fixes a live bug. Independent of everything else; correct under both old and new architecture. |
+| 2 | Document the `heartbeat` frame and `done` semantics | docs only | **Done.** Both were undocumented; see below. |
+| 3 | Socket transport for the hot paths (Wait/Agents/Get) | none | **Done.** 9 processes -> 0. Remaining cold paths (SnapshotRaw, ReadText, Explain, pane ops) still on the CLI. |
+| 4 | Per-pane subscriptions, opened on `pane.agent_detected` | none | **Done.** Fixes post-connect panes going dark. |
 | 5 | Introduce `PaneStore` as single writer; `/snapshot` materialized | none | The structural change. Notifier and Clearer become readers. |
 | 6 | Event structure: `state_change_seq`, delta/signal split | **breaking OK** | Ship with the app side in the same stack. |
 
