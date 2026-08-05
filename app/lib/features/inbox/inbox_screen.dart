@@ -6,7 +6,6 @@ import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/live_activity_line.dart';
-import '../alerts/alerts_providers.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
@@ -57,18 +56,6 @@ class InboxScreen extends ConsumerWidget {
                 tooltip: 'Jump to an agent',
                 onPressed: () => showJumpSheet(context),
                 icon: const Icon(Icons.bolt),
-              ),
-              IconButton(
-                tooltip: 'Alerts',
-                onPressed: () => context.push('/alerts'),
-                icon: Badge(
-                  isLabelVisible:
-                      (ref.watch(unreadAlertsProvider).asData?.value ?? 0) > 0,
-                  label: Text(
-                    '${ref.watch(unreadAlertsProvider).asData?.value ?? 0}',
-                  ),
-                  child: const Icon(Icons.notifications_none),
-                ),
               ),
               // Overview + per-server settings are occasional visits, not
               // every-open actions — folded into one overflow menu so the bar

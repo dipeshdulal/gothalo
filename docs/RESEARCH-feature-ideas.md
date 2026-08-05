@@ -51,7 +51,7 @@ gothalo already covers the **hard 80%** that most competitors charge for: real-t
 
 ## 2. Where gothalo already stands (so we don't reinvent it)
 
-Already built (from `app/lib/`): servers home with cross-server **Priority** (starred/blocked), per-server **Flock inbox** (Agents + Spaces, attention-first), persistent **Alerts log** (day-grouped, 7-day retention, unread badges), **Overview** (workspace→tab→pane), live **xterm terminal** (`WS /attach`), chat **transcript** with composer + approval bar (`WS /agent-transcript`), one-tap **Approve** everywhere, permission-mode cycling, pane/tab/worktree actions, **Jump** fuzzy command palette, **FCM push** with in-place dismiss, and **QR pairing**. Real-time backbone is `WS /events` as a change-signal → debounced `/snapshot`.
+Already built (from `app/lib/`): servers home with cross-server **Priority** (starred/blocked), per-server **Flock inbox** (Agents + Spaces, attention-first), **Overview** (workspace→tab→pane), live **xterm terminal** (`WS /attach`), chat **transcript** with composer + approval bar (`WS /agent-transcript`), one-tap **Approve** everywhere, permission-mode cycling, pane/tab/worktree actions, **Jump** fuzzy command palette, **FCM push** with in-place dismiss, and **QR pairing**. Real-time backbone is `WS /events` as a change-signal → debounced `/snapshot`.
 
 **Notable existing gaps the code itself flags:** no usage/analytics anywhere, transcripts aren't persisted (only alerts are), branch is *inferred from cwd* (bridge doesn't expose it yet), and the server-side `agent.view` sort projection is stubbed pending backend support. *(Both of the latter two are now done — see §4.)*
 
@@ -89,7 +89,7 @@ Every competitor ships voice; your composer is text-only. A `speech_to_text` mic
 The Termius/Blink table-stake gothalo lacks: a small library of **reusable prompts/keystrokes** ("run tests," "continue," "explain the last error," an Escape/Ctrl-C combo) surfaced as chips above the composer and in the keyboard toolbar. Pairs perfectly with your existing `/send` (text + raw key) endpoints — pure client work, secure-storage backed like your starred agents.
 
 ### #8 — Recent-activity timeline  *Medium*
-Your Alerts log only keeps blocked/done. Broaden it (or add a sibling feed) into a **day-grouped activity timeline**: turn completions, tool errors, agents started/stopped — the PagerDuty "recently impacted" idea. You already have the `AgentEvents` drift table and day-grouping UI; this is mostly widening what you record and render.
+A **day-grouped activity timeline**: turn completions, tool errors, agents started/stopped — the PagerDuty "recently impacted" idea. Note the precedent: an alerts log over an `AgentEvents` drift table existed and was deleted (schema v4), because storing "agent went blocked/done" duplicates live state the bridge already answers. A timeline is only worth building if it records things the snapshot *can't* reconstruct — errors, transitions that left no trace — rather than a stale mirror of the current state.
 
 ### #9 — Image paste / screenshot into prompt  *Medium*
 Moshi's crop/scribble and Omnara's screenshot-to-agent. Attach a screenshot to a prompt for design/bug feedback. *Requires* the bridge + target agent to accept image input (Claude Code supports it), so it's gated on backend/agent support — hence Medium, not quick.

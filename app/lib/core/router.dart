@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../features/alerts/alerts_screen.dart';
 import '../features/diff/diff_screen.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/overview/overview_screen.dart';
@@ -41,10 +40,6 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/inbox',
         builder: (context, state) => const InboxScreen(),
-      ),
-      GoRoute(
-        path: '/alerts',
-        builder: (context, state) => const AlertsScreen(),
       ),
       GoRoute(
         path: '/priority',

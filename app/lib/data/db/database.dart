@@ -38,66 +38,38 @@ class Profiles extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-/// A durable log of agent state changes we were pushed about (`blocked`/`done`).
-///
-/// `/snapshot` is a *point-in-time* view; once an agent moves on, the moment it
-/// blocked is gone. This table is the app's persistent inbox history so those
-/// moments survive. `stateChangeSeq` is Herdr's monotonic seq for the agent and
-/// backs idempotent approvals (D8) — an approve tap no-ops if the agent is no
-/// longer blocked at this seq.
-class AgentEvents extends Table {
-  IntColumn get rowId => integer().autoIncrement()();
-  TextColumn get profileId => text()();
-
-  /// The bridge that sent the push (its `server_id`). Recorded straight from the
-  /// payload because a push arrives in a background isolate that has no notion
-  /// of an "active" server — attribution has to come from the message itself,
-  /// not from whatever the UI happened to be showing.
-  TextColumn get serverId => text().withDefault(const Constant(''))();
-  TextColumn get serverName => text().withDefault(const Constant(''))();
-  TextColumn get agent => text()();
-  TextColumn get paneId => text()();
-  TextColumn get workspaceId => text().withDefault(const Constant(''))();
-  TextColumn get title => text().withDefault(const Constant(''))();
-
-  /// The status this event represents (stored as its enum name).
-  TextColumn get status => text()();
-
-  /// Herdr's `state_change_seq` for the agent at the time of the event.
-  IntColumn get stateChangeSeq => integer().nullable()();
-
-  /// When the event landed on this device (unix millis, UTC).
-  IntColumn get receivedAt => integer()();
-
-  /// Whether the user has acted on / dismissed this event.
-  BoolColumn get handled => boolean().withDefault(const Constant(false))();
-}
-
-@DriftDatabase(tables: [Profiles, AgentEvents])
+@DriftDatabase(tables: [Profiles])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _open());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
-  /// v1 → v2 adds server attribution: which bridge a saved profile is, and which
-  /// bridge each pushed alert came from. All three columns default to empty, so
-  /// existing rows stay valid and simply read as "unattributed" until the app
-  /// next reaches that bridge.
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
     onUpgrade: (m, from, to) async {
+      // v1 → v2 added server attribution to profiles. It also added two columns
+      // to the since-dropped agent_events table; those statements are gone
+      // rather than kept for fidelity, because v4 drops the table outright and
+      // adding a column to something about to be deleted only risks failing the
+      // upgrade for no gain.
       if (from < 2) {
         await m.addColumn(profiles, profiles.serverId);
-        await m.addColumn(agentEvents, agentEvents.serverId);
-        await m.addColumn(agentEvents, agentEvents.serverName);
       }
       // v2 → v3 records what each bridge can do, so an out-of-date one is
       // visible in the servers list rather than only discovered by a
       // notification tap that refuses to route.
       if (from < 3) {
         await m.addColumn(profiles, profiles.bridgeVersion);
+      }
+      // v3 → v4 drops the pushed-alert log. An alert only ever said an agent
+      // was blocked or done — live state the bridge answers directly, so a
+      // stored copy could only be a staler version of an answer we already
+      // have. The tray is the alert; Priority owns what needs you, and the
+      // transcript owns what happened.
+      if (from < 4) {
+        await m.database.customStatement('DROP TABLE IF EXISTS agent_events');
       }
     },
   );
@@ -153,67 +125,6 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteProfile(String id) =>
       (delete(profiles)..where((t) => t.id.equals(id))).go();
 
-  /// The event/inbox history for a profile, newest first. Reactive: the inbox
-  /// history UI rebuilds the instant a new event is inserted.
-  Stream<List<AgentEvent>> watchEvents(String profileId, {int limit = 200}) =>
-      (select(agentEvents)
-            ..where((t) => t.profileId.equals(profileId))
-            ..orderBy([
-              (t) => OrderingTerm(
-                expression: t.receivedAt,
-                mode: OrderingMode.desc,
-              ),
-            ])
-            ..limit(limit))
-          .watch();
-
-  Future<int> insertEvent(AgentEventsCompanion event) =>
-      into(agentEvents).insert(event);
-
-  Future<void> markHandled(int rowId) =>
-      (update(agentEvents)..where((t) => t.rowId.equals(rowId)))
-          .write(const AgentEventsCompanion(handled: Value(true)));
-
-  /// The full alerts log across all servers, newest first. Reactive.
-  Stream<List<AgentEvent>> watchAllEvents({int limit = 300}) =>
-      (select(agentEvents)
-            ..orderBy([
-              (t) => OrderingTerm(
-                expression: t.receivedAt,
-                mode: OrderingMode.desc,
-              ),
-            ])
-            ..limit(limit))
-          .watch();
-
-  /// Number of alerts you haven't looked at yet — the bell badge.
-  ///
-  /// `handled` means *seen*, and only opening the Alerts screen sets it. It
-  /// deliberately does NOT mean *resolved*: whether a block still wants you is
-  /// live state, answered by Priority from the current snapshot, and a stored
-  /// row is the wrong place to keep an answer that goes out of date. An alert
-  /// you never looked at stays unread even after its block is over — that is
-  /// what "unseen" means, and reading it is exactly the point of the log.
-  Stream<int> watchUnreadCount() {
-    final count = agentEvents.rowId.count();
-    final query = selectOnly(agentEvents)
-      ..addColumns([count])
-      ..where(agentEvents.handled.equals(false));
-    return query.map((row) => row.read(count) ?? 0).watchSingle();
-  }
-
-  Future<void> markAllHandled() =>
-      (update(agentEvents)..where((t) => t.handled.equals(false)))
-          .write(const AgentEventsCompanion(handled: Value(true)));
-
-  Future<void> clearEvents() => delete(agentEvents).go();
-
-  /// Retention: drop alerts older than [cutoffMillis] (unix millis). Called
-  /// after each insert so the log self-trims.
-  Future<void> pruneOlderThan(int cutoffMillis) =>
-      (delete(agentEvents)
-            ..where((t) => t.receivedAt.isSmallerThanValue(cutoffMillis)))
-          .go();
 }
 
 LazyDatabase _open() {

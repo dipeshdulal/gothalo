@@ -1,14 +1,11 @@
 import 'dart:ui' show DartPluginRegistrant;
 
-import 'package:drift/drift.dart' show Value;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../data/bridge/bridge_providers.dart';
-import '../../data/db/database.dart';
-import '../../data/db/db_providers.dart';
 import 'notification_actions.dart';
 import 'push_payload.dart';
 
@@ -180,60 +177,14 @@ Future<void> _dismiss(PushPayload p) async {
   }
 }
 
-/// How long alerts are kept before the log self-trims.
-const _retention = Duration(days: 7);
-
-/// Build an [AgentEventsCompanion] from a push.
+/// Background isolate entrypoint — renders pushes while the app is backgrounded
+/// or terminated. Registered from `main()` via `onBackgroundMessage`.
 ///
-/// The server id is recorded from the payload rather than from the app's active
-/// connection: a push lands in a background isolate where "active server" is
-/// meaningless, and guessing it is what made alerts unattributable before.
-AgentEventsCompanion _eventFrom(PushPayload p) => AgentEventsCompanion.insert(
-  profileId: '',
-  serverId: Value(p.serverId),
-  serverName: Value(p.serverName),
-  agent: '',
-  paneId: p.pane,
-  status: p.status,
-  receivedAt: DateTime.now().millisecondsSinceEpoch,
-  title: Value(p.question.isNotEmpty ? p.question : p.agentTitle),
-  stateChangeSeq: Value(p.seq),
-);
-
-/// Insert an alert and prune anything past the retention window.
-Future<void> _logToDb(AppDatabase db, PushPayload p) async {
-  if (p.pane.isEmpty) return;
-  await db.insertEvent(_eventFrom(p));
-  await db.pruneOlderThan(
-    DateTime.now().subtract(_retention).millisecondsSinceEpoch,
-  );
-}
-
-/// Apply a push to the durable alert log.
-///
-/// A dismiss clears the tray but writes nothing: the log records that an alert
-/// happened, and that stays true after the block is answered. Whether it still
-/// wants you is live state, shown by Priority — marking the row read here would
-/// hide it from the history you never looked at.
-Future<void> _applyToDb(AppDatabase db, PushPayload p) async {
-  if (p.isDismiss) return;
-  await _logToDb(db, p);
-}
-
-/// Background isolate: a short-lived DB connection to record the push.
-Future<void> _applyStandalone(PushPayload p) async {
-  final db = AppDatabase();
-  try {
-    await _applyToDb(db, p);
-  } catch (_) {
-    // best-effort logging
-  } finally {
-    await db.close();
-  }
-}
-
-/// Background isolate entrypoint — renders and records pushes while the app is
-/// backgrounded or terminated. Registered from `main()` via `onBackgroundMessage`.
+/// The tray IS the alert. Nothing is written to disk: an alert says an agent is
+/// blocked or done, which is live state the bridge already answers — a stored
+/// copy could only go stale, and there is no question it answered that
+/// Priority (for what wants you) or the transcript (for what happened) doesn't
+/// answer better.
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   DartPluginRegistrant.ensureInitialized();
@@ -244,11 +195,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (p.isOsRendered) return;
   if (p.isDismiss) {
     await _dismiss(p);
-    await _applyStandalone(p);
     return;
   }
   await _show(p);
-  await _applyStandalone(p);
 }
 
 /// Foreground taps and action buttons.
@@ -342,21 +291,18 @@ class PushController extends _$PushController {
 
       // Foreground: the app is open and the live event stream already reflects
       // this change, so we do NOT raise a tray notification — that would just be
-      // noise. We only record it in the in-app alerts log (bell + list), or
-      // resolve the log entry if it's a dismiss. The background handler
-      // ([firebaseMessagingBackgroundHandler]) still shows the tray when the app
-      // isn't in the foreground.
+      // noise. The only thing still worth acting on is a dismiss, which clears a
+      // tray entry raised earlier while we were backgrounded. The background
+      // handler ([firebaseMessagingBackgroundHandler]) shows the tray when the
+      // app isn't in the foreground.
       FirebaseMessaging.onMessage.listen((m) async {
         final p = PushPayload.from(m.data);
         // A foreground app receives BOTH halves of the alert pair; only the
-        // app-rendered twin counts, or every alert would be logged twice.
+        // app-rendered twin counts, or a dismiss would be handled twice.
         if (p.isOsRendered) return;
         if (p.isDismiss) {
           await _dismiss(p);
         }
-        try {
-          await _applyToDb(ref.read(databaseProvider), p);
-        } catch (_) {}
       });
       messaging.onTokenRefresh.listen(_onToken);
 

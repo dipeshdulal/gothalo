@@ -45,7 +45,7 @@ final class PushControllerProvider
   PushController create() => PushController();
 }
 
-String _$pushControllerHash() => r'2e4e40485ca2041d6cc6ebddf5d303e127e5e476';
+String _$pushControllerHash() => r'1df089d217de05da211602f7e652f412fb119981';
 
 /// Owns the push lifecycle: notification permission, the FCM token, foreground
 /// handling, and (re)registering the token with the active bridge. Its value is

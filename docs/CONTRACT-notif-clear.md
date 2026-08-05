@@ -40,9 +40,9 @@ There is **no** `title` / `body` / `status` / `state_change_seq` on a dismiss â€
 is purely data-only. The full payload contract for both message kinds is in
 [`CONTRACT-notifications.md`](CONTRACT-notifications.md).
 
-Beyond cancelling the tray notification, the app marks the matching alert-log
-entries resolved, which is what keeps the bell badge honest without the user
-opening the app.
+Cancelling the tray notification is the whole of the app-side effect. There is no
+alert log to reconcile: the tray is the only record an alert leaves, so a dismiss
+that clears it has by definition brought the app back in sync.
 
 ## 2. Target devices
 

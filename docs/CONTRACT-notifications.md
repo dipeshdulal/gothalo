@@ -238,8 +238,22 @@ fresh token on next launch.
 
 ## 9. Counting
 
-The bell badge counts **unhandled `blocked` alerts only**. A `done` notice is a
-completion, not a request. An alert stops counting when you open Alerts, and also
-the moment a dismiss arrives — so the badge decays on its own rather than only
-when you look at it. `watchNeedsYouByServer()` exposes the same count split by
-`server_id`.
+**The tray is the count.** The app keeps no alert log and no badge: what is on
+screen is exactly what is outstanding, because the clearer dismisses a
+notification the moment its block is answered (see
+[`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md)).
+
+There was a bell badge over a persisted `agent_events` table; it was removed in
+schema v4. An alert only ever said an agent was `blocked` or `done` — live state
+the bridge answers directly, so a stored copy could only be a staler version of
+an answer already available. The two surfaces that remain each own a question the
+log answered worse:
+
+| Question | Surface |
+| --- | --- |
+| What needs me right now? | **Priority**, from the live snapshot, across every server |
+| What did the agent actually do? | The **transcript**, server-side and complete |
+
+A count derived from stored rows could disagree with both — a resolved block
+whose row was never marked kept inflating the badge while Priority correctly
+showed nothing.

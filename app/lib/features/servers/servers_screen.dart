@@ -7,7 +7,6 @@ import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/models/snapshot.dart';
-import '../alerts/alerts_providers.dart';
 import '../inbox/widgets/agent_avatar.dart';
 import '../inbox/widgets/status_badge.dart';
 import '../priority/priority_providers.dart';
@@ -75,7 +74,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Widget build(BuildContext context) {
     final servers = ref.watch(serversProvider);
     final hits = ref.watch(priorityHitsProvider);
-    final unread = ref.watch(unreadAlertsProvider).asData?.value ?? 0;
     // Live per-server agent stats, keyed by server id.
     final byServer = {
       for (final sa in ref.watch(allServersAgentsProvider).asData?.value ??
@@ -97,15 +95,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
             ],
           ),
           actions: [
-            IconButton(
-              tooltip: 'Alerts',
-              onPressed: () => context.push('/alerts'),
-              icon: Badge(
-                isLabelVisible: unread > 0,
-                label: Text('$unread'),
-                child: const Icon(Icons.notifications_none),
-              ),
-            ),
             IconButton(
               tooltip: 'Pair via QR',
               onPressed: () => context.push('/pair'),
