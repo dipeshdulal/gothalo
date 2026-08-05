@@ -13,14 +13,14 @@ import '../inbox/inbox_providers.dart';
 /// secure storage (no schema, so it stays clear of the shared drift database).
 /// Manual providers throughout — no codegen — to avoid stepping on the parallel
 /// build_runner.
-final starredAgentsProvider =
-    AsyncNotifierProvider<StarredAgents, Set<String>>(StarredAgents.new);
+final starredAgentsProvider = AsyncNotifierProvider<StarredAgents, Set<String>>(
+  StarredAgents.new,
+);
 
 class StarredAgents extends AsyncNotifier<Set<String>> {
   static const _key = 'gothalo.starred_agents';
 
-  static String starKey(String serverId, String paneId) =>
-      '$serverId::$paneId';
+  static String starKey(String serverId, String paneId) => '$serverId::$paneId';
 
   @override
   Future<Set<String>> build() async {
@@ -34,8 +34,9 @@ class StarredAgents extends AsyncNotifier<Set<String>> {
   }
 
   bool isStarred(String serverId, String paneId) =>
-      (state.asData?.value ?? const <String>{})
-          .contains(starKey(serverId, paneId));
+      (state.asData?.value ?? const <String>{}).contains(
+        starKey(serverId, paneId),
+      );
 
   Future<void> toggle(String serverId, String paneId) async {
     final key = starKey(serverId, paneId);
@@ -78,46 +79,86 @@ class ServerAgents {
 /// background, which is what FCM is for.
 const _crossServerRefresh = Duration(seconds: 6);
 
-/// Fetches every saved server's `/snapshot` in parallel (each with its own
-/// bearer), so the Priority view can aggregate starred agents across all of
-/// them.
+/// How long one server gets to answer before it is called unreachable.
 ///
-/// Refreshes itself on a timer for as long as something is watching it. Without
-/// that it fetched exactly once and then never again — the servers list and
-/// Priority froze at whatever was true when the app opened, which reads as the
-/// app being broken even though every other surface is live.
-final allServersAgentsProvider =
-    FutureProvider.autoDispose<List<ServerAgents>>((ref) async {
-  // Self-invalidate on a timer. autoDispose is what scopes it: the timer dies
-  // with the last listener, so nothing polls once the screen is gone.
+/// Must stay comfortably below [_crossServerRefresh]: the aggregate resolves
+/// only when every server has, so a budget larger than the refresh period means
+/// a new fetch starts before the last one finished and the provider never
+/// reaches a settled state.
+const _perServerBudget = Duration(seconds: 4);
+
+/// One server's live agents, fetched and refreshed **independently of every
+/// other server**.
+///
+/// A family rather than one aggregate on purpose. The aggregate used
+/// `Future.wait`, so it resolved only when the slowest server had answered —
+/// which meant a sleeping laptop held every other server's row hostage, and
+/// with an 8s client timeout against a 6s refresh it never settled at all.
+/// Each server now succeeds, fails, and retries on its own schedule, and each
+/// row renders whatever that one server currently says.
+final serverAgentsProvider = FutureProvider.autoDispose.family<ServerAgents, String>((
+  ref,
+  serverId,
+) async {
+  // Self-invalidate on a timer. autoDispose scopes it: the timer dies with the
+  // last listener, so nothing polls once the screen is gone.
   final timer = Timer(_crossServerRefresh, ref.invalidateSelf);
   ref.onDispose(timer.cancel);
 
-  // The active server already has a live socket; piggy-back on it so its rows
-  // update the instant something changes rather than on the next tick.
+  // The active server already has a live socket; piggy-back on it so its row
+  // updates the instant something changes rather than on the next tick.
   ref.watch(snapshotControllerProvider);
 
-  final servers = ref.watch(serversProvider).asData?.value ?? const [];
-  final repo = ref.watch(serversRepositoryProvider);
+  final servers = ref.watch(serversProvider).value ?? const <ServerSummary>[];
+  ServerSummary? server;
+  for (final s in servers) {
+    if (s.id == serverId) {
+      server = s;
+      break;
+    }
+  }
+  // Transient: the id came from the servers list, so this only happens in the
+  // gap after a server is deleted while its row is still on screen.
+  if (server == null) throw StateError('unknown server $serverId');
 
-  return Future.wait(
-    servers.map((s) async {
-      try {
-        final bearer = await repo.bearerFor(s.id);
-        if (bearer == null || bearer.isEmpty) {
-          return ServerAgents(server: s, error: 'No saved token');
-        }
-        final client = BridgeClient(
-          Connection(id: s.id, name: s.name, baseUrl: s.baseUrl, bearer: bearer),
-        );
-        final snap = await client.getSnapshot();
-        return ServerAgents(server: s, agents: snap.agents, client: client);
-      } catch (e) {
-        return ServerAgents(server: s, error: e);
-      }
-    }),
-  );
+  try {
+    final bearer = await ref
+        .watch(serversRepositoryProvider)
+        .bearerFor(server.id);
+    if (bearer == null || bearer.isEmpty) {
+      return ServerAgents(server: server, error: 'No saved token');
+    }
+    final client = BridgeClient(
+      Connection(
+        id: server.id,
+        name: server.name,
+        baseUrl: server.baseUrl,
+        bearer: bearer,
+      ),
+    );
+    // Bounded inside the refresh interval. BridgeClient's own 8s timeout is
+    // right for a user-initiated request but too long for a background poll:
+    // it outlasts the refresh period, so a machine that is simply asleep would
+    // keep this provider permanently unsettled instead of just saying so.
+    final snap = await client.getSnapshot().timeout(_perServerBudget);
+    return ServerAgents(server: server, agents: snap.agents, client: client);
+  } catch (e) {
+    return ServerAgents(server: server, error: e);
+  }
 });
+
+/// Every saved server's agents, each resolved independently. A server still
+/// loading contributes nothing yet; one that failed contributes its error, so
+/// callers can render per-server reachability rather than an all-or-nothing view.
+List<ServerAgents> watchAllServerAgents(WidgetRef ref) {
+  final servers = ref.watch(serversProvider).value ?? const <ServerSummary>[];
+  final out = <ServerAgents>[];
+  for (final s in servers) {
+    final sa = ref.watch(serverAgentsProvider(s.id)).value;
+    if (sa != null) out.add(sa);
+  }
+  return out;
+}
 
 /// A priority agent resolved against live data. [starred] marks a manual pin;
 /// [needsYou] marks an automatic one (blocked → waiting for input). Carries the
@@ -150,23 +191,38 @@ class PriorityHit {
 /// blocked → done → working → idle on the bridge's authoritative attention
 /// rank, so what needs you sits on top — and in the same order as the inbox.
 final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
-  final stars = ref.watch(starredAgentsProvider).asData?.value ?? const {};
-  final servers = ref.watch(allServersAgentsProvider).asData?.value ?? const [];
+  final stars = ref.watch(starredAgentsProvider).value ?? const {};
+  // `.value`, NOT `.asData?.value`: each per-server provider self-invalidates on
+  // a timer, and during its refetch the state is AsyncLoading — which still
+  // carries the previous value but is not AsyncData. Reading `asData` therefore
+  // dropped that server's agents every few seconds, so a blocked agent vanished
+  // from Priority and reappeared on the next tick.
+  // Same walk as watchAllServerAgents, inlined because a provider gets `Ref`
+  // and a widget gets `WidgetRef` — two unrelated types for the same idea.
+  final all = ref.watch(serversProvider).value ?? const <ServerSummary>[];
+  final servers = <ServerAgents>[];
+  for (final s in all) {
+    final sa = ref.watch(serverAgentsProvider(s.id)).value;
+    if (sa != null) servers.add(sa);
+  }
 
   final hits = <PriorityHit>[];
   for (final sa in servers) {
     for (final agent in sa.agents) {
-      final starred =
-          stars.contains(StarredAgents.starKey(sa.server.id, agent.paneId));
+      final starred = stars.contains(
+        StarredAgents.starKey(sa.server.id, agent.paneId),
+      );
       final auto = agent.agentStatus.needsAttention; // blocked or done
       if (starred || auto) {
-        hits.add(PriorityHit(
-          server: sa.server,
-          agent: agent,
-          starred: starred,
-          reachable: sa.ok,
-          client: sa.client,
-        ));
+        hits.add(
+          PriorityHit(
+            server: sa.server,
+            agent: agent,
+            starred: starred,
+            reachable: sa.ok,
+            client: sa.client,
+          ),
+        );
       }
     }
   }

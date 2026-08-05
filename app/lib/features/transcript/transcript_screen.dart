@@ -1241,13 +1241,35 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
   ///
   /// The pop is deferred to the next frame: this fires from a ValueNotifier
   /// during the parent's state update, and popping a route mid-build is not
-  /// allowed. `mounted` is re-checked after the frame because the user may have
-  /// tapped an option in the meantime, which pops the sheet itself.
+  /// allowed.
+  ///
+  /// Both guards below are load-bearing. Answering here *also* unblocks the
+  /// agent, so this listener fires on the user's own tap — and `mounted` alone
+  /// does not save us, because during the pop animation the state is still
+  /// mounted. The second pop then lands on the transcript screen underneath and
+  /// closes it too.
   void _onBlockedChanged() {
-    if (widget.blocked.value) return;
+    if (widget.blocked.value || _closing) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) Navigator.of(context).maybePop();
+      if (!mounted || _closing) return;
+      // Only dismiss while this sheet is genuinely the top route: if anything
+      // else has been pushed over it, or it is already on its way out, a pop
+      // here would close somebody else's screen.
+      final route = ModalRoute.of(context);
+      if (route == null || !route.isCurrent) return;
+      _closing = true;
+      Navigator.of(context).pop();
     });
+  }
+
+  /// Set the moment we start closing ourselves, so the blocked-listener can tell
+  /// "the user answered here" from "it was answered elsewhere".
+  bool _closing = false;
+
+  void _close() {
+    if (_closing) return;
+    _closing = true;
+    Navigator.of(context).pop();
   }
 
   @override
@@ -1258,7 +1280,7 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
   }
 
   void _pick(BlockedOption o) {
-    Navigator.of(context).pop();
+    _close();
     if (o.selected) {
       widget.onApprove();
     } else {
@@ -1269,7 +1291,7 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
   void _submitTyped() {
     final text = _answer.text.trim();
     if (text.isEmpty) return;
-    Navigator.of(context).pop();
+    _close();
     widget.onFreeText(text);
   }
 

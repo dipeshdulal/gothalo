@@ -57,11 +57,13 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Remove')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -74,11 +76,16 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Widget build(BuildContext context) {
     final servers = ref.watch(serversProvider);
     final hits = ref.watch(priorityHitsProvider);
-    // Live per-server agent stats, keyed by server id.
+    // Live per-server agent stats, keyed by server id — each server watched
+    // independently so a reachable one renders immediately instead of waiting
+    // on a sleeping one.
+    //
+    // `.value`, NOT `.asData?.value`: during each provider's own refetch the
+    // state is AsyncLoading, which still carries the previous value but is not
+    // AsyncData. Reading `asData` blanked the row back to "checking…" on every
+    // tick, which defeats the point of refreshing at all.
     final byServer = {
-      for (final sa in ref.watch(allServersAgentsProvider).asData?.value ??
-          const <ServerAgents>[])
-        sa.server.id: sa,
+      for (final sa in watchAllServerAgents(ref)) sa.server.id: sa,
     };
 
     return AppBackground(
@@ -113,7 +120,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
           data: (list) {
             if (list.isEmpty) return const _EmptyServers();
             return RefreshIndicator(
-              onRefresh: () async => ref.invalidate(allServersAgentsProvider),
+              onRefresh: () async => ref.invalidate(serverAgentsProvider),
               child: ListView(
                 padding: const EdgeInsets.only(bottom: 96),
                 children: [
@@ -137,7 +144,10 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                   const Divider(height: 1),
 
                   // --- Servers ---
-                  const _SectionHeader(icon: Icons.dns_outlined, label: 'Servers'),
+                  const _SectionHeader(
+                    icon: Icons.dns_outlined,
+                    label: 'Servers',
+                  ),
                   for (final s in list)
                     _ServerTile(
                       server: s,
@@ -180,9 +190,9 @@ class _SectionHeader extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             label,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
           ),
           const Spacer(),
           if (onAction != null && actionLabel != null)
@@ -271,8 +281,10 @@ class _ServerTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     // "need you" == blocked (waiting for input); done is finished, not waiting.
     final attention =
-        summary?.agents.where((a) => a.agentStatus == AgentStatus.blocked).length ??
-            0;
+        summary?.agents
+            .where((a) => a.agentStatus == AgentStatus.blocked)
+            .length ??
+        0;
 
     return ListTile(
       onTap: onTap,
@@ -376,7 +388,8 @@ class _StatsLine extends StatelessWidget {
         if (needsUpgrade) ...[
           const SizedBox(width: 6),
           const Tooltip(
-            message: 'Update gothalo on this machine to route its notifications',
+            message:
+                'Update gothalo on this machine to route its notifications',
             child: Icon(
               Icons.warning_amber_rounded,
               size: 15,
@@ -402,7 +415,10 @@ class _StatsLine extends StatelessWidget {
           Container(
             width: 7,
             height: 7,
-            decoration: BoxDecoration(color: scheme.error, shape: BoxShape.circle),
+            decoration: BoxDecoration(
+              color: scheme.error,
+              shape: BoxShape.circle,
+            ),
           ),
           const SizedBox(width: 5),
           Text(
@@ -469,16 +485,18 @@ class _EmptyServers extends StatelessWidget {
           children: [
             Icon(Icons.dns_outlined, size: 56, color: scheme.onSurfaceVariant),
             const SizedBox(height: 16),
-            Text('No servers yet',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'No servers yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 6),
             Text(
               'Add a gothalo bridge to see your agents. Enter its URL and token, '
               'or pair by scanning a QR.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
