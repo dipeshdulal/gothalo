@@ -67,6 +67,7 @@ class InboxScreen extends ConsumerWidget {
                 icon: const Icon(Icons.more_vert),
                 onSelected: (action) => switch (action) {
                   _FlockMenuAction.overview => context.push('/overview'),
+                  _FlockMenuAction.timeline => context.push('/timeline'),
                   _FlockMenuAction.editServer => connection == null
                       ? null
                       : context.push('/servers/${connection.id}/edit'),
@@ -78,6 +79,10 @@ class InboxScreen extends ConsumerWidget {
                       icon: Icons.dashboard_outlined,
                       label: 'Overview',
                     ),
+                  ),
+                  const PopupMenuItem(
+                    value: _FlockMenuAction.timeline,
+                    child: _MenuRow(icon: Icons.history, label: 'Activity'),
                   ),
                   if (connection != null)
                     const PopupMenuItem(
@@ -133,7 +138,7 @@ class InboxScreen extends ConsumerWidget {
 }
 
 /// The choices in the Flock header's overflow menu.
-enum _FlockMenuAction { overview, editServer }
+enum _FlockMenuAction { overview, timeline, editServer }
 
 /// One row in the overflow menu: icon + label, laid out tighter than the
 /// default [ListTile] so a two-item menu doesn't feel oversized.

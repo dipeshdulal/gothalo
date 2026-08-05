@@ -57,6 +57,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
 | GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
+| GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
@@ -251,6 +252,42 @@ Field notes for the app:
 Parsing never fails the request: an unrecognised layout degrades to `parsed:false`
 rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` no
 agent in that pane · `502` herdr command failed.
+
+## GET /timeline — recent agent activity
+The only read that describes the **past**. Every other endpoint says what is true
+now, which is why none of them can tell you whether an agent blocked fifty
+minutes ago or ten seconds ago — the status is the same either way.
+
+```
+GET /timeline?limit=100&pane=w4:p2
+```
+Both query params are optional: `limit` defaults to `100` and is capped at `500`;
+`pane` (session-qualified, matched whole) restricts the log to one agent.
+
+Response `200`, **newest first**:
+```json
+{ "entries": [
+  { "ts": 1785681000000, "pane": "w4:p2", "agent": "claude", "session": "default",
+    "workspace": "w4", "from": "working", "to": "blocked", "prev_ms": 742000 }
+], "limit": 100 }
+```
+- **`prev_ms`** — how long the agent spent in `from`. This is the whole point of
+  the endpoint and the one fact `/snapshot` cannot reconstruct (`state_change_seq`
+  is a counter, not a clock). **Absent ≠ `0`**: `0` is a real instantaneous flip,
+  absent means the bridge could not see where the span began. Render nothing, not
+  "0s".
+- **`from` absent** = a first sighting of that pane, not a transition out of an
+  unnamed state. **`to: "gone"`** = the pane closed or its process exited.
+- Answered from an in-memory ring — **no herdr call** — so it is cheap to poll
+  and still answers while herdr is down. The ring is bounded (1500 entries / 72h)
+  and persisted, so a bridge restart does not lose the recent past.
+
+Errors: `400` `limit` present but not a positive integer (malformed is rejected,
+never silently defaulted) · `401` bad bearer · `503` bridge running without a
+recorder (distinct from an empty `entries[]`, which just means nothing has
+happened yet). Timeline entries are deliberately **not** carried on `WS /events`
+— see [`CONTRACT-timeline.md`](CONTRACT-timeline.md) for why, and for the full
+schema and restart semantics.
 
 ## POST /agent-mode/cycle — change a Claude agent's permission mode
 The mobile remote for Claude's **Shift+Tab** key: it advances a Claude pane's

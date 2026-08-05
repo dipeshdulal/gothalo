@@ -136,4 +136,9 @@ No code was changed — this is research and ideation only.
 
 - [ ] #4 Diff/working-tree review screen — **in progress** (2026-08-04)
 - [ ] #7 Quick-commands/snippets above composer — **in progress** (2026-08-04)
+- [ ] #8 Recent-activity timeline — **in progress** (2026-08-05). Built to the
+      bar this entry sets: it records only the transitions themselves plus the
+      duration of the span they closed, which is the one fact `/snapshot`
+      genuinely cannot reconstruct — not a mirror of live status.
+      `GET /timeline` + `docs/CONTRACT-timeline.md`.
 - Everything else: deferred, revisit later per user direction (2026-08-04).

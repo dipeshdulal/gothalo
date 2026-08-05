@@ -10,6 +10,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/config"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/store"
+	"github.com/dipeshdulal/gothalo/internal/timeline"
 )
 
 // newTestServer builds a Server wired with a real store and admin token but a
@@ -24,7 +25,7 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("store.Open: %v", err)
 	}
 	cfg := &config.Config{AdminToken: "admin-tok"}
-	return New(cfg, herdr.NewManager(nil), nil, st, nil, nil, nil)
+	return New(cfg, herdr.NewManager(nil), nil, st, nil, nil, nil, timeline.Open(filepath.Join(t.TempDir(), "timeline.json")))
 }
 
 // TestAgentModeCycleAuth asserts the endpoint rejects unauthenticated callers
