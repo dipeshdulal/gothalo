@@ -251,3 +251,41 @@ func TestLivenessProbeIgnoresClosedPanes(t *testing.T) {
 		t.Error("a pane missing from Herdr's list reported as stale")
 	}
 }
+
+// TestLivenessProbeIgnoresDriftWhileEventsFlow is the regression test for a
+// false positive that resubscribed the socket every 60 seconds in production.
+//
+// The snapshot and the event stream are sampled at different instants, so an
+// agent that is actively working differs between them almost constantly.
+// Treating that as proof of a dead subscription made a BUSY machine — the exact
+// case the ingester exists for — tear its socket down in a loop. Disagreement
+// only counts once the socket has also gone quiet.
+func TestLivenessProbeIgnoresDriftWhileEventsFlow(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+	i.sawEvent() // something arrived just now
+
+	// Herdr has moved on, and we disagree — but events are still flowing.
+	if i.silentFor(probeSilence) {
+		t.Fatal("a socket that just delivered is reported as silent")
+	}
+	if i.stale() {
+		t.Error("drift treated as a dead subscription while events are arriving")
+	}
+}
+
+// TestLivenessProbeNeedsSilence: the silence gate is what makes drift meaningful.
+func TestLivenessProbeNeedsSilence(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	i.sawEvent()
+	if i.silentFor(time.Millisecond * 50) {
+		t.Error("reported silent immediately after an event")
+	}
+
+	i.mu.Lock()
+	i.lastEventAt = time.Now().Add(-2 * probeSilence)
+	i.mu.Unlock()
+	if !i.silentFor(probeSilence) {
+		t.Error("a socket quiet for twice the window is not reported silent")
+	}
+}

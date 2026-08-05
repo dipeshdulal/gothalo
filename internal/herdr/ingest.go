@@ -55,6 +55,15 @@ const probeInterval = 30 * time.Second
 // the first probe read the snapshot.
 const probeStrikes = 2
 
+// probeSilence is how long the socket must have delivered NOTHING before a
+// disagreeing snapshot is treated as proof the subscription is dead.
+//
+// Without this gate the probe fires on any busy machine: an agent that is
+// actively working flips status between the moment an event is published and
+// the moment the snapshot is read, so the two views disagree essentially always
+// and the ingester resubscribes in a loop.
+const probeSilence = 90 * time.Second
+
 // Ingester runs the single, process-wide Herdr event subscription: it dials the
 // control socket, subscribes once (global structural kinds + targeted
 // agent-status for the agent panes present at connect), normalizes every Herdr
@@ -78,6 +87,15 @@ type Ingester struct {
 	// is precisely "what we believe we have told the bus", so disagreement with
 	// Herdr's own view means events are going missing.
 	lastStatus map[string]string
+	// lastEventAt is when the socket last delivered anything at all.
+	//
+	// Disagreement between Herdr's snapshot and what we published is NOT on its
+	// own evidence of a dead subscription: the two views are sampled at
+	// different instants, so on a busy machine an agent that is mid-transition
+	// makes them differ constantly. Only silence turns disagreement into
+	// evidence — if nothing has arrived for a while AND the world has moved on
+	// without us, the subscription really has stopped delivering.
+	lastEventAt time.Time
 }
 
 // NewIngester builds an Ingester over the given CLI client and bus.
@@ -148,6 +166,9 @@ func (i *Ingester) session(ctx context.Context, first bool) error {
 		<-sctx.Done()
 		conn.Close()
 	}()
+	// Start the silence clock at subscribe, so a fresh session isn't judged
+	// against a zero timestamp and declared dead before it has said anything.
+	i.sawEvent()
 	go i.watchLiveness(sctx, scancel)
 
 	for {
@@ -208,15 +229,39 @@ func (i *Ingester) watchLiveness(ctx context.Context, kill func()) {
 	}
 }
 
-// stale reports whether Herdr's live agent statuses disagree with what the
-// ingester has published. An unreadable snapshot returns false: we cannot tell,
-// and guessing would reconnect a healthy socket.
+// stale reports whether the subscription has stopped delivering: the socket has
+// been silent for a while AND Herdr's live view has moved on without us.
+//
+// Both halves are required. Silence alone is normal — an idle Herdr says nothing
+// for hours. Disagreement alone is normal too — the snapshot and the event
+// stream are sampled at different instants, so an agent mid-transition makes
+// them differ. Only together do they mean events are being lost.
+//
+// An unreadable snapshot returns false: we cannot tell, and guessing would
+// reconnect a healthy socket.
 func (i *Ingester) stale() bool {
+	if !i.silentFor(probeSilence) {
+		return false
+	}
 	agents, err := i.cli.Agents()
 	if err != nil {
 		return false
 	}
 	return i.staleAgainst(agents)
+}
+
+// silentFor reports whether nothing has arrived on the socket for at least d.
+func (i *Ingester) silentFor(d time.Duration) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return time.Since(i.lastEventAt) >= d
+}
+
+// sawEvent records that the socket delivered something.
+func (i *Ingester) sawEvent() {
+	i.mu.Lock()
+	i.lastEventAt = time.Now()
+	i.mu.Unlock()
 }
 
 // staleAgainst is the comparison itself, split out so it can be exercised
@@ -265,6 +310,9 @@ func (i *Ingester) subscriptionsFor(agentPanes map[string]string) []Subscription
 
 // handle maps one decoded socket message to the bus.
 func (i *Ingester) handle(msg SocketMessage) {
+	// Anything at all counts as proof of life, including the acks we don't
+	// forward: the liveness probe cares that the socket is delivering, not what.
+	i.sawEvent()
 	if msg.Event == "" {
 		return // an ack/error line in the stream; nothing to forward
 	}
