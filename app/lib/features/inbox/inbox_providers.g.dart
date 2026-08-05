@@ -82,7 +82,7 @@ final class SnapshotControllerProvider
 }
 
 String _$snapshotControllerHash() =>
-    r'96649046796abf3fc986abbdc5a3de59467e6428';
+    r'1089a2f62ff550a6f1411440f0b996aca952e088';
 
 /// The live Herdr state for the active server — the app's single source of
 /// truth, driven by the bridge's `WS /events` push stream.

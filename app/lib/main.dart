@@ -25,6 +25,10 @@ Future<void> main() async {
   runApp(const ProviderScope(child: GothaloApp()));
 }
 
+/// Lets code outside the widget tree raise a message — a notification tap is
+/// handled by a listener, not by a screen, so it has no BuildContext of its own.
+final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
 /// gothalo — a self-hosted mobile remote for Herdr. Dark-first, follows the OS.
 class GothaloApp extends ConsumerStatefulWidget {
   const GothaloApp({super.key});
@@ -59,11 +63,34 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
   }
 
   Future<void> _navigateTo(DeepLinkTarget target) async {
-    await activateServer(ref, target.serverId);
+    final routable = await activateServer(ref, target.serverId);
     if (!mounted) return;
+    if (!routable) {
+      // The push named a bridge this phone has no record of. Opening the pane
+      // anyway would run it against whatever server is active, and pane ids are
+      // not unique across servers — so it could show, and act on, a real but
+      // unrelated agent on the wrong machine. Say so instead.
+      _showUnroutable(target.serverName);
+      return;
+    }
     ref
         .read(routerProvider)
         .push('/transcript/${Uri.encodeComponent(target.pane)}');
+  }
+
+  void _showUnroutable(String serverName) {
+    final who = serverName.isEmpty ? 'another server' : serverName;
+    scaffoldMessengerKey.currentState
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(
+            "$who hasn't identified itself to this phone yet — update gothalo "
+            'on it, then open it once here.',
+          ),
+        ),
+      );
   }
 
   @override
@@ -97,6 +124,7 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
     ref.listen(snapshotControllerProvider, (_, _) {});
     return MaterialApp.router(
       title: 'gothalo',
+      scaffoldMessengerKey: scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,

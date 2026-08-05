@@ -159,6 +159,9 @@ class PushPayload {
   /// been written down at render time.
   String encodeTarget() => jsonEncode({
     'server_id': serverId,
+    // Carried so an unroutable tap can name the machine it came from. Without
+    // it the only honest message is "some other server", which is useless.
+    'server_name': serverName,
     'pane': pane,
     'seq': seq,
     'options': [
@@ -180,11 +183,15 @@ class DeepLinkTarget {
   const DeepLinkTarget({
     required this.serverId,
     required this.pane,
+    this.serverName = '',
     this.seq,
     this.options = const [],
   });
 
   final String serverId;
+
+  /// The sending machine's label, for messages about a tap we cannot route.
+  final String serverName;
   final String pane;
   final int? seq;
 
@@ -200,6 +207,7 @@ class DeepLinkTarget {
       if (pane.isEmpty) return null;
       return DeepLinkTarget(
         serverId: ((j['server_id'] as String?) ?? '').trim(),
+        serverName: ((j['server_name'] as String?) ?? '').trim(),
         pane: pane,
         seq: (j['seq'] as num?)?.toInt(),
         options: PushOption.decode(jsonEncode(j['options'] ?? const [])),
