@@ -619,6 +619,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   @override
   Widget build(BuildContext context) {
     // Connect once a bridge client resolves, and re-target if it changes.
+    // bridgeClientProvider yields null while the active connection is being
+    // resolved, so this never adopts a client for the wrong server.
     final client = ref.watch(bridgeClientProvider);
     if (client != null && !identical(client, _client)) {
       _client = client;

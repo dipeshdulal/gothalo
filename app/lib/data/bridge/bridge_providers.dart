@@ -14,7 +14,23 @@ BridgeClient? bridgeClient(Ref ref) {
   // Stable for the session so a transient un-watch doesn't recreate the client
   // (which would churn the snapshot store's `/events` socket).
   ref.keepAlive();
-  final connection = ref.watch(activeConnectionProvider).asData?.value;
+  final active = ref.watch(activeConnectionProvider);
+  // While the active connection is being resolved, hand out NO client rather
+  // than the previous one.
+  //
+  // `asData` deliberately preserves the last value across a refresh, which is
+  // wrong here: the identity of the server is the whole point of the client. A
+  // cold start has no previous value, so callers get null and show their loading
+  // state — a path every screen already handles. But switching servers (a
+  // notification tap for an agent on another machine) leaves the OLD server's
+  // client in `asData` while the new profile and bearer are read, and a screen
+  // that adopts it opens a socket to the wrong machine for a pane that only
+  // exists on the other one. Pane ids are not unique across servers, so it can
+  // even find an unrelated agent of the same name.
+  //
+  // Returning null makes the swap behave exactly like the cold start.
+  if (active.isLoading) return null;
+  final connection = active.asData?.value;
   if (connection == null) return null;
   return BridgeClient(connection);
 }
