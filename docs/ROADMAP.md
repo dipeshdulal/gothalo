@@ -60,9 +60,9 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ✅ Agent transcript reading — the conversation, not just terminal scrollback
       (`internal/transcript`, `docs/CONTRACT-agent-transcript.md`).
       **No competing Herdr client does this.**
-- 🚧 Image paste → file in the agent's cwd → send the path *(in progress)*
-- 🚧 Recent-activity timeline *(in progress)*
-- 🚧 Audit log of phone-initiated writes *(in progress)*
+- 🚧 Image paste → file in the agent's cwd → send the path *(`feat/image-to-agent`)*
+- 🚧 Recent-activity timeline *(`feat/activity-timeline`)*
+- 🚧 Start / restart / stop an agent from the phone *(`feat/agent-lifecycle`)*
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
@@ -71,14 +71,17 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ## Known gaps
 - **Codex transcripts** — `internal/transcript/codex.go` is an honest stub that
-  defers to the generic reader (`Parsed=false`). Promoting it needs a machine
-  with real `~/.codex` rollout files to read the format off; it must not be
-  guessed. This is the one hole in the transcript feature, which is otherwise
-  gothalo's strongest differentiator.
-- `GOTHALO_MODE=relay` is a stub. Finish it or delete the config surface — a
-  mode that silently does nothing is worse than no mode.
-- No self-update. Bridge/app version skew is the likeliest real-world failure
-  once more than one person runs this.
+  defers to the generic reader (`Parsed=false`). Deferred until there is a Codex
+  subscription and a machine with real `~/.codex` rollout files: the format must
+  be read off a live machine, not guessed. This is the one hole in the transcript
+  feature, which is otherwise gothalo's strongest differentiator.
+- **Subagent turns are mishandled.** `internal/transcript/claude.go` parses
+  `parentUuid` but ignores `isSidechain`, so Claude Code subagent work is
+  flattened into the parent thread or dropped. See #11 in
+  `docs/RESEARCH-feature-ideas.md`.
+- `GOTHALO_MODE=relay` stays a stub **by decision** (2026-08-05), not oversight.
+- No self-update. Deferred until there is release wiring to hang it on. Bridge/app
+  version skew is still the likeliest real-world failure with more than one user.
 
 ## Explicitly out of scope
 - **mosh / ET** — WebSocket auto-reconnect + re-fetch snapshot covers "good
