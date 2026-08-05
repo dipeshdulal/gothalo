@@ -136,4 +136,8 @@ No code was changed — this is research and ideation only.
 
 - [ ] #4 Diff/working-tree review screen — **in progress** (2026-08-04)
 - [ ] #7 Quick-commands/snippets above composer — **in progress** (2026-08-04)
+- [ ] #10 Start/restart/stop an agent — **in progress** (2026-08-05). One-shot
+  launch only; saved launch profiles and rename/clear deliberately left out. See
+  [`CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md), including which
+  paths could not be exercised live.
 - Everything else: deferred, revisit later per user direction (2026-08-04).

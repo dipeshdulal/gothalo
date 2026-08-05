@@ -15,6 +15,7 @@ import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import 'quick_commands_providers.dart';
@@ -22,6 +23,9 @@ import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
 enum _Conn { connecting, connected, disconnected, closed, failed }
+
+/// The destructive per-agent actions in the chat's overflow menu.
+enum _AgentLifecycleAction { restart, stop }
 
 /// The chat view for an agent pane — a phone-native rendering of the agent's
 /// conversation over `WS /agent-transcript`.
@@ -711,6 +715,41 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             onPressed: () =>
                 context.push('/diff/${Uri.encodeComponent(widget.pane)}'),
             icon: const Icon(Icons.difference_outlined),
+          ),
+          // Lifecycle lives in an overflow, not as bar buttons: these two kill
+          // running work, and a one-tap target next to "Changes" is exactly the
+          // wrong affordance for that. Both confirm before acting.
+          PopupMenuButton<_AgentLifecycleAction>(
+            tooltip: 'Agent actions',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) {
+              final kind = agent?.agent ?? 'agent';
+              switch (action) {
+                case _AgentLifecycleAction.restart:
+                  restartAgent(context, ref, widget.pane, kind: kind);
+                case _AgentLifecycleAction.stop:
+                  stopAgent(context, ref, widget.pane, kind: kind);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: _AgentLifecycleAction.restart,
+                child: ListTile(
+                  leading: Icon(Icons.restart_alt),
+                  title: Text('Restart agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _AgentLifecycleAction.stop,
+                child: ListTile(
+                  leading: Icon(Icons.stop_circle_outlined,
+                      color: Theme.of(ctx).colorScheme.error),
+                  title: const Text('Stop agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),
