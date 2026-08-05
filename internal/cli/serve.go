@@ -136,3 +136,40 @@ func (a agentReader) AgentState(pane string) (string, int, error) {
 	}
 	return agent.Status, agent.StateChangeSeq, nil
 }
+
+// Announcing lists every agent, across every Herdr session, currently in a state
+// the bridge notifies about. Pane ids are session-qualified exactly as Notify
+// qualifies them, so the clearer's keys match the ones its pushes were tagged
+// with.
+func (a agentReader) Announcing() ([]notify.PaneState, error) {
+	var out []notify.PaneState
+	var lastErr error
+	for _, name := range a.mgr.Names() {
+		c, err := a.mgr.Client(name)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		agents, err := c.Agents()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, ag := range agents {
+			if ag.Status != "blocked" && ag.Status != "done" {
+				continue
+			}
+			out = append(out, notify.PaneState{
+				Pane:   herdr.Qualify(c.Session(), ag.PaneID),
+				Status: ag.Status,
+				Seq:    ag.StateChangeSeq,
+			})
+		}
+	}
+	// A partial answer is still worth arming: one unreachable session should not
+	// cost us the panes we did learn about.
+	if out == nil && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, nil
+}

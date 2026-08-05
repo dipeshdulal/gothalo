@@ -84,6 +84,21 @@ func (f *fakeAgents) fail(err error) {
 	f.err = err
 }
 
+func (f *fakeAgents) Announcing() ([]PaneState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	var out []PaneState
+	for pane, st := range f.status {
+		if st == "blocked" || st == "done" {
+			out = append(out, PaneState{Pane: pane, Status: st, Seq: f.seq[pane]})
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeAgents) AgentState(pane string) (string, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -631,4 +646,62 @@ func TestSweepLeavesLiveNotifications(t *testing.T) {
 		t.Errorf("dismiss sends = %d, want 0 (still blocked)", f.send.count())
 	}
 	assertNoCleared(t, sub)
+}
+
+// TestRearmAfterRestartClearsStrandedNotifications: `pending` is in memory, so a
+// bridge restart used to forget every armed pane — and a notification already on
+// the device then had nothing tracking it and could never be cleared. Restarting
+// the bridge (an upgrade, a crash) silently stranded every outstanding alert.
+func TestRearmAfterRestartClearsStrandedNotifications(t *testing.T) {
+	f := newFixture("tokA")
+	sub := f.bus.Subscribe(16)
+	defer sub.Close()
+
+	// The world as a freshly started bridge finds it: one blocked agent it never
+	// pushed about (the previous process did), and one that needs no attention.
+	const pane = "wN:p2B"
+	f.agents.set(pane, "blocked", 500)
+	f.agents.set("wN:p9", "working", 501)
+
+	f.c.rearm()
+
+	f.c.mu.Lock()
+	a, armed := f.c.pending[pane]
+	_, wrongly := f.c.pending["wN:p9"]
+	f.c.mu.Unlock()
+	if !armed {
+		t.Fatal("blocked pane not rearmed; its notification could never be cleared")
+	}
+	if a.seq != 500 {
+		t.Errorf("rearmed seq = %d, want 500", a.seq)
+	}
+	if wrongly {
+		t.Error("a working agent was armed; nothing was ever announced about it")
+	}
+
+	// And the sweep now clears it, which is the whole point.
+	f.agents.set(pane, "idle", 501)
+	f.c.sweep()
+	if f.send.count() != 1 {
+		t.Fatalf("dismiss sends = %d, want 1 after the agent resolved", f.send.count())
+	}
+	if got := waitCleared(t, sub); got != pane {
+		t.Errorf("notification_cleared pane = %q, want %q", got, pane)
+	}
+}
+
+// TestRearmSurvivesAnUnreadableHerdr: if the state cannot be read at startup we
+// simply have no outstanding set — that is the pre-existing behaviour, and it
+// must not panic or block startup.
+func TestRearmSurvivesAnUnreadableHerdr(t *testing.T) {
+	f := newFixture("tokA")
+	f.agents.fail(errors.New("herdr unreachable"))
+	f.c.rearm()
+
+	f.c.mu.Lock()
+	n := len(f.c.pending)
+	f.c.mu.Unlock()
+	if n != 0 {
+		t.Errorf("pending = %d panes, want 0 when the state could not be read", n)
+	}
 }

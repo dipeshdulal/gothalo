@@ -71,6 +71,17 @@ type devices interface {
 // Status and seq come back from ONE read, so they can never be a torn pair.
 type agentReader interface {
 	AgentState(pane string) (status string, seq int, err error)
+
+	// Announcing lists every pane whose CURRENT state is one we notify about.
+	// Used once at startup to rebuild the outstanding set — see [Clearer.rearm].
+	Announcing() ([]PaneState, error)
+}
+
+// PaneState is one pane's current announceable state.
+type PaneState struct {
+	Pane   string
+	Status string
+	Seq    int
 }
 
 // Clearer is the process-wide consumer that dismisses stale "blocked" pushes.
@@ -134,6 +145,7 @@ func newClearer(bus *events.Bus, s sender, d devices, serverID string, a agentRe
 // re-subscribes; the outstanding-push tracker survives across re-subscribes.
 func (c *Clearer) Run(ctx context.Context) {
 	log.Info("notification-clearer: started")
+	c.rearm()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -167,6 +179,42 @@ func (c *Clearer) consume(ctx context.Context, sub *events.Sub) (dropped bool) {
 			c.handle(env)
 		}
 	}
+}
+
+// rearm rebuilds the outstanding-notification set at startup.
+//
+// `pending` is in memory, so a bridge restart forgot every armed pane — and a
+// notification already on someone's phone then had nothing tracking it. Nothing
+// would ever clear it: not the bus, not the sweep, because the sweep only walks
+// panes it knows about. Restarting the bridge (an upgrade, a crash, a reboot)
+// silently stranded every alert outstanding at that moment.
+//
+// It is rebuilt rather than persisted, which is the same discipline the rest of
+// this file follows: Herdr knows which agents are blocked or done right now, so
+// ask it instead of keeping a copy that can be wrong.
+//
+// Arming a pane whose notification does NOT exist is harmless — the dismiss it
+// may eventually send cancels a notification that isn't there, which is a no-op
+// on the device. Failing to arm one that does exist is not harmless, so this
+// deliberately errs towards arming.
+func (c *Clearer) rearm() {
+	if c.agents == nil {
+		return
+	}
+	states, err := c.agents.Announcing()
+	if err != nil {
+		log.Warn("notification-clearer: could not rebuild outstanding set", "err", err)
+		return
+	}
+	if len(states) == 0 {
+		return
+	}
+	c.mu.Lock()
+	for _, s := range states {
+		c.pending[s.Pane] = armed{status: s.Status, seq: s.Seq}
+	}
+	c.mu.Unlock()
+	log.Info("notification-clearer: rearmed after restart", "panes", len(states))
 }
 
 // sweep re-checks every outstanding notification against Herdr and dismisses the
