@@ -48,6 +48,8 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 | POST | `/approve` | device bearer or admin | idempotent one-tap approval (D8) |
 | GET  | `/attach` | device bearer or admin (`?token=`) | WS live terminal (PTY-streamed) |
 | GET  | `/agent-state` | device bearer or admin | parsed compact state for one agent pane |
+| GET  | `/diff` | device bearer or admin | an agent pane's working-tree changes (branch + per-file unified diff) |
+| GET  | `/diff/expand` | device bearer or admin | the unchanged lines around a hunk, for the diff viewer's collapsed regions |
 | GET  | `/agent-transcript` | device bearer or admin (`?token=`) | WS normalized transcript chat + backlog |
 | GET  | `/events` | device bearer or admin (`?token=`) | WS unified event bus (state changes, push lifecycle) |
 | POST | `/herdr` | device bearer or admin | allowlisted Herdr CLI proxy (worktree/tab/pane parity) |

@@ -327,6 +327,40 @@ class BranchDeleteResult {
       );
 }
 
+/// A slice of a file's current content from `GET /diff/expand` — the lines
+/// behind one "show the unchanged region" tap in the diff viewer.
+class DiffContext {
+  const DiffContext({
+    required this.path,
+    required this.start,
+    required this.lines,
+    required this.eof,
+    required this.total,
+  });
+
+  final String path;
+
+  /// 1-based NEW-side line number of [lines] `[0]`.
+  final int start;
+  final List<String> lines;
+
+  /// [lines] runs to the end of the file — nothing further down to reveal.
+  final bool eof;
+
+  /// The file's whole line count, which is what lets the viewer put an exact
+  /// number on the gap below the last hunk.
+  final int total;
+
+  factory DiffContext.fromJson(Map<String, dynamic> j) => DiffContext(
+    path: (j['path'] as String?) ?? '',
+    start: (j['start'] as num?)?.toInt() ?? 1,
+    lines: (j['lines'] as List?)?.map((l) => l?.toString() ?? '').toList() ??
+        const [],
+    eof: j['eof'] == true,
+    total: (j['total'] as num?)?.toInt() ?? 0,
+  );
+}
+
 /// One slash command the pane's agent will accept, from `GET /commands` — the
 /// composer typeahead's unit. See `docs/CONTRACT-commands.md`.
 class SlashCommand {
@@ -846,6 +880,38 @@ class BridgeClient {
       final body = res.data;
       if (body == null) throw BridgeException('Empty diff response');
       return DiffResult.fromJson(body);
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /diff/expand?pane=<id>&path=…&start=…&count=…` → `count` lines of
+  /// that file's current content, for expanding a collapsed unchanged region
+  /// between two hunks. See CONTRACT-diff.md.
+  ///
+  /// `git diff` only ships three lines of context around each change, so those
+  /// lines are simply absent from `/diff` — there is nothing to expand
+  /// client-side. Fetched per tap rather than by inflating every diff, since
+  /// most files never get the tap.
+  Future<DiffContext> getDiffContext(
+    String pane, {
+    required String path,
+    required int start,
+    required int count,
+  }) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/diff/expand',
+        queryParameters: {
+          'pane': pane,
+          'path': path,
+          'start': start,
+          'count': count,
+        },
+      );
+      final body = res.data;
+      if (body == null) throw BridgeException('Empty diff-expand response');
+      return DiffContext.fromJson(body);
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }

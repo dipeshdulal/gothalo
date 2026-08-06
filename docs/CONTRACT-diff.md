@@ -1,4 +1,4 @@
-# CONTRACT — `GET /diff` (working-tree changes)
+# CONTRACT — `GET /diff` (working-tree changes) + `GET /diff/expand`
 
 The "Changes" review screen's contract: an agent pane's pending git changes —
 branch, and one unified diff per changed file — without dropping to the raw
@@ -111,10 +111,83 @@ Error bodies are plain text (not JSON), matching the other endpoints.
 
 ---
 
+# `GET /diff/expand` — the unchanged lines around a hunk
+
+`git diff` ships **three** lines of context around each change, so everything
+else in a changed file is simply absent from `/diff`. The app's "show the
+unchanged lines between these two hunks" affordance therefore cannot be served
+client-side no matter how the payload is parsed — the lines were never sent.
+
+Two ways to fix that; this is the second:
+
+- **Inflate every diff** (`git diff -U20`). Pays for context on every file, of
+  every request, on a phone, to serve a tap most files never get — and still
+  answers "what's the rest of this file?" with a bigger fixed guess.
+- **Ask per tap.** One small request, only for the region actually opened,
+  bounded and cacheable client-side. `/diff` itself is unchanged, so a client
+  that never expands anything sends and receives exactly what it did before.
+
+## Request
+
+```
+GET /diff/expand?pane=<pane_id>&path=<file>&start=<n>&count=<n>
+Authorization: Bearer <bearer>
+```
+
+| Part | Value |
+|---|---|
+| `pane` | the Herdr `pane_id`, same as `/diff`. **Required.** |
+| `path` | repo-relative path, exactly as it appeared in `files[].path`. **Required.** Absolute paths and anything escaping the pane's tree are refused. |
+| `start` | 1-based **new-side** line number to start at. Clamped to ≥ 1. |
+| `count` | how many lines to return. Clamped to 1…400. |
+
+### It reads the working tree, and that is deliberate
+
+The endpoint only ever fills gaps **between** hunks, and a line no hunk touches
+is by definition identical on both sides of the diff — so the working-tree file
+is a correct source for it, and the diff's new-side numbering is the right
+index. Two consequences the app codes against:
+
+- A **deleted** file has nothing to expand (its content exists only in `HEAD`).
+- An **untracked** file's `/diff` entry already contains the whole file, so
+  there is no gap to fill in the first place.
+
+The app offers the affordance for neither.
+
+## Response `200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `path` | string | Echoes the request, so a late response can be matched to the gap that asked for it. |
+| `start` | int | 1-based line number of `lines[0]`, after clamping. |
+| `lines` | array of string | The requested slice. Empty when `start` is past EOF. |
+| `eof` | bool | `lines` runs to the end of the file — nothing further down to reveal. |
+| `total` | int | The file's whole line count, so a client can size the region below the last hunk without a second request. |
+
+```json
+{ "path": "internal/server/diff.go", "start": 12, "lines": ["", "import (", "\t\"net/http\""], "eof": false, "total": 96 }
+```
+
+Out-of-range requests **clamp rather than fail**: asking for 400 lines from line
+90 of a 96-line file returns 7 lines with `eof: true`. A client walking down a
+file should not have to know where it ends before it asks.
+
+## Errors
+
+| Status | When | Body (example) |
+|---|---|---|
+| `400` | `pane` or `path` missing, or `path` is absolute / escapes the pane's tree | `bad path: ../../.ssh/id_rsa escapes the pane's tree` |
+| `401` | missing/invalid bearer | `unauthorized` |
+| `404` | no agent in that pane, or no such file in the working tree | `no such file: gone.go` |
+| `415` | the file isn't UTF-8 text, or is over 4 MB | `not a text file: logo.png` |
+
+---
+
 ## Implementation notes (for maintainers)
 
-- Handler: `internal/server/diff.go` (`handleDiff`), registered at
-  `mux.HandleFunc("/diff", …)` in `internal/server/server.go`.
+- Handlers: `internal/server/diff.go` (`handleDiff`, `handleDiffExpand`),
+  registered at `mux.HandleFunc("/diff", …)` / `("/diff/expand", …)` in
+  `internal/server/server.go`.
 - Core logic: `internal/gitdiff` (`gitdiff.Collect(cwd)`) — pure Go, unit- and
   integration-tested (`internal/gitdiff/gitdiff_test.go`) against a real
   temp git repo covering modify/add/delete/rename/untracked, independent of
@@ -127,3 +200,15 @@ Error bodies are plain text (not JSON), matching the other endpoints.
   `--untracked-files=all` expands an untracked *directory* into its
   individual files (git's default collapses a new directory to one opaque
   entry, which isn't what "here's what changed" should show).
+- `gitdiff.ExpandContext(cwd, path, start, count)` backs `/diff/expand`; it
+  returns typed sentinels (`ErrBadPath`, `ErrNoSuchFile`, `ErrNotText`) so the
+  handler maps each refusal to its own status instead of one catch-all.
+  Traversal is rejected by resolving the path against `cwd` and checking the
+  result still sits under it — `path` arrives on a query string, so
+  `../../.ssh/id_rsa` is a request that will show up eventually.
+- **Everything else the viewer knows is derived in the app**, not here: the
+  directory tree, the hunk/line structure, and the word-level intra-line
+  highlighting are all computed from `files[].diff`
+  (`app/lib/features/diff/diff_model.dart`, `diff_tree.dart`). Deriving them
+  client-side keeps this contract small and means an older bridge still renders
+  correctly in a newer app.

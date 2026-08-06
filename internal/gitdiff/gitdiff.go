@@ -7,6 +7,7 @@ package gitdiff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -251,6 +252,131 @@ func untrackedDiff(cwd, path string) (string, int) {
 		b.WriteString("… (truncated)\n")
 	}
 	return strings.TrimRight(b.String(), "\n"), len(lines)
+}
+
+// Errors ExpandContext returns for a request it refuses, distinguished so the
+// HTTP layer can map each to its own status instead of collapsing every
+// refusal to one code.
+var (
+	// ErrBadPath — the path is absolute, escapes the pane's tree, or is empty.
+	ErrBadPath = errors.New("bad path")
+	// ErrNoSuchFile — nothing readable at that path in the working tree.
+	ErrNoSuchFile = errors.New("no such file")
+	// ErrNotText — the file exists but isn't UTF-8 text, so there are no
+	// "unchanged lines" to show around a hunk.
+	ErrNotText = errors.New("not a text file")
+)
+
+// Expansion is a slice of a file's *current* content — the lines a client asks
+// for when expanding an unchanged region between two hunks of that file's diff.
+type Expansion struct {
+	// Path echoes the requested path, so a late response can be matched to the
+	// gap that asked for it.
+	Path string `json:"path"`
+	// Start is the 1-based line number of Lines[0], after clamping.
+	Start int      `json:"start"`
+	Lines []string `json:"lines"`
+	// EOF reports that Lines runs to the end of the file — the UI hides its
+	// "expand further down" affordance rather than offering a no-op.
+	EOF bool `json:"eof"`
+	// Total is the file's whole line count, so a client can size the gap it is
+	// filling without a second request.
+	Total int `json:"total"`
+}
+
+const (
+	// expandMaxLines caps one expansion request. Big enough to swallow a
+	// typical between-hunk gap in one tap, small enough that a client can't
+	// pull a whole large file through this endpoint a request at a time.
+	expandMaxLines = 400
+	// expandMaxBytes caps the file this reads at all. A source file is far
+	// under it; a multi-MB generated blob isn't something to page through on a
+	// phone.
+	expandMaxBytes = 4 << 20
+)
+
+// ExpandContext returns count lines of path's current content starting at line
+// start (1-based), for the "show the unchanged lines between these two hunks"
+// affordance in the diff viewer.
+//
+// It reads the WORKING TREE file, not git history, which is exactly right for
+// this use: the endpoint only ever fills gaps *between* hunks, and a line that
+// no hunk touches is by definition identical on both sides of the diff. That
+// also means it uses the diff's NEW-side line numbers, and that a deleted file
+// has nothing to expand (its content is only in HEAD) — the client doesn't
+// offer expansion there.
+//
+// start and count are clamped rather than rejected: a client that asks for
+// lines past EOF gets the tail of the file and EOF set, not an error.
+func ExpandContext(cwd, path string, start, count int) (Expansion, error) {
+	full, err := safeJoin(cwd, path)
+	if err != nil {
+		return Expansion{}, err
+	}
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		return Expansion{}, fmt.Errorf("%w: %s", ErrNoSuchFile, path)
+	}
+	if info.Size() > expandMaxBytes {
+		return Expansion{}, fmt.Errorf("%w: %s is larger than %d bytes", ErrNotText, path, expandMaxBytes)
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return Expansion{}, fmt.Errorf("%w: %s", ErrNoSuchFile, path)
+	}
+	if !utf8.Valid(data) {
+		return Expansion{}, fmt.Errorf("%w: %s", ErrNotText, path)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	// A trailing newline ends the last line, it doesn't start an empty one —
+	// otherwise every well-formed file reports one phantom line too many.
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+
+	if start < 1 {
+		start = 1
+	}
+	if count < 1 {
+		count = 1
+	}
+	if count > expandMaxLines {
+		count = expandMaxLines
+	}
+	if start > len(lines) {
+		return Expansion{Path: path, Start: len(lines) + 1, Lines: []string{}, EOF: true, Total: len(lines)}, nil
+	}
+	end := start - 1 + count
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return Expansion{
+		Path:  path,
+		Start: start,
+		Lines: lines[start-1 : end],
+		EOF:   end >= len(lines),
+		Total: len(lines),
+	}, nil
+}
+
+// safeJoin resolves a repo-relative path against cwd, refusing anything that
+// would read outside the pane's own tree. The path comes off a query string, so
+// "../../.ssh/id_rsa" is a request that will actually arrive one day; the
+// endpoint's whole contract is "a file this pane's diff already listed".
+func safeJoin(cwd, path string) (string, error) {
+	if cwd == "" || path == "" {
+		return "", fmt.Errorf("%w: empty", ErrBadPath)
+	}
+	if filepath.IsAbs(path) {
+		return "", fmt.Errorf("%w: %s is absolute", ErrBadPath, path)
+	}
+	full := filepath.Join(cwd, filepath.Clean(path))
+	rel, err := filepath.Rel(cwd, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: %s escapes the pane's tree", ErrBadPath, path)
+	}
+	return full, nil
 }
 
 // gitTimeout bounds a single git invocation. git can block indefinitely on
