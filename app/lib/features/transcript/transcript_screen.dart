@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -386,6 +387,46 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     );
   }
 
+  /// Ask the bridge, over plain HTTP, why the WebSocket handshake keeps being
+  /// rejected — and return its own explanation.
+  ///
+  /// Dart's WebSocket client reports a rejected upgrade as a bare "not upgraded
+  /// to websocket" with no status and no body, so the reason the bridge sent is
+  /// unreachable from the handshake (see [_permanentFailureMessage]). The same
+  /// URL fetched without an Upgrade header answers with the real status and a
+  /// sentence saying what is wrong, because the endpoint deliberately fails
+  /// BEFORE upgrading.
+  ///
+  /// Worth the extra round trip only once retries are exhausted. Guessing
+  /// instead — the previous behaviour — told operators their agent kind "may not
+  /// support a chat view" when the truth was that the agent was sitting on a
+  /// trust prompt and had not reported its session id yet, which sends them to
+  /// debug entirely the wrong thing.
+  Future<String?> _serverFailureReason(Connection c) async {
+    try {
+      final ws = _transcriptUri(c);
+      final probe = ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http');
+      final res = await Dio().getUri<String>(
+        probe,
+        options: Options(
+          responseType: ResponseType.plain,
+          receiveTimeout: const Duration(seconds: 5),
+          // The interesting answers ARE the error statuses, so don't throw on
+          // them.
+          validateStatus: (_) => true,
+        ),
+      );
+      final body = (res.data ?? '').trim();
+      if (body.isEmpty || body.length > 300) return null;
+      // Go's default mux 404 explains nothing; only pass on a message the
+      // endpoint actually wrote.
+      if (body.toLowerCase() == '404 page not found') return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _connect() async {
     final client = _client;
     if (client == null || _disposed) return;
@@ -541,6 +582,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _reconnectTimer?.cancel();
       if (mounted) setState(() => _conn = _Conn.closed);
       return;
+    }
+
+    // Retries are exhausted and the pane still exists, so the bridge is
+    // refusing this transcript for a reason it can state. Ask it rather than
+    // guess — see _serverFailureReason.
+    if (_attempts >= _maxSilentAttempts && _failure == null) {
+      final reason = await _serverFailureReason(client.connection);
+      if (_disposed) return;
+      if (reason != null) {
+        _reconnectTimer?.cancel();
+        if (mounted) setState(() => _failure = reason);
+        return;
+      }
     }
 
     final delay = Duration(seconds: _attempts.clamp(1, 8));

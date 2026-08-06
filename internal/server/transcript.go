@@ -153,6 +153,17 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if other, ambiguous := siblingSharesCwd(c, bare, agent); ambiguous {
+		// Resolution would fall back to matching on working directory, and a
+		// sibling agent in the same directory makes that a coin flip. Answer
+		// "not yet" rather than serve the sibling's conversation — see
+		// siblingSharesCwd.
+		log.Warn("agent-transcript: unresolvable, session id unknown and a sibling shares the cwd",
+			"pane", pane, "sibling", other, "cwd", agent.Cwd)
+		http.Error(w, "transcript not available yet — this agent has not reported its session id", http.StatusNotFound)
+		return
+	}
+
 	// Open the pane's transcript through the per-kind Source registry. What backs
 	// it — a JSONL file for Claude, a SQLite database for Hermes — is the source's
 	// business; everything below here is storage-agnostic.
@@ -325,4 +336,53 @@ func serveOlder(ctx context.Context, src transcript.Source, pane string, req loa
 // but we still tear down gracefully rather than crash.
 func closeClean(conn *websocket.Conn, reason string) {
 	conn.Close(websocket.StatusNormalClosure, reason)
+}
+
+// siblingSharesCwd reports whether this pane's transcript is unresolvable
+// because another live agent occupies the same working directory, naming that
+// sibling for the log.
+//
+// It only ever fires when the agent has NO session id. With one, resolution is
+// exact and a sibling is irrelevant. Without one, resolution falls back to
+// "newest transcript in this project dir whose recorded cwd matches" — and if a
+// sibling shares that directory, the fallback cannot tell the two apart. It does
+// not fail; it confidently returns the wrong conversation.
+//
+// That is not hypothetical. Starting an agent in a directory Claude has not
+// trusted parks it on a permission prompt, so it has no session id until the
+// operator answers — and a phone that navigates there meanwhile was served an
+// unrelated agent's 259-message history, three times running. The first agent in
+// a new directory is exactly when that prompt appears, which makes this the
+// common path rather than a corner.
+//
+// [transcript.Locate] already refuses to guess when a KNOWN session id has no
+// file yet ("not written yet must read as absent, not as license to guess").
+// This extends the same rule to the case where the session id is not known at
+// all — which the resolver cannot detect on its own, because only the bridge
+// knows what other agents are live.
+func siblingSharesCwd(c *herdr.Client, bare string, agent herdr.Agent) (sibling string, ambiguous bool) {
+	if agent.SessionID() != "" || agent.Cwd == "" {
+		return "", false
+	}
+	agents, err := c.Agents()
+	if err != nil {
+		// Can't tell, so don't block a read on a failed side lookup.
+		return "", false
+	}
+	return siblingInSameCwd(agents, bare, agent)
+}
+
+// siblingInSameCwd is the decision [siblingSharesCwd] makes once it has the
+// agent list, split out so it is testable without a Herdr socket.
+func siblingInSameCwd(agents []herdr.Agent, bare string, agent herdr.Agent) (sibling string, ambiguous bool) {
+	if agent.SessionID() != "" || agent.Cwd == "" {
+		return "", false
+	}
+	for _, other := range agents {
+		if other.PaneID == bare || other.Cwd != agent.Cwd {
+			continue
+		}
+		return other.PaneID, true
+	}
+	return "", false
 }
