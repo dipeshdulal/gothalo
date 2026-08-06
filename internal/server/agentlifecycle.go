@@ -353,6 +353,16 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Do not hand back a pane the client cannot safely open. Until the agent
+	// reports its session id the transcript for this pane resolves by working
+	// directory, which in a directory that already hosts an agent serves someone
+	// else's conversation. See herdr.WaitForAgentSession.
+	sessionID := c.WaitForAgentSession(pane.PaneID, herdr.SessionSettleWait)
+	if sessionID == "" {
+		log.Warn("agent started but never reported a session id; its transcript may resolve by cwd",
+			"pane", qualified, "kind", body.Kind)
+	}
+
 	promptSent, promptErr := sendOpeningPrompt(c, name, qualified, body.Prompt)
 	log.Info("started agent", "pane", qualified, "kind", body.Kind, "name", name, "prompt", promptSent)
 	s.publish(events.TypeAgentStarted, map[string]any{
@@ -672,6 +682,15 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 		log.Error("agent restart failed after stop", "pane", body.PaneID, "kind", agent.Kind, "err", err)
 		http.Error(w, fmt.Sprintf("the old %s agent was stopped but the replacement failed to start in %s: %v (the pane is now an idle shell)", agent.Kind, body.PaneID, err), http.StatusBadGateway)
 		return
+	}
+
+	// Worse here than on a start: until the REPLACEMENT reports its session id,
+	// the pane still resolves to the transcript of the agent this call just
+	// discarded — so the client would render the very history the response
+	// declares gone (history_kept:false), and it would look plausible.
+	if sessionID := c.WaitForAgentSession(bare, herdr.SessionSettleWait); sessionID == "" {
+		log.Warn("agent restarted but never reported a session id; its transcript may resolve to the old session",
+			"pane", body.PaneID, "kind", agent.Kind)
 	}
 
 	promptSent, promptErr := sendOpeningPrompt(c, name, body.PaneID, body.Prompt)

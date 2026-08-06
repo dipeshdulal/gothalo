@@ -69,6 +69,14 @@ const (
 	// Generous on purpose: the alternative to waiting is dropping the operator's
 	// first instruction, which is worse than a slow start.
 	PromptReadyBudget = 10 * time.Second
+
+	// SessionSettleWait bounds the wait for a started agent to report its own
+	// session id, which is what a transcript is resolved by. See
+	// [Client.WaitForAgentSession] — without it a client that opens the pane
+	// immediately can be shown a different agent's conversation entirely.
+	//
+	// Spent only on the start/restart paths, and only until the id appears.
+	SessionSettleWait = 8 * time.Second
 )
 
 // Retry pacing for agent.start. These are vars rather than consts only so tests
@@ -378,6 +386,37 @@ func (c *Client) WaitForNameRelease(name string, within time.Duration) bool {
 		}
 		if time.Now().After(deadline) {
 			return false
+		}
+		time.Sleep(shellPollInterval)
+	}
+}
+
+// WaitForAgentSession blocks until the agent in pane reports its own session
+// id, returning it (empty if it never arrived).
+//
+// This is what makes the pane id a start returns safe to open. The transcript
+// for a pane is resolved by the agent's session id, and falls back to matching
+// on WORKING DIRECTORY when there isn't one yet. A just-started agent has no
+// session id for a moment — its SessionStart hook has not reported — so a client
+// that navigates immediately gets the cwd fallback, and in any directory that
+// already hosts another agent that resolves to a STRANGER'S CONVERSATION.
+//
+// Observed: an agent started at 09:45:56 served 259 messages from the unrelated
+// agent sharing its home directory, then corrected itself 11s later. On a
+// restart the same window shows the conversation the restart just discarded,
+// which is worse — it looks plausible.
+//
+// Best-effort: an agent kind whose session is never reported (no integration
+// hook installed) simply costs the full wait and returns empty, because the
+// alternative to waiting is showing the wrong conversation.
+func (c *Client) WaitForAgentSession(pane string, within time.Duration) string {
+	deadline := time.Now().Add(within)
+	for {
+		if a, err := c.Get(pane); err == nil && a.AgentSession.Value != "" {
+			return a.AgentSession.Value
+		}
+		if time.Now().After(deadline) {
+			return ""
 		}
 		time.Sleep(shellPollInterval)
 	}
