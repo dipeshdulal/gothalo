@@ -198,6 +198,10 @@ No code was changed — this is research and ideation only.
   [`CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md) — including the
   settling races found only by running it against a live Herdr and a real phone,
   none of which were visible to review.
-- [ ] #8 Recent-activity timeline — **in progress**, branch `feat/activity-timeline` (2026-08-05)
+- [ ] #8 Recent-activity timeline — **in progress**, branch `feat/activity-timeline`
+  (2026-08-05). Built to the bar this entry sets: it records only the transitions
+  themselves plus the duration of the span they closed, which is the one fact
+  `/snapshot` genuinely cannot reconstruct — not a mirror of live status.
+  `GET /timeline` + `docs/CONTRACT-timeline.md`.
 - [ ] Slash-command typeahead in the composer — queued (2026-08-05)
 - [ ] Copy from the transcript screen — queued, small (2026-08-05)

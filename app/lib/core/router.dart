@@ -9,6 +9,7 @@ import '../features/priority/priority_screen.dart';
 import '../features/servers/add_edit_server_screen.dart';
 import '../features/servers/servers_screen.dart';
 import '../features/terminal/terminal_screen.dart';
+import '../features/timeline/timeline_screen.dart';
 import '../features/transcript/transcript_screen.dart';
 
 /// App routes.
@@ -48,6 +49,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/overview',
         builder: (context, state) => const OverviewScreen(),
+      ),
+      GoRoute(
+        path: '/timeline',
+        builder: (context, state) => const TimelineScreen(),
       ),
       GoRoute(
         path: '/overview/:workspace',

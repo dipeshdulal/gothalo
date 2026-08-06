@@ -147,6 +147,89 @@ class DiffResult {
   }
 }
 
+/// One recorded agent status transition from `GET /timeline` — see
+/// `docs/CONTRACT-timeline.md`.
+///
+/// Every other bridge read describes the PRESENT. This is the only one that
+/// describes the past, and [previous] is the reason it exists: a status alone
+/// cannot distinguish an agent that blocked fifty minutes ago from one that
+/// blocked ten seconds ago, and that difference is the whole question you have
+/// when you pick the phone up.
+class TimelineEntry {
+  const TimelineEntry({
+    required this.at,
+    required this.pane,
+    required this.agent,
+    required this.to,
+    this.from,
+    this.session,
+    this.workspace,
+    this.previous,
+    this.title,
+  });
+
+  /// When the bridge observed the transition.
+  final DateTime at;
+
+  /// Session-qualified pane id — the same id `/attach`, `/send` and
+  /// `/transcript` take, so a row can open the agent it describes.
+  final String pane;
+
+  /// Agent kind (`claude`, `codex`, …). May be empty for a pane whose kind the
+  /// bridge never learned.
+  final String agent;
+
+  final String? session;
+  final String? workspace;
+
+  /// The pane's human name at the time of the transition ("Fix the failing
+  /// parser test").
+  ///
+  /// This, not [agent], is what identifies a row to a person: [agent] is a KIND,
+  /// so a host running a dozen Claudes yields a dozen rows that all read
+  /// "Claude". Null for a pane the bridge never learned a title for.
+  final String? title;
+
+  /// The status being left. **Null for a first sighting** — a newly detected
+  /// agent, not a transition out of an unnamed state.
+  final String? from;
+
+  /// The status entered: a Herdr agent status, or `"gone"` when the pane closed
+  /// or its process exited.
+  final String to;
+
+  /// How long the agent spent in [from].
+  ///
+  /// **Null means unknown, not zero.** The bridge omits it when it cannot see
+  /// where the span began (the first transition after a restart for a pane that
+  /// had moved on while the bridge was down). `Duration.zero` is a real value —
+  /// an instantaneous flip — so a renderer must not conflate the two.
+  final Duration? previous;
+
+  /// The pane stopped existing rather than changing status.
+  bool get isGone => to == 'gone';
+
+  factory TimelineEntry.fromJson(Map<String, dynamic> j) {
+    final prevMs = (j['prev_ms'] as num?)?.toInt();
+    String? nonEmpty(Object? v) {
+      final s = v as String?;
+      return (s == null || s.isEmpty) ? null : s;
+    }
+
+    return TimelineEntry(
+      at: DateTime.fromMillisecondsSinceEpoch((j['ts'] as num?)?.toInt() ?? 0),
+      pane: (j['pane'] as String?) ?? '',
+      agent: (j['agent'] as String?) ?? '',
+      session: nonEmpty(j['session']),
+      workspace: nonEmpty(j['workspace']),
+      title: nonEmpty(j['title']),
+      from: nonEmpty(j['from']),
+      to: (j['to'] as String?) ?? '',
+      previous: prevMs == null ? null : Duration(milliseconds: prevMs),
+    );
+  }
+}
+
 /// One selectable choice on a blocked agent's prompt (from `/agent-state`).
 class BlockedOption {
   const BlockedOption({
@@ -534,6 +617,37 @@ class BridgeClient {
       final body = res.data;
       if (body == null) throw BridgeException('Empty diff response');
       return DiffResult.fromJson(body);
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /timeline` → the recent agent-activity log, **newest first**: one
+  /// entry per status transition, each carrying how long the agent spent in the
+  /// status it just left. See CONTRACT-timeline.md.
+  ///
+  /// Purely a read of the bridge's in-memory ring — no Herdr call — so it is
+  /// cheap enough to poll and still answers while Herdr itself is down. [limit]
+  /// is clamped server-side; [pane] restricts the log to one agent.
+  ///
+  /// A bridge older than this endpoint 404s and a bridge with recording
+  /// disabled 503s; both surface as a [BridgeException] the caller renders as
+  /// "no history".
+  Future<List<TimelineEntry>> getTimeline({int? limit, String? pane}) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/timeline',
+        queryParameters: {
+          'limit': ?limit,
+          if (pane != null && pane.isNotEmpty) 'pane': pane,
+        },
+      );
+      final entries = (res.data ?? const {})['entries'];
+      if (entries is! List) return const [];
+      return entries
+          .whereType<Map>()
+          .map((e) => TimelineEntry.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }

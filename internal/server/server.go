@@ -19,6 +19,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/pairing"
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/store"
+	"github.com/dipeshdulal/gothalo/internal/timeline"
 )
 
 // herdrRequester is the one call the generic /herdr proxy needs: an
@@ -38,6 +39,11 @@ type Server struct {
 	pairing  *pairing.Manager
 	web      fs.FS       // static receiver page assets
 	bus      *events.Bus // unified event bus; may be nil (WS /events disabled)
+	// timeline is the recorded agent-activity ring behind GET /timeline. May be
+	// nil (recording disabled), in which case the endpoint reports 503 rather
+	// than an empty history — "no recorder running" and "nothing happened yet"
+	// are different answers and a client should be able to tell them apart.
+	timeline *timeline.Log
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
 	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
@@ -45,9 +51,9 @@ type Server struct {
 	agents agentGetter
 }
 
-// New constructs a Server. push and bus may be nil.
-func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus) *Server {
-	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus}
+// New constructs a Server. push, bus and tl may be nil.
+func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus, tl *timeline.Log) *Server {
+	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus, timeline: tl}
 }
 
 // target resolves a possibly session-qualified id ("acme/w1:p2") to its
@@ -90,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/agent/stop", s.handleAgentStop)
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/events", s.handleEvents)
+	mux.HandleFunc("/timeline", s.handleTimeline)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)
 	mux.HandleFunc("/herdr", s.handleHerdrProxy)
@@ -319,7 +326,8 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	    answering with kinds rather than on this number — a bridge can be v3 and
 //	    still have nothing installed to launch — so this records the capability
 //	    without being the thing that unlocks it.
-const BridgeVersion = 3
+//	4 — GET /timeline (recorded agent-activity history).
+const BridgeVersion = 4
 
 // GET /info -> this bridge's identity and capability level.
 //
