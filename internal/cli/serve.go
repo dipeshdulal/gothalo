@@ -66,11 +66,14 @@ func runServe(configPath string) error {
 	pm := pairing.NewManager()
 
 	var pc *push.Client
-	if p, err := push.LoadFile(cfg.Push.ServiceAccountPath); err != nil {
-		log.Warn("FCM disabled — notify will log only", "reason", err)
+	if p, err := push.Resolve(cfg.Push.ServiceAccountPath, cfg.Push.ProjectID); err != nil {
+		// A fresh install has no credentials and that is fine — the bridge runs
+		// fully without push. Point at the fix rather than just the failure.
+		log.Warn("FCM disabled — notify will log only",
+			"reason", err, "fix", "run `gothalo push login`, or `gothalo push status` to diagnose")
 	} else {
 		pc = p
-		log.Info("FCM enabled", "project", p.ProjectID())
+		log.Info("FCM enabled", "project", p.ProjectID(), "credentials", p.Source())
 	}
 
 	// The unified event bus. Every WS /events client is a bus subscriber; each

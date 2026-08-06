@@ -1,4 +1,5 @@
-// Package cli wires the gothalo cobra command tree (serve / pair / devices).
+// Package cli wires the gothalo cobra command tree (serve / pair / devices /
+// push).
 package cli
 
 import (
@@ -15,7 +16,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newServeCmd(), newPairCmd(), newDevicesCmd(), newVersionCmd())
+	root.AddCommand(newServeCmd(), newPairCmd(), newDevicesCmd(), newPushCmd(), newVersionCmd())
 	return root
 }
 

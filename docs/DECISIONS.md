@@ -150,3 +150,31 @@ Scope (deliberately not a hard delete of D16):
 Ingestion lands on a new path (`POST /hook` or similar) since `GET /events` is the
 outbound stream. Spike with Claude Code first to prove the "approve with context"
 UX, then generalize.
+
+## D20 — FCM credentials follow ADC; a shared key file is not the only path
+`internal/push` accepts **two credential shapes** and finds them by Google's
+Application Default Credentials search order (configured path → `$GOOGLE_APPLICATION_CREDENTIALS`
+→ gcloud's well-known file → GCE/Cloud Run metadata server).
+
+The motivation is team access, not flexibility. A downloaded service-account key
+is a shared bearer secret: everyone holding the file is the *same* identity,
+rotation breaks everyone at once, and the audit log can't attribute a send. Adding
+`authorized_user` support means a teammate runs `gothalo push login`, authenticates
+as themselves via gcloud, and is granted/revoked individually in IAM — nobody
+copies a key. This is also what makes the repo publishable: there is no shared
+secret that *must* exist for a contributor to run the thing.
+
+Consequences:
+- The two shapes mint tokens by different grants (jwt-bearer vs refresh_token),
+  so `mintToken` dispatches on shape. Scopes are bound at consent time for the
+  refresh grant — hence `push login` passing `--scopes` explicitly, since gcloud's
+  default set omits `firebase.messaging` and the resulting 403 reads as a
+  permissions bug rather than a scope bug.
+- User credentials name a *person*, not a project, so `push.project_id` becomes
+  required on that path (`push login` persists it).
+- `push status` verifies with FCM's `validate_only` rather than sending, and maps
+  403 to a distinct error — "authenticated but never granted access" is the one
+  failure a teammate cannot fix by logging in again.
+- The metadata-server branch means a future hosted relay (D12) can run with **no**
+  key material anywhere. That is a free consequence of following ADC, not a
+  commitment to build the relay.
