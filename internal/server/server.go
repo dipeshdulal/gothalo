@@ -46,6 +46,9 @@ type Server struct {
 	timeline *timeline.Log
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
+	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
+	// production, where the agent is fetched from the pane's own session client.
+	agents agentGetter
 }
 
 // New constructs a Server. push, bus and tl may be nil.
@@ -84,8 +87,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/approve", s.handleApprove)
 	mux.HandleFunc("/agent-state", s.handleAgentState)
 	mux.HandleFunc("/diff", s.handleDiff)
+	mux.HandleFunc("/image", s.handleImage)
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
+	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
+	mux.HandleFunc("/agent/start", s.handleAgentStart)
+	mux.HandleFunc("/agent/restart", s.handleAgentRestart)
+	mux.HandleFunc("/agent/stop", s.handleAgentStop)
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/timeline", s.handleTimeline)
@@ -312,8 +320,14 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 // History:
 //
 //	1 — server identity (/info), notification rework, /events heartbeat.
-//	2 — GET /timeline (recorded agent-activity history).
-const BridgeVersion = 2
+//	2 — POST /image: attach a screenshot to a prompt.
+//	3 — agent lifecycle: /agents/available, /agent/start, /agent/restart,
+//	    /agent/stop. The app still gates its launch UI on /agents/available
+//	    answering with kinds rather than on this number — a bridge can be v3 and
+//	    still have nothing installed to launch — so this records the capability
+//	    without being the thing that unlocks it.
+//	4 — GET /timeline (recorded agent-activity history).
+const BridgeVersion = 4
 
 // GET /info -> this bridge's identity and capability level.
 //

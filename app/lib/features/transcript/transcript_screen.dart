@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -15,6 +18,7 @@ import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import 'quick_commands_providers.dart';
@@ -22,6 +26,9 @@ import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
 enum _Conn { connecting, connected, disconnected, closed, failed }
+
+/// The destructive per-agent actions in the chat's overflow menu.
+enum _AgentLifecycleAction { restart, stop }
 
 /// The chat view for an agent pane — a phone-native rendering of the agent's
 /// conversation over `WS /agent-transcript`.
@@ -47,6 +54,7 @@ class TranscriptScreen extends ConsumerStatefulWidget {
 class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
+  final ImagePicker _picker = ImagePicker();
 
   BridgeClient? _client;
   WebSocketChannel? _channel;
@@ -111,6 +119,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// (a busy agent queues them). Shown optimistically so a send is never
   /// invisible; each is dropped when its matching user message arrives.
   final List<String> _pending = [];
+
+  /// Image-attach state. [_uploadSent]/[_uploadTotal] drive a determinate bar:
+  /// a phone pushing megabytes over a tailnet is slow enough that a spinner
+  /// with no numbers is indistinguishable from a hang, which is the one thing
+  /// this must not look like. [_uploadError] latches a failure in place until
+  /// the user dismisses or retries — a snackbar disappears while they're still
+  /// deciding whether the upload is worth another try.
+  bool _uploading = false;
+  int _uploadSent = 0;
+  int _uploadTotal = 0;
+  String? _uploadError;
 
   /// Whether the agent is still blocked, as a listenable the options sheet can
   /// follow.
@@ -323,6 +342,126 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     }
   }
 
+  /// Attach a screenshot or photo to the prompt: pick it, upload it to the
+  /// bridge, and drop the path the bridge wrote into the composer.
+  ///
+  /// The path IS the attachment. Coding agents read an image when handed a file
+  /// path, so once the bytes are inside the agent's own working directory (the
+  /// bridge's `POST /image` puts them there — see docs/CONTRACT-image.md) there
+  /// is nothing further to negotiate: the agent just needs to be told where.
+  ///
+  /// **It deliberately does not send.** The whole point is a prompt with words
+  /// around the image — "why is this button misaligned?" — so the path lands in
+  /// the composer, the keyboard comes up, and the user writes the rest.
+  Future<void> _attachImage(ImageSource source) async {
+    final client = _client;
+    if (client == null || _uploading) return;
+
+    final XFile? picked;
+    try {
+      picked = await _picker.pickImage(source: source);
+    } on PlatformException catch (e) {
+      // Denied permission, or no camera. The plugin's own message names which.
+      if (mounted) setState(() => _uploadError = e.message ?? 'Could not open the picker.');
+      return;
+    }
+    if (picked == null || !mounted) return; // cancelled
+
+    final bytes = await picked.readAsBytes();
+    if (!mounted) return;
+    setState(() {
+      _uploading = true;
+      _uploadSent = 0;
+      _uploadTotal = bytes.length;
+      _uploadError = null;
+    });
+
+    try {
+      final drop = await client.uploadImage(
+        widget.pane,
+        bytes,
+        onProgress: (sent, total) {
+          if (!mounted) return;
+          setState(() {
+            _uploadSent = sent;
+            // A chunked send reports total as -1; keep the byte count we
+            // measured rather than letting the bar go indeterminate mid-upload.
+            if (total > 0) _uploadTotal = total;
+          });
+        },
+      );
+      if (!mounted) return;
+      setState(() => _uploading = false);
+      _insertIntoComposer(drop.path);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _uploading = false;
+        _uploadError = e is BridgeException ? e.message : '$e';
+      });
+    }
+  }
+
+  /// Ask where the image comes from. Two sources, because the two real uses are
+  /// different: a screenshot already in the camera roll ("this screen is
+  /// wrong"), and something in front of you right now (a whiteboard, a monitor,
+  /// a device showing the bug).
+  Future<void> _pickImageSource() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Photo library'),
+              subtitle: const Text('A screenshot you already took'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Camera'),
+              subtitle: const Text('Shoot a screen or whiteboard'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source != null) await _attachImage(source);
+  }
+
+  /// Insert [text] at the composer's cursor, leaving the caret after it so the
+  /// user can keep typing.
+  ///
+  /// Spacing is fixed up rather than assumed: appended straight onto an existing
+  /// word the path would fuse into it and the agent would be handed a filename
+  /// that doesn't exist. A path containing whitespace is quoted for the same
+  /// reason — an agent reading a bare path stops at the first space.
+  void _insertIntoComposer(String text) {
+    final quoted = text.contains(RegExp(r'\s')) ? '"$text"' : text;
+    final value = _composer.value;
+    final base = value.text;
+    // A field that has never been focused reports an invalid (-1) selection;
+    // that means "no cursor yet", so append.
+    final sel = value.selection;
+    final start = sel.isValid ? sel.start : base.length;
+    final end = sel.isValid ? sel.end : base.length;
+
+    final prefix = base.substring(0, start);
+    final suffix = base.substring(end);
+    final lead = prefix.isEmpty || prefix.endsWith(' ') || prefix.endsWith('\n')
+        ? ''
+        : ' ';
+    final insert = '$lead$quoted ';
+
+    _composer.value = TextEditingValue(
+      text: '$prefix$insert$suffix',
+      selection: TextSelection.collapsed(offset: prefix.length + insert.length),
+    );
+  }
+
   /// The command / file context being approved — pulled from the most recent
   /// tool_call still awaiting a result (the one blocking), falling back to the
   /// parsed `/agent-state` detail. Lets the approval card show *what* it does.
@@ -380,6 +519,46 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       path: '/agent-transcript',
       queryParameters: {'pane': widget.pane, 'token': c.bearer},
     );
+  }
+
+  /// Ask the bridge, over plain HTTP, why the WebSocket handshake keeps being
+  /// rejected — and return its own explanation.
+  ///
+  /// Dart's WebSocket client reports a rejected upgrade as a bare "not upgraded
+  /// to websocket" with no status and no body, so the reason the bridge sent is
+  /// unreachable from the handshake (see [_permanentFailureMessage]). The same
+  /// URL fetched without an Upgrade header answers with the real status and a
+  /// sentence saying what is wrong, because the endpoint deliberately fails
+  /// BEFORE upgrading.
+  ///
+  /// Worth the extra round trip only once retries are exhausted. Guessing
+  /// instead — the previous behaviour — told operators their agent kind "may not
+  /// support a chat view" when the truth was that the agent was sitting on a
+  /// trust prompt and had not reported its session id yet, which sends them to
+  /// debug entirely the wrong thing.
+  Future<String?> _serverFailureReason(Connection c) async {
+    try {
+      final ws = _transcriptUri(c);
+      final probe = ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http');
+      final res = await Dio().getUri<String>(
+        probe,
+        options: Options(
+          responseType: ResponseType.plain,
+          receiveTimeout: const Duration(seconds: 5),
+          // The interesting answers ARE the error statuses, so don't throw on
+          // them.
+          validateStatus: (_) => true,
+        ),
+      );
+      final body = (res.data ?? '').trim();
+      if (body.isEmpty || body.length > 300) return null;
+      // Go's default mux 404 explains nothing; only pass on a message the
+      // endpoint actually wrote.
+      if (body.toLowerCase() == '404 page not found') return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _connect() async {
@@ -537,6 +716,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _reconnectTimer?.cancel();
       if (mounted) setState(() => _conn = _Conn.closed);
       return;
+    }
+
+    // Retries are exhausted and the pane still exists, so the bridge is
+    // refusing this transcript for a reason it can state. Ask it rather than
+    // guess — see _serverFailureReason.
+    if (_attempts >= _maxSilentAttempts && _failure == null) {
+      final reason = await _serverFailureReason(client.connection);
+      if (_disposed) return;
+      if (reason != null) {
+        _reconnectTimer?.cancel();
+        if (mounted) setState(() => _failure = reason);
+        return;
+      }
     }
 
     final delay = Duration(seconds: _attempts.clamp(1, 8));
@@ -712,6 +904,41 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
                 context.push('/diff/${Uri.encodeComponent(widget.pane)}'),
             icon: const Icon(Icons.difference_outlined),
           ),
+          // Lifecycle lives in an overflow, not as bar buttons: these two kill
+          // running work, and a one-tap target next to "Changes" is exactly the
+          // wrong affordance for that. Both confirm before acting.
+          PopupMenuButton<_AgentLifecycleAction>(
+            tooltip: 'Agent actions',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) {
+              final kind = agent?.agent ?? 'agent';
+              switch (action) {
+                case _AgentLifecycleAction.restart:
+                  restartAgent(context, ref, widget.pane, kind: kind);
+                case _AgentLifecycleAction.stop:
+                  stopAgent(context, ref, widget.pane, kind: kind);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: _AgentLifecycleAction.restart,
+                child: ListTile(
+                  leading: Icon(Icons.restart_alt),
+                  title: Text('Restart agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _AgentLifecycleAction.stop,
+                child: ListTile(
+                  leading: Icon(Icons.stop_circle_outlined,
+                      color: Theme.of(ctx).colorScheme.error),
+                  title: const Text('Stop agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: SafeArea(
@@ -737,9 +964,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Real approval → an actionable card; just-waiting → a soft cue;
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
-            // Everything about *how* you're talking to the agent (mode,
-            // quick commands, raw terminal) lives down here with the
-            // composer as ONE scrollable chip row, not the app bar — a
+            // Directly above the toolbar that started the upload, so progress
+            // and the button that caused it read as one thing.
+            if (_uploading || _uploadError != null)
+              _UploadStatus(
+                uploading: _uploading,
+                sent: _uploadSent,
+                total: _uploadTotal,
+                error: _uploadError,
+                onDismiss: () => setState(() => _uploadError = null),
+              ),
+            // Everything about *how* you're talking to the agent (attach an
+            // image, mode, quick commands, raw terminal) lives down here with
+            // the composer as ONE scrollable chip row, not the app bar — a
             // cluttered header, and a fragmented "chip pinned left / icon
             // pinned right / second row below" layout, both read worse than
             // one consistent strip.
@@ -751,6 +988,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               onOpenTerminal: () =>
                   context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
               onQuickCommand: _handleQuickCommand,
+              onAttachImage: _uploading ? null : _pickImageSource,
               enabled:
                   _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
@@ -1603,6 +1841,7 @@ class _ComposerActionsRow extends ConsumerWidget {
     required this.onCycleMode,
     required this.onOpenTerminal,
     required this.onQuickCommand,
+    required this.onAttachImage,
     required this.enabled,
   });
 
@@ -1610,6 +1849,10 @@ class _ComposerActionsRow extends ConsumerWidget {
   final VoidCallback onCycleMode;
   final VoidCallback onOpenTerminal;
   final void Function(QuickCommand) onQuickCommand;
+
+  /// Null while an upload is already in flight — one at a time, so the progress
+  /// bar always describes the upload the user is actually watching.
+  final Future<void> Function()? onAttachImage;
   final bool enabled;
 
   @override
@@ -1630,6 +1873,16 @@ class _ComposerActionsRow extends ConsumerWidget {
         child: ListView(
           scrollDirection: Axis.horizontal,
           children: [
+            // First in the row: it acts on the message being written, so it
+            // sits closest to the composer's own affordances.
+            ActionChip(
+              avatar: const Icon(Icons.image_outlined, size: 15),
+              label: const Text('Image'),
+              labelStyle: const TextStyle(fontSize: 12),
+              visualDensity: VisualDensity.compact,
+              onPressed: enabled ? onAttachImage : null,
+            ),
+            const SizedBox(width: 6),
             if (modeLabel != null) ...[
               ActionChip(
                 avatar: const Icon(Icons.tune, size: 15),
@@ -1670,6 +1923,103 @@ class _ComposerActionsRow extends ConsumerWidget {
     );
   }
 
+}
+
+/// The image-upload strip above the composer toolbar: a determinate progress
+/// bar while bytes are going out, or a failure that stays put until dismissed.
+///
+/// Determinate on purpose. The upload crosses a tailnet from a phone, which can
+/// genuinely take tens of seconds for a few megabytes; against a bare spinner
+/// that is indistinguishable from a hung request, and the user's next move
+/// (wait, or give up and retry) depends entirely on telling those two apart.
+///
+/// The failure does not use a snackbar for the mirror-image reason: it vanishes
+/// on a timer, and "is the tailnet down or was that image just too big?" is a
+/// question people re-read.
+class _UploadStatus extends StatelessWidget {
+  const _UploadStatus({
+    required this.uploading,
+    required this.sent,
+    required this.total,
+    required this.error,
+    required this.onDismiss,
+  });
+
+  final bool uploading;
+  final int sent;
+  final int total;
+  final String? error;
+  final VoidCallback onDismiss;
+
+  static String _mb(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final failed = !uploading && error != null;
+
+    return Container(
+      width: double.infinity,
+      color: failed
+          ? scheme.errorContainer
+          : scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      child: Row(
+        children: [
+          Icon(
+            failed ? Icons.error_outline : Icons.upload_outlined,
+            size: 16,
+            color: failed ? scheme.onErrorContainer : scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: failed
+                ? Text(
+                    error!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onErrorContainer,
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        total > 0
+                            ? 'Uploading image… ${_mb(sent)} of ${_mb(total)}'
+                            : 'Uploading image…',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          minHeight: 3,
+                          // Null (indeterminate) only before the first progress
+                          // callback, so the bar never sits frozen at zero.
+                          value: total > 0 && sent > 0 ? sent / total : null,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          if (failed)
+            IconButton(
+              tooltip: 'Dismiss',
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              onPressed: onDismiss,
+              icon: Icon(Icons.close, color: scheme.onErrorContainer),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// The bottom input bar — type a prompt (or an option number for a blocked

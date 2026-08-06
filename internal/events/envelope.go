@@ -67,6 +67,15 @@ const (
 	// permission mode is advanced; payload {pane, permission_mode?} (the new mode is
 	// present only when it could be read back — see the /agent-mode/cycle contract).
 	TypeModeCycled = "mode_cycled"
+	// TypeAgentStarted / _Stopped / _Restarted are emitted by the agent-lifecycle
+	// endpoints. They are gothalo-source events because Herdr's own
+	// pane_agent_detected only says an agent appeared, not that this bridge put it
+	// there — which is what a client needs to tell "the phone launched this" from
+	// "someone started one at the desk". Payload: {pane_id, kind, name} plus
+	// {created_pane} on a start.
+	TypeAgentStarted   = "agent_started"
+	TypeAgentStopped   = "agent_stopped"
+	TypeAgentRestarted = "agent_restarted"
 	// TypePushSent is emitted after the FCM fan-out; payload {agent, status, title, seq, sent, total}.
 	TypePushSent = "push_sent"
 	// TypeNotificationCleared is emitted by the notification-clearer consumer when

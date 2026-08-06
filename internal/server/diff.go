@@ -1,13 +1,11 @@
 package server
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/gitdiff"
-	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
 
 // GET /diff?pane=<pane_id> -> the agent's working-tree changes: branch, and
@@ -28,25 +26,15 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want ?pane=<pane_id>", http.StatusBadRequest)
 		return
 	}
-	c, _, bare, err := s.target(pane)
+	cwd, status, err := s.paneCwd(pane)
 	if err != nil {
-		http.Error(w, err.Error(), herdrStatus(err))
+		http.Error(w, err.Error(), status)
 		return
 	}
 
-	agent, err := c.Get(bare)
+	result, err := gitdiff.Collect(cwd)
 	if err != nil {
-		if errors.Is(err, herdr.ErrAgentNotFound) {
-			http.Error(w, "no such agent", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	result, err := gitdiff.Collect(agent.Cwd)
-	if err != nil {
-		log.Warn("diff: collect failed", "pane", pane, "cwd", agent.Cwd, "err", err)
+		log.Warn("diff: collect failed", "pane", pane, "cwd", cwd, "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

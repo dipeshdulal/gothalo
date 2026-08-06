@@ -238,6 +238,23 @@ sealed class TabInfo with _$TabInfo {
       _$TabInfoFromJson(json);
 }
 
+/// The repository a workspace is checked out at, when it has one. Absent for a
+/// space that is not a git checkout (a plain `~` workspace, say).
+@freezed
+sealed class WorktreeInfo with _$WorktreeInfo {
+  const factory WorktreeInfo({
+    /// The space's own directory — the ONLY authoritative answer to "where does
+    /// this space live". Individual panes wander into subdirectories and linked
+    /// worktrees, so no pane's cwd can stand in for it.
+    @JsonKey(name: 'checkout_path') @Default('') String checkoutPath,
+    @JsonKey(name: 'repo_name') @Default('') String repoName,
+    @JsonKey(name: 'is_linked_worktree') @Default(false) bool isLinkedWorktree,
+  }) = _WorktreeInfo;
+
+  factory WorktreeInfo.fromJson(Map<String, dynamic> json) =>
+      _$WorktreeInfoFromJson(json);
+}
+
 /// A workspace ("space") — the top of the Herdr hierarchy, holding tabs.
 @freezed
 sealed class WorkspaceInfo with _$WorkspaceInfo {
@@ -252,6 +269,7 @@ sealed class WorkspaceInfo with _$WorkspaceInfo {
     @Default(AgentStatus.unknown)
     AgentStatus agentStatus,
     @Default(false) bool focused,
+    WorktreeInfo? worktree,
   }) = _WorkspaceInfo;
 
   factory WorkspaceInfo.fromJson(Map<String, dynamic> json) =>

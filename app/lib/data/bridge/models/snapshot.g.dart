@@ -106,6 +106,20 @@ Map<String, dynamic> _$TabInfoToJson(_TabInfo instance) => <String, dynamic>{
   'focused': instance.focused,
 };
 
+_WorktreeInfo _$WorktreeInfoFromJson(Map<String, dynamic> json) =>
+    _WorktreeInfo(
+      checkoutPath: json['checkout_path'] as String? ?? '',
+      repoName: json['repo_name'] as String? ?? '',
+      isLinkedWorktree: json['is_linked_worktree'] as bool? ?? false,
+    );
+
+Map<String, dynamic> _$WorktreeInfoToJson(_WorktreeInfo instance) =>
+    <String, dynamic>{
+      'checkout_path': instance.checkoutPath,
+      'repo_name': instance.repoName,
+      'is_linked_worktree': instance.isLinkedWorktree,
+    };
+
 _WorkspaceInfo _$WorkspaceInfoFromJson(Map<String, dynamic> json) =>
     _WorkspaceInfo(
       workspaceId: json['workspace_id'] as String? ?? '',
@@ -122,6 +136,9 @@ _WorkspaceInfo _$WorkspaceInfoFromJson(Map<String, dynamic> json) =>
           ) ??
           AgentStatus.unknown,
       focused: json['focused'] as bool? ?? false,
+      worktree: json['worktree'] == null
+          ? null
+          : WorktreeInfo.fromJson(json['worktree'] as Map<String, dynamic>),
     );
 
 Map<String, dynamic> _$WorkspaceInfoToJson(_WorkspaceInfo instance) =>
@@ -134,6 +151,7 @@ Map<String, dynamic> _$WorkspaceInfoToJson(_WorkspaceInfo instance) =>
       'active_tab_id': instance.activeTabId,
       'agent_status': _$AgentStatusEnumMap[instance.agentStatus]!,
       'focused': instance.focused,
+      'worktree': instance.worktree,
     };
 
 _Snapshot _$SnapshotFromJson(Map<String, dynamic> json) => _Snapshot(
