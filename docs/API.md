@@ -56,7 +56,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
-| GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
+| GET  | `/diff` | — (query: `pane`, `context?`) | `{branch, git{}, files[]}` | an **agent** pane's working-tree changes — branch + git context (default branch, remote, ahead/behind, dirty) + one unified diff per file. `?context=1` returns the `git` object alone and skips the diff (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into **any** pane's tree and get the path back, to paste into a prompt or type into the terminal (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |

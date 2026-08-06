@@ -343,7 +343,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	    answering rather than on this number — an older bridge 404s and the
 //	    remove dialog is exactly what it was before — so again this records the
 //	    capability without being what unlocks it.
-const BridgeVersion = 6
+//	7 — GET /diff carries a `git` context object (branch, default branch,
+//	    remote, ahead/behind, dirty), and `?context=1` returns it alone. Backs
+//	    the app's "Create PR" gate. An older bridge simply omits the object,
+//	    which the app reads as "can't tell" and hides the action — again the
+//	    capability is recorded here, not unlocked by it.
+const BridgeVersion = 7
 
 // GET /info -> this bridge's identity and capability level.
 //

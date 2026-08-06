@@ -17,6 +17,15 @@ import (
 // tree gothalo diffs. A pane with no agent, or an agent pane whose cwd isn't
 // a git repository, both degrade to an empty file list rather than erroring —
 // "nothing to review" is a normal state, not a failure.
+//
+// `?context=1` narrows the answer to the `git` object alone (branch, default
+// branch, remote, ahead/behind, dirty) with no `files` — the read behind the
+// app's "Create PR" gate, which needs to know whether the pane is on a pushable
+// feature branch but has no use for a single line of diff. It lives here rather
+// than on an endpoint of its own because it is the same git shell-out against
+// the same resolved cwd; a second endpoint would be a second answer to one
+// question. The full response carries the same `git` object, so a caller
+// already fetching the diff never needs a second call.
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -32,6 +41,15 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if contextOnly(r) {
+		git := gitdiff.ReadContext(cwd)
+		// Files is spelled empty rather than left nil so the narrowed response
+		// is the same shape as the full one — "no files here" and not "this
+		// field is missing".
+		writeJSON(w, gitdiff.Result{Branch: git.Branch, Git: git, Files: []gitdiff.FileChange{}})
+		return
+	}
+
 	result, err := gitdiff.Collect(cwd)
 	if err != nil {
 		log.Warn("diff: collect failed", "pane", pane, "cwd", cwd, "err", err)
@@ -40,4 +58,14 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, result)
+}
+
+// contextOnly reads the `?context=` flag. Both spellings are accepted because
+// both are what a caller writes by hand; anything else means the full diff.
+func contextOnly(r *http.Request) bool {
+	switch r.URL.Query().Get("context") {
+	case "1", "true":
+		return true
+	}
+	return false
 }
