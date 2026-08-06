@@ -14,6 +14,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
@@ -870,10 +871,23 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        titleSpacing: 12,
+        // Material reserves a fixed 56dp slot for the leading widget whatever
+        // the icon's real width, and titleSpacing is added on top — so the back
+        // arrow sat in a wide empty box while the title, which is long and
+        // ellipsises, was pushed into less room than it needed.
+        leadingWidth: 40,
+        titleSpacing: 4,
         title: PaneTitle(
           title: agent?.displayTitle ?? widget.pane,
           subtitle: [
+            // Age FIRST: the subtitle ellipsises, and this is the part that
+            // decides whether you act. Trailing it behind the branch and kind
+            // meant it was the first thing cut off on a long branch name.
+            //
+            // Reading a slow conversation without it, there is no way to tell a
+            // turn that just started from one that stalled twenty minutes ago.
+            if (agent?.sinceLastActivity case final age?)
+              '${agent!.agentStatus.name} ${formatAgentAge(age)}',
             if (agent != null) agent.gitLabel,
             if (agent != null) agent.agent,
           ].where((s) => s.isNotEmpty).join(' · '),
@@ -1144,7 +1158,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
 
+    DateTime? prevAt;
+    var prevWasTool = false;
     for (final e in entries) {
+      // A pause before an ASSISTANT entry is the agent working — the thing you
+      // want to see when a turn felt slow. A pause before a USER entry is you
+      // being away from your phone, which is not news and would otherwise
+      // litter the transcript with hours-long "gaps" every night.
+      final at = e.at;
+      if (at != null && prevAt != null && e.role == EntryRole.assistant) {
+        final gap = at.difference(prevAt);
+        if (gap >= _minShownGap) {
+          flush();
+          // A gap that follows a tool call is mostly the TOOL running, not the
+          // model thinking. Calling that "thought" overstates it, so the label
+          // only claims thinking when the pause really was the agent's own.
+          blocks.add(_GapBlock(gap, afterTool: prevWasTool));
+        }
+      }
+      if (at != null) prevAt = at;
+      prevWasTool = e.kind == EntryKind.toolCall || e.kind == EntryKind.toolResult;
+
       if (e.kind == EntryKind.toolCall) {
         (run ??= <TranscriptEntry>[]).add(e);
       } else {
@@ -1158,6 +1192,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
   Widget _blockWidget(_Block block) => switch (block) {
     _EntryBlock(:final entry) => _EntryTile(entry: entry),
+    _GapBlock(:final gap, :final afterTool) => _GapLine(
+      gap: gap,
+      afterTool: afterTool,
+    ),
     _ToolGroupBlock(:final calls) => _ToolLedger(
       calls: calls,
       resultFor: (id) => _resultsByForId[id],
@@ -1179,6 +1217,59 @@ class _EntryBlock extends _Block {
 class _ToolGroupBlock extends _Block {
   const _ToolGroupBlock(this.calls);
   final List<TranscriptEntry> calls;
+}
+
+/// A pause the AGENT spent working, rendered between the entries it separates.
+class _GapBlock extends _Block {
+  const _GapBlock(this.gap, {this.afterTool = false});
+  final Duration gap;
+
+  /// The pause followed a tool call, so most of it was the tool running.
+  final bool afterTool;
+}
+
+/// The shortest pause worth drawing. Below this, a label per entry would be
+/// noise on every fast turn and would push the messages apart for nothing.
+const _minShownGap = Duration(seconds: 10);
+
+/// "⋯ thought 45s" — the time an agent spent before this reply.
+///
+/// It answers a question the transcript otherwise hides: a long turn looks
+/// identical to a fast one once it is on screen, so there is no way to tell
+/// where the time actually went when a session felt slow.
+class _GapLine extends StatelessWidget {
+  const _GapLine({required this.gap, this.afterTool = false});
+
+  final Duration gap;
+  final bool afterTool;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+      child: Row(
+        children: [
+          Icon(
+            Icons.more_horiz,
+            size: 14,
+            color: scheme.onSurfaceVariant.withValues(alpha: 0.7),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            afterTool
+                ? 'took ${formatAgentAge(gap)}'
+                : 'thought ${formatAgentAge(gap)}',
+            style: TextStyle(
+              fontSize: 11.5,
+              fontStyle: FontStyle.italic,
+              color: scheme.onSurfaceVariant.withValues(alpha: 0.85),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// First non-blank string in [xs] (trimmed), or null.

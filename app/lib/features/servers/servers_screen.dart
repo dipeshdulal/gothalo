@@ -297,12 +297,18 @@ class _ServerTile extends StatelessWidget {
 
     return ListTile(
       onTap: onTap,
+      // Radius 18 to match AgentAvatar in the Priority rows above. A default
+      // CircleAvatar is radius 20, and those 2dp shifted this whole list's text
+      // column out of line with the one directly above it — the two sections
+      // read as one list, so they have to share a grid.
       leading: CircleAvatar(
+        radius: 18,
         backgroundColor: server.isActive
             ? scheme.primary
             : scheme.surfaceContainerHighest,
         child: Icon(
           Icons.dns_outlined,
+          size: 20,
           color: server.isActive ? scheme.onPrimary : scheme.onSurfaceVariant,
         ),
       ),
