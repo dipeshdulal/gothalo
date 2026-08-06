@@ -13,44 +13,40 @@ import '../../core/connection/connection_providers.dart';
 /// [key]-only [BlockedOption].
 class QuickCommand {
   const QuickCommand({required this.label, this.text, this.key})
-      : assert(
-          (text == null) != (key == null),
-          'QuickCommand needs exactly one of text/key',
-        );
+    : assert(
+        (text == null) != (key == null),
+        'QuickCommand needs exactly one of text/key',
+      );
 
   final String label;
   final String? text;
   final String? key;
 
   Map<String, dynamic> toJson() => {
-        'label': label,
-        if (text != null) 'text': text,
-        if (key != null) 'key': key,
-      };
+    'label': label,
+    if (text != null) 'text': text,
+    if (key != null) 'key': key,
+  };
 
   factory QuickCommand.fromJson(Map<String, dynamic> j) => QuickCommand(
-        label: (j['label'] as String?) ?? '',
-        text: j['text'] as String?,
-        key: j['key'] as String?,
-      );
+    label: (j['label'] as String?) ?? '',
+    text: j['text'] as String?,
+    key: j['key'] as String?,
+  );
 }
 
 /// The starter set shown before the user has customized anything. Kept to
 /// just the one thing that's actually hard to do otherwise — Esc has no
 /// on-screen key on a phone keyboard — rather than guessing at generically
 /// useful prompts; those are exactly what "+ Add" is for.
-const _defaultQuickCommands = [
-  QuickCommand(label: 'Interrupt', key: 'esc'),
-];
+const _defaultQuickCommands = [QuickCommand(label: 'Interrupt', key: 'esc')];
 
 /// Persisted, user-editable list of [QuickCommand]s. Stored in secure storage
 /// like [starredAgentsProvider] — no schema, so it stays clear of the shared
 /// drift database. One global list (not per-server/agent): a "run the tests"
 /// nudge is just as useful wherever you're talking to an agent.
 final quickCommandsProvider =
-    AsyncNotifierProvider<QuickCommands, List<QuickCommand>>(
-  QuickCommands.new,
-);
+    AsyncNotifierProvider<QuickCommands, List<QuickCommand>>(QuickCommands.new);
 
 class QuickCommands extends AsyncNotifier<List<QuickCommand>> {
   static const _key = 'gothalo.quick_commands';
@@ -70,7 +66,9 @@ class QuickCommands extends AsyncNotifier<List<QuickCommand>> {
 
   Future<void> _persist(List<QuickCommand> next) async {
     state = AsyncData(next);
-    await ref.read(secureStorageProvider).write(
+    await ref
+        .read(secureStorageProvider)
+        .write(
           key: _key,
           value: jsonEncode(next.map((c) => c.toJson()).toList()),
         );
@@ -157,7 +155,9 @@ class QuickCommandChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onLongPress: () => _confirmRemove(context),
+      onLongPress: () async {
+        if (await confirmRemoveQuickCommand(context, command.label)) onRemove();
+      },
       child: ActionChip(
         avatar: command.key != null
             ? const Icon(Icons.keyboard_command_key, size: 15)
@@ -168,27 +168,33 @@ class QuickCommandChip extends StatelessWidget {
       ),
     );
   }
+}
 
-  Future<void> _confirmRemove(BuildContext context) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Remove quick command?'),
-        content: Text('"${command.label}" will be removed.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) onRemove();
-  }
+/// The long-press "remove this quick command?" confirm, shared by every surface
+/// that shows the list — the transcript's chips and the terminal's key-styled
+/// buttons — so removing one means the same thing wherever you do it.
+Future<bool> confirmRemoveQuickCommand(
+  BuildContext context,
+  String label,
+) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Remove quick command?'),
+      content: Text('"$label" will be removed.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Remove'),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
 }
 
 /// Opens the add-command dialog and persists the result to [quickCommandsProvider].

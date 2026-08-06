@@ -41,6 +41,40 @@ Ctrl+C=0x03, arrows=`\e[A`…). A **sticky Ctrl** toggle (`letter & 0x1f`) colla
 the whole Ctrl-combo space into one button. ~15 lines of UI, not a keyboard
 extension.
 
+Arrows moved out of that row into an **arrow pad**: ↑ over ← ↓ → over ⌫ beside a
+double-width Enter, with hold-to-repeat on everything except Enter (a leaned-on
+thumb must not resubmit). Arrows are what agent TUIs (menus, history, approval
+prompts) ask for most, but four more keys in a scrolling row is a poor way to
+offer them.
+
+A popup, not a fixture: it costs nothing while closed, and one tap dismisses it
+when it's over something you want to read. An earlier draft floated permanently
+over the buffer and was draggable to get it out of the way — dragging is a worse
+answer to "it's covering something" than closing is, and having arrows in both
+the pad and the row meant two homes for one key.
+
+The row itself is **one strip of seven small equal buttons spread evenly**:
+`+`, Esc, Ctrl, pad toggle, Tab, ^C, keyboard. Even spacing is what makes it
+read as one control surface rather than a huddle of chips, and seven puts the
+pad toggle on the exact centre line — directly under the pad it opens. The
+**keyboard toggle** lives here rather than in the pad, both for that count and
+because it's a screen control, not a keystroke; without it the soft keyboard
+only ever appeared as a side effect of tapping the buffer, which is also how you
+scroll it.
+
+Everything below the buffer is one `AccessoryButton` — same fill, radius, height
+and mono type, width the only variable. Two earlier attempts are worth not
+repeating: the quick commands as Material chips (outlined, proportional,
+stadium) stacked above filled mono key blocks read as two unrelated toolbars;
+and packing labelled chips *plus* a pinned toggle *plus* four keys into one row
+needs ~470dp of a ~393dp phone, so something always clipped mid-word. The
+transcript keeps its chips, where they sit among other chips and belong.
+
+Quick commands that merely fire a key this bar already has are **filtered out
+here**. The shipped default, "Interrupt", sends `esc` — the same keystroke as
+the Esc button three slots over. It earns its place in the transcript composer,
+which has no key strip; on the terminal it was the same key twice.
+
 ## D7 — Multi-agent is free
 Herdr detects and normalizes ~20 agents below the API into one status model, so
 the app writes multi-agent UI once. The only per-agent code is an optional ~12-
