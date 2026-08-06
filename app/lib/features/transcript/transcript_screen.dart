@@ -45,9 +45,18 @@ enum _AgentLifecycleAction { restart, stop }
 /// message. A permanent pre-upgrade error (e.g. codex/opencode → 404
 /// "transcript not supported") shows a message instead of reconnecting forever.
 class TranscriptScreen extends ConsumerStatefulWidget {
-  const TranscriptScreen({super.key, required this.pane});
+  const TranscriptScreen({
+    super.key,
+    required this.pane,
+    this.openPrompt = false,
+  });
 
   final String pane;
+
+  /// Surface the blocked prompt's options sheet as soon as it is known —
+  /// set when arriving from a notification tap, where the user is coming
+  /// specifically to answer.
+  final bool openPrompt;
 
   @override
   ConsumerState<TranscriptScreen> createState() => _TranscriptScreenState();
@@ -152,6 +161,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   @override
   void initState() {
     super.initState();
+    _autoPromptPending = widget.openPrompt;
     _scroll.addListener(_onScroll);
     _composer.addListener(_onComposerChanged);
   }
@@ -175,6 +185,36 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   void _publishBlocked() {
     final s = _agentState;
     _blocked.value = s != null && s.isBlocked;
+  }
+
+  /// Arm of [TranscriptScreen.openPrompt]: still waiting for the first agent
+  /// state on a notification-tap visit.
+  bool _autoPromptPending = false;
+
+  /// Opened from a notification: surface the prompt's options sheet without
+  /// the extra tap on the approval card. Runs at most once, on the first agent
+  /// state — if the agent has already moved past the prompt by then, the
+  /// moment has passed and no sheet appears.
+  void _maybeAutoOpenPrompt(AgentState s) {
+    if (!_autoPromptPending) return;
+    _autoPromptPending = false;
+    if (!s.isBlocked || s.options.isEmpty) return;
+    final question = (s.blockedQuestion?.trim().isNotEmpty ?? false)
+        ? s.blockedQuestion!.trim()
+        : (s.headline.isNotEmpty ? s.headline : 'Approve?');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showBlockedOptionsSheet(
+        context,
+        question: question,
+        options: s.options,
+        danger: s.blockSeverity == BlockSeverity.danger,
+        blocked: _blocked,
+        onApprove: _approveDefault,
+        onOption: _handleOption,
+        onFreeText: _sendAnswer,
+      );
+    });
   }
 
   @override
@@ -247,6 +287,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       if (mounted) {
         setState(() => _agentState = s);
         _publishBlocked();
+        _maybeAutoOpenPrompt(s);
       }
     } catch (_) {
       // Non-agent / gone / transient — no bar.
