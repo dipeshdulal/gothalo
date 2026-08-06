@@ -85,7 +85,19 @@ type Recorder struct {
 	// where the durations come from, and it is the only mutable state the
 	// recorder keeps.
 	spans map[string]span
+
+	// live is the pane set the last authoritative read saw, and when it was
+	// taken. It answers one question — "does this pane still exist?" — for a
+	// pane with no open span. See [Recorder.paneExists].
+	live   map[string]bool
+	liveAt time.Time
 }
+
+// liveTTL is how long a pane-existence read is reused before another is taken.
+// It gates only FIRST SIGHTINGS of a pane, which are rare in steady state, so a
+// short window costs almost nothing while collapsing a replayed burst of dozens
+// into a single read.
+const liveTTL = 2 * time.Second
 
 // NewRecorder builds a Recorder over the ring, the live bus, and an
 // authoritative reader (which may be nil in tests).
@@ -197,6 +209,15 @@ func (r *Recorder) reconcile(reason string) {
 	now := r.now()
 	var resumed, opened, corrected int
 	r.mu.Lock()
+	// This read is authoritative and already in hand, so it doubles as the
+	// pane-existence cache [Recorder.paneExists] consults.
+	live := make(map[string]bool, len(states))
+	for _, s := range states {
+		if s.Pane != "" {
+			live[s.Pane] = true
+		}
+	}
+	r.live, r.liveAt = live, now
 	for _, s := range states {
 		if s.Pane == "" || s.Status == "" {
 			continue
@@ -276,6 +297,54 @@ func (r *Recorder) handle(env events.Envelope) {
 	}
 }
 
+// paneExists reports whether pane is in the authoritative live set, refreshing
+// that set when it is stale or does not contain the pane.
+//
+// The refresh-on-miss is what keeps this from swallowing real work: a genuinely
+// new pane is missing from a cached set for exactly the same reason a dead one
+// is, so a miss must be re-checked against Herdr rather than believed. A hit
+// needs no read at all, which is the steady state.
+//
+// With no reader configured (tests) everything is treated as live, so this guard
+// can never be the reason a unit test sees no entry.
+func (r *Recorder) paneExists(pane string) bool {
+	if r.agents == nil {
+		return true
+	}
+	r.mu.Lock()
+	fresh := r.now().Sub(r.liveAt) < liveTTL
+	if fresh && r.live[pane] {
+		r.mu.Unlock()
+		return true
+	}
+	if fresh {
+		// Cached, current, and this pane is not in it.
+		r.mu.Unlock()
+		return false
+	}
+	r.mu.Unlock()
+
+	// Read outside the lock: it is a socket round-trip.
+	states, err := r.agents.Agents()
+	if err != nil {
+		// Can't tell. Prefer recording a possible ghost over silently dropping a
+		// real transition — a wrong entry is visible and fixable, a missing one is
+		// not.
+		log.Warn("timeline-recorder: pane-existence read failed; recording anyway", "pane", pane, "err", err)
+		return true
+	}
+	live := make(map[string]bool, len(states))
+	for _, s := range states {
+		if s.Pane != "" {
+			live[s.Pane] = true
+		}
+	}
+	r.mu.Lock()
+	r.live, r.liveAt = live, r.now()
+	r.mu.Unlock()
+	return live[pane]
+}
+
 // record appends one transition and re-opens the pane's span.
 //
 // A repeat of the status already open is dropped. The ingester already dedupes,
@@ -290,6 +359,36 @@ func (r *Recorder) record(pane, agent, session, workspace, status string, tsMill
 	if open && prev.status == status {
 		r.mu.Unlock()
 		return
+	}
+	if !open {
+		// No open span, so this is a first sighting — and a first sighting is the
+		// one shape a REPLAYED transition can take. Herdr re-delivers recent
+		// events to a new subscriber, and nothing in the pipeline carries the
+		// original time (its subscription_event is {event, data} with no
+		// timestamp), so the bus stamps the replay with time.Now(). Recording it
+		// dates a transition from an hour ago as happening this second.
+		//
+		// That is fatal for this feature specifically: elapsed time is the only
+		// thing it knows that /snapshot does not. Worse, it repeats on every
+		// restart — observed 33 entries becoming 61, the extra 28 all for panes
+		// closed half an hour earlier — so the bounded ring fills with ghosts
+		// that evict the real history it exists to preserve.
+		//
+		// A pane that no longer exists cannot be transitioning now. Checking
+		// existence is what separates a replayed ghost from a genuinely new pane,
+		// which is otherwise indistinguishable: both are simply unknown here.
+		r.mu.Unlock()
+		if !r.paneExists(pane) {
+			return
+		}
+		r.mu.Lock()
+		// Re-read: paneExists released the lock, so another event may have opened
+		// this span while the read was in flight.
+		prev, open = r.spans[pane]
+		if open && prev.status == status {
+			r.mu.Unlock()
+			return
+		}
 	}
 	e := Entry{TS: tsMillis, Pane: pane, Agent: agent, Session: session, Workspace: workspace, To: status}
 	if open {

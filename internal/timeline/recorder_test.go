@@ -20,6 +20,21 @@ type fakeAgents struct {
 	err   error
 }
 
+// exists registers a pane as live without disturbing the configured states. A
+// pane that emits a status transition necessarily exists, and the recorder now
+// checks that before recording a first sighting (it is how a replayed ghost is
+// told from a genuinely new pane), so the fixture has to model it.
+func (f *fakeAgents) exists(pane string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.panes {
+		if p.Pane == pane {
+			return
+		}
+	}
+	f.panes = append(f.panes, PaneState{Pane: pane})
+}
+
 func (f *fakeAgents) set(states ...PaneState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -70,6 +85,7 @@ func (f *fixture) tick(d time.Duration) {
 // publishes (see internal/herdr/ingest.go).
 func (f *fixture) status(t *testing.T, d time.Duration, pane, agent, status string) {
 	t.Helper()
+	f.agents.exists(pane)
 	f.rec.handle(envelope(t, events.SourceHerdr, events.TypePaneAgentStatusChanged, at(d), map[string]any{
 		"pane_id": pane, "workspace_id": "w1", "agent": agent,
 		"agent_status": status, "session": "default",
@@ -435,4 +451,74 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// TestReplayedTransitionForDeadPaneIsDropped is the regression test for the bug
+// that made this feature actively misleading in practice.
+//
+// Herdr re-delivers recent events to a new subscriber and its subscription_event
+// carries no timestamp, so the bus stamps the replay with time.Now(). Recording
+// it dates an hour-old transition as happening this second — and it repeats on
+// every restart, so the bounded ring fills with re-dated ghosts that evict the
+// real history. Observed live: 33 entries became 61 after one restart, the extra
+// 28 all for panes closed half an hour earlier.
+//
+// A pane that no longer exists cannot be transitioning now, and that is the only
+// thing separating a ghost from a genuinely new pane.
+func TestReplayedTransitionForDeadPaneIsDropped(t *testing.T) {
+	f := newFixture(t)
+	// A pane herdr replays but which is gone: never registered as existing.
+	f.rec.handle(envelope(t, events.SourceHerdr, events.TypePaneAgentStatusChanged, at(0), map[string]any{
+		"pane_id": "w1:pDEAD", "workspace_id": "w1", "agent": "claude",
+		"agent_status": "idle", "session": "default",
+	}))
+	if got := f.log.Entries(0, ""); len(got) != 0 {
+		t.Fatalf("recorded %d entries for a pane that no longer exists: %+v", len(got), got)
+	}
+}
+
+// TestNewPaneIsStillRecorded: the guard must not swallow real work. A brand-new
+// pane is unknown to the recorder for exactly the same reason a dead one is, so
+// the check has to re-read rather than trust a cached set.
+func TestNewPaneIsStillRecorded(t *testing.T) {
+	f := newFixture(t)
+	f.status(t, 0, "w1:p1", "claude", "working") // exists → recorded
+	e := f.only(t)
+	if e.To != "working" || e.Pane != "w1:p1" {
+		t.Fatalf("first sighting of a live pane not recorded correctly: %+v", e)
+	}
+}
+
+// TestUnreadableStateRecordsAnyway: if existence cannot be determined, a real
+// transition must not be silently dropped. A wrong entry is visible and
+// correctable; a missing one is neither.
+func TestUnreadableStateRecordsAnyway(t *testing.T) {
+	f := newFixture(t)
+	f.agents.fail(errors.New("herdr socket unavailable"))
+	f.rec.handle(envelope(t, events.SourceHerdr, events.TypePaneAgentStatusChanged, at(0), map[string]any{
+		"pane_id": "w1:p9", "workspace_id": "w1", "agent": "claude",
+		"agent_status": "working", "session": "default",
+	}))
+	if got := f.log.Entries(0, ""); len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (an unreadable state must not drop a transition)", len(got))
+	}
+}
+
+// TestDeadPaneDropDoesNotBlockItsLaterReuse guards the cache: a miss must not be
+// remembered so long that a pane appearing moments later is ignored too.
+func TestDeadPaneDropDoesNotBlockItsLaterReuse(t *testing.T) {
+	f := newFixture(t)
+	f.rec.handle(envelope(t, events.SourceHerdr, events.TypePaneAgentStatusChanged, at(0), map[string]any{
+		"pane_id": "w1:p7", "workspace_id": "w1", "agent": "claude",
+		"agent_status": "idle", "session": "default",
+	}))
+	if got := f.log.Entries(0, ""); len(got) != 0 {
+		t.Fatalf("ghost recorded: %+v", got)
+	}
+	// The pane now exists, and the cached miss has aged out.
+	f.tick(liveTTL + time.Second)
+	f.status(t, liveTTL+time.Second, "w1:p7", "claude", "working")
+	if got := f.log.Entries(0, ""); len(got) != 1 {
+		t.Fatalf("len = %d, want 1 — a pane that appears after a miss must record", len(got))
+	}
 }
