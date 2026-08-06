@@ -49,11 +49,24 @@ import (
 // Scope is the OAuth scope required to send a message through the FCM v1 API.
 const Scope = "https://www.googleapis.com/auth/firebase.messaging"
 
-// LoginScopes is what `gothalo push login` asks gcloud to authorize. The
-// identity scopes are not needed to send; they exist so `push status` can report
-// WHO is authenticated instead of an anonymous "some user credential", which is
-// the difference between a useful status line and a puzzle.
-var LoginScopes = []string{Scope, "openid", "email"}
+// LoginScopes is what `gothalo push login` asks gcloud to authorize.
+//
+// cloud-platform is NOT optional padding: gcloud refuses the login outright
+// without it — "cloud-platform scope is required but not requested" — so a
+// minimal-looking scope list makes the command impossible to run rather than
+// merely under-privileged. Found by running it; nothing in the code could have
+// told us.
+//
+// The identity scopes are not needed to send either; they exist so `push
+// status` can report WHO is authenticated instead of an anonymous "some user
+// credential", which is the difference between a useful status line and a
+// puzzle.
+var LoginScopes = []string{
+	Scope,
+	"https://www.googleapis.com/auth/cloud-platform",
+	"openid",
+	"email",
+}
 
 const defaultTokenURI = "https://oauth2.googleapis.com/token"
 
