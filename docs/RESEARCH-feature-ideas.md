@@ -191,38 +191,13 @@ No code was changed — this is research and ideation only.
 
 - [x] #4 Diff/working-tree review screen — landed (`features/diff`)
 - [x] #7 Quick-commands/snippets above composer — landed (`quick_commands_providers.dart`)
-- [ ] #9 Image/screenshot into prompt — **in progress**, branch `feat/image-to-agent` (2026-08-05)
+- [x] #9 Image/screenshot into prompt — landed (#85)
+- [x] #11 Subagent view in the transcript — landed, bridge side (#86)
+- [x] #10 Start/restart/stop an agent — landed (#87). One-shot launch only; saved
+  launch profiles and rename/clear deliberately left out. See
+  [`CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md) — including the
+  settling races found only by running it against a live Herdr and a real phone,
+  none of which were visible to review.
 - [ ] #8 Recent-activity timeline — **in progress**, branch `feat/activity-timeline` (2026-08-05)
-- [ ] #10 Start/restart/stop an agent — **in progress**, branch `feat/agent-lifecycle` (2026-08-05)
-- [ ] #11 Subagent view in the transcript — queued (2026-08-05)
 - [ ] Slash-command typeahead in the composer — queued (2026-08-05)
 - [ ] Copy from the transcript screen — queued, small (2026-08-05)
-
-Decided against / deferred (2026-08-05):
-
-- **Audit log of phone writes** — rejected; won't be used. Both merino and
-  herdr-remote ship one, but this is a small trusted team on a private tailnet.
-- **Bridge self-update** — deferred until there is release wiring to hang it on.
-- **Telegram bot** (herdr-remote) — skipped deliberately: it exists there because
-  they could not ship native push. gothalo has FCM/APNs.
-- **Codex transcripts** — deferred until there is a Codex subscription and a
-  machine with real `~/.codex` rollout files. The format must be read off a live
-  machine, not guessed; see the stub comment in `internal/transcript/codex.go`.
-- **`GOTHALO_MODE=relay`** — keeping the stub as-is by decision, not oversight.
-
-### Second competitive sweep (2026-08-05) — Herdr-specific clients
-
-Four Herdr-specific projects, none of which existed at the first sweep:
-
-| Project | Shape | Notable |
-|---|---|---|
-| [herdr-remote](https://github.com/dcolinmorgan/herdr-remote) (186★) | Python relay + native macOS + Telegram | agent timeline, digests, web push w/ auto-clear, 11 themes |
-| [herdr-mobile-relay](https://github.com/0cv/herdr-mobile-relay) (27★) | Go+Node PWA, per-machine relay | multi-machine merge, 3 terminal fit modes, screenshots→agent, self-update w/ rollback, E2EE |
-| [merino](https://github.com/LoneExile/merino) (5★) | Go+Wails menu bar + phone dashboard | inline Kitty images, slash-command typeahead, launch-agent button, audit log |
-| [herdr-tether](https://github.com/moneycaringcoder/herdr-tether) (5★) | Rust plugin, tmux+SSH | durable sessions — orthogonal, potentially complementary |
-
-They converge on the same three primitives gothalo already has: list agents
-blocked-first, stream a pane, tap to approve. **None of them reads agent
-transcripts** — they all show terminal output only. Combined with native APNs
-push and a tailnet-only transport (two of the three route terminal traffic
-through Cloudflare), that remains the differentiated core worth protecting.

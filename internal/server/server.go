@@ -84,6 +84,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/image", s.handleImage)
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
+	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
+	mux.HandleFunc("/agent/start", s.handleAgentStart)
+	mux.HandleFunc("/agent/restart", s.handleAgentRestart)
+	mux.HandleFunc("/agent/stop", s.handleAgentStop)
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
@@ -310,7 +314,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //
 //	1 — server identity (/info), notification rework, /events heartbeat.
 //	2 — POST /image: attach a screenshot to a prompt.
-const BridgeVersion = 2
+//	3 — agent lifecycle: /agents/available, /agent/start, /agent/restart,
+//	    /agent/stop. The app still gates its launch UI on /agents/available
+//	    answering with kinds rather than on this number — a bridge can be v3 and
+//	    still have nothing installed to launch — so this records the capability
+//	    without being the thing that unlocks it.
+const BridgeVersion = 3
 
 // GET /info -> this bridge's identity and capability level.
 //

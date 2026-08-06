@@ -27,6 +27,67 @@ class NewPaneResult {
   final String workspaceId;
 }
 
+/// One agent kind this host can actually launch, from `GET /agents/available`.
+///
+/// The list is discovered on the bridge (Herdr's kind catalog ∩ what resolves on
+/// PATH), never assembled here — the app must not offer a kind that isn't
+/// installed, and it has no way to know what is.
+class AvailableAgent {
+  const AvailableAgent({
+    required this.kind,
+    required this.path,
+    required this.stateReporting,
+  });
+
+  /// Herdr's kind id — `claude`, `codex`, `opencode`… Also the executable name.
+  final String kind;
+
+  /// Where the executable was found on the host. Shown as the reassurance that
+  /// "installed" is a fact about that machine, not a guess.
+  final String path;
+
+  /// Whether Herdr can classify this kind's state. False means it will run but
+  /// never leave `unknown` — no idle/working/blocked, so no push, no approval
+  /// bar. Worth warning about before launch, not after.
+  final bool stateReporting;
+
+  factory AvailableAgent.fromJson(Map<String, dynamic> j) => AvailableAgent(
+        kind: (j['kind'] as String?) ?? '',
+        path: (j['path'] as String?) ?? '',
+        stateReporting: j['state_reporting'] == true,
+      );
+}
+
+/// The outcome of `POST /agent/start` — enough to navigate straight to the new
+/// agent without re-reading the snapshot first.
+class StartAgentResult {
+  const StartAgentResult({
+    required this.paneId,
+    required this.kind,
+    required this.name,
+    required this.promptSent,
+  });
+
+  /// Session-qualified, so it addresses `/transcript`, `/attach` and `/send`
+  /// directly.
+  final String paneId;
+  final String kind;
+
+  /// The agent's Herdr name, minted by the bridge when the caller gave none.
+  final String name;
+
+  /// False when no opening prompt was asked for — and also when one was asked
+  /// for but didn't land. The agent is up either way; the prompt is not.
+  final bool promptSent;
+
+  factory StartAgentResult.fromJson(Map<String, dynamic> j) => StartAgentResult(
+        paneId: (j['pane_id'] as String?) ?? '',
+        kind: (j['kind'] as String?) ?? '',
+        name: (j['name'] as String?) ?? '',
+        promptSent: j['prompt_sent'] == true,
+      );
+}
+
 /// One changed file from `GET /diff` — a unified diff for this file alone,
 /// plus enough metadata to render a file-list row without parsing the diff.
 class DiffFile {
@@ -476,6 +537,138 @@ class BridgeClient {
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
+  }
+
+  /// `GET /agents/available` → the agent kinds this host can actually launch.
+  ///
+  /// Empty is a meaningful answer and never an error: a bridge older than the
+  /// lifecycle endpoints 404s, and a host with no agents installed answers an
+  /// empty list. Both mean the same thing to the UI — don't offer to start one —
+  /// so both collapse to `[]` here rather than making every caller branch.
+  Future<List<AvailableAgent>> availableAgents() async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>('/agents/available');
+      final agents = (res.data ?? const {})['agents'];
+      if (agents is! List) return const [];
+      return agents
+          .whereType<Map>()
+          .map((a) => AvailableAgent.fromJson(Map<String, dynamic>.from(a)))
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return const [];
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /agent/start` → launch [kind] and return where it landed.
+  ///
+  /// Exactly one target: [paneId] reuses an existing idle shell pane,
+  /// [splitFrom] splits one, [workspaceId] opens a new tab. [cwd] must be an
+  /// absolute, existing directory (the bridge validates and rejects otherwise)
+  /// and is only accepted for the two creating forms — an existing pane keeps
+  /// its own directory. [prompt] is submitted as the agent's first message.
+  Future<StartAgentResult> startAgent({
+    required String kind,
+    String? paneId,
+    String? splitFrom,
+    String? workspaceId,
+    String? direction,
+    String? label,
+    String? cwd,
+    String? prompt,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/agent/start',
+        data: {
+          'kind': kind,
+          if (paneId != null && paneId.isNotEmpty) 'pane_id': paneId,
+          if (splitFrom != null && splitFrom.isNotEmpty) 'split_from': splitFrom,
+          if (workspaceId != null && workspaceId.isNotEmpty)
+            'workspace_id': workspaceId,
+          if (direction != null && direction.isNotEmpty) 'direction': direction,
+          if (label != null && label.isNotEmpty) 'label': label,
+          if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+          if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
+        },
+        options: _launchOptions,
+      );
+      final body = res.data ?? const <String, dynamic>{};
+      final result = StartAgentResult.fromJson(body);
+      if (result.paneId.isEmpty) {
+        throw BridgeException('Bridge did not return a pane for the new agent');
+      }
+      return result;
+    } on DioException catch (e) {
+      throw _asLaunchException(e);
+    }
+  }
+
+  /// `POST /agent/restart {pane_id}` → stop the agent in [paneId] and start the
+  /// same kind again in the same pane and directory.
+  ///
+  /// Destructive: the running turn is killed and the replacement starts with no
+  /// conversation history. Confirm before calling.
+  Future<void> restartAgent(String paneId, {String? prompt}) async {
+    try {
+      await _dio.post<dynamic>(
+        '/agent/restart',
+        data: {
+          'pane_id': paneId,
+          if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
+        },
+        options: _launchOptions,
+      );
+    } on DioException catch (e) {
+      throw _asLaunchException(e);
+    }
+  }
+
+  /// `POST /agent/stop {pane_id}` → quit the agent in [paneId], leaving the pane
+  /// open at a shell prompt.
+  ///
+  /// Destructive: whatever it was doing is interrupted. The bridge only answers
+  /// `200` once it has *observed* the pane back at its prompt — a `409` means the
+  /// agent ignored the interrupts and is still running, so treat it as "not
+  /// stopped", never as a slow success. Confirm before calling.
+  Future<void> stopAgent(String paneId) async {
+    try {
+      await _dio.post<dynamic>(
+        '/agent/stop',
+        data: {'pane_id': paneId},
+        options: _launchOptions,
+      );
+    } on DioException catch (e) {
+      throw _asLaunchException(e);
+    }
+  }
+
+  /// The lifecycle endpoints are the only ones that legitimately take tens of
+  /// seconds: Herdr blocks a start until it has *verified* the agent is up, and
+  /// blocks a stop until the pane is back at its shell. The default 8s receive
+  /// timeout would abort those mid-flight and report a failure for a launch that
+  /// then succeeds on the host — the worst possible outcome, since the app would
+  /// show an error next to a real running agent.
+  static final _launchOptions = Options(
+    receiveTimeout: const Duration(seconds: 120),
+    sendTimeout: const Duration(seconds: 30),
+  );
+
+  /// Lifecycle failures are explained in the bridge's plain-text body — "cwd
+  /// does not exist: /nope", "pane w1:p3 is busy running npm run dev", "the
+  /// claude agent did not exit within 12s and is still running". Those sentences
+  /// are the whole value of the response, and the generic mapper would throw
+  /// them away for "Bridge request failed", so this prefers the body and falls
+  /// back to the generic mapping when there isn't one.
+  BridgeException _asLaunchException(DioException e) {
+    final data = e.response?.data;
+    if (data is String) {
+      final message = data.trim();
+      if (message.isNotEmpty && message.length <= 400) {
+        return BridgeException(message, statusCode: e.response?.statusCode);
+      }
+    }
+    return _asBridgeException(e);
   }
 
   /// `POST /register-token {token}` → registers this device's FCM token so the

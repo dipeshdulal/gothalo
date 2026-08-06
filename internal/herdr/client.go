@@ -148,6 +148,11 @@ type Agent struct {
 	PaneID    string `json:"pane_id"`
 	Title     string `json:"terminal_title_stripped"`
 	Workspace string `json:"workspace_id"`
+	// Name is the agent's Herdr label, set at `agent.start` time and empty for an
+	// agent someone launched by hand. A restart reuses it so the operator's own
+	// name for a pane survives — Herdr releases the name when the agent exits, so
+	// the same one is free again by the time the replacement starts.
+	Name string `json:"name"`
 	// Cwd is the agent's working directory — the project root the transcript file
 	// is keyed under (see internal/transcript.Locate).
 	Cwd string `json:"cwd"`
