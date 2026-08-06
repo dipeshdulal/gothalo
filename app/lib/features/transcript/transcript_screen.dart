@@ -94,6 +94,30 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   bool _sawBacklogComplete = false; // latched: don't re-spin on reconnect
   bool _pinnedToBottom = true;
 
+  /// The transcript session the frames we hold belong to, from `hello`.
+  ///
+  /// A pane is not one session for life: `/clear`, `/new`, `/resume` or a
+  /// restarted agent start a fresh one, and the bridge re-points this socket at
+  /// it (protocol 4). `seq` is absolute *within* a session and restarts at 1, so
+  /// carrying entries across that boundary is not merely stale — the new
+  /// session's entries would collide with the old ones and be silently dropped
+  /// by the seq de-dupe. Hence: session id changes → drop everything and rebuild
+  /// from the backlog that follows. Null until the first `hello`.
+  String? _sessionId;
+
+  /// The session a `session_changed` frame said we are moving to, held until its
+  /// `hello` arrives (a separate frame, so a separate message) — announcing on
+  /// `session_changed` alone would explain a wipe the user has not seen yet.
+  /// Null when no rotation is in flight.
+  ///
+  /// It is not what triggers the reset; that hangs off the session id in
+  /// `hello`, which also catches a rotation that happened while the socket was
+  /// down and there was no one to send `session_changed` to.
+  String? _rotatingTo;
+
+  /// Latched when a rotation has been applied, cleared by showing the notice.
+  bool _announceNewSession = false;
+
   /// Set the first time the backlog finishes so the very next layout jumps to
   /// the newest entry (standard chat open-at-bottom). Consumed once; after that
   /// the ordinary pinned-to-bottom rule takes over.
@@ -720,6 +744,14 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         _maybeAutoScroll();
       }
     }
+    // Fires in the same message batch as the reset (see [_rotatingTo]), so the
+    // notice lands with the wipe rather than ahead of it.
+    if (_announceNewSession && mounted) {
+      _announceNewSession = false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Agent started a new session')),
+      );
+    }
   }
 
   /// Apply one decoded frame. Returns true when it changed what we render.
@@ -727,11 +759,29 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     switch (frame.type) {
       case TranscriptFrameType.hello:
         final h = frame.hello;
-        if (h != null) {
-          _oldestSeq = h.oldestLoadedSeq;
-          _hasOlder = h.hasOlder;
-          _anchorSeq = h.oldestLoadedSeq; // fix the center at the first page
+        if (h == null) return false;
+        // A hello for a different session than the one we hold — either mid-socket
+        // (the bridge followed the pane onto a new session) or on reconnect (it
+        // rotated while we were down). Both mean the entries below are from a
+        // conversation that no longer exists here.
+        final rotated =
+            _sessionId != null &&
+            h.sessionId.isNotEmpty &&
+            h.sessionId != _sessionId;
+        if (h.sessionId.isNotEmpty) _sessionId = h.sessionId;
+        if (rotated) {
+          _clearForNewSession();
+          _announceNewSession = _rotatingTo == h.sessionId;
         }
+        _rotatingTo = null;
+        _oldestSeq = h.oldestLoadedSeq;
+        _hasOlder = h.hasOlder;
+        _anchorSeq = h.oldestLoadedSeq; // fix the center at the first page
+        return rotated;
+
+      case TranscriptFrameType.sessionChanged:
+        // Informational: the reset itself is driven by the hello that follows.
+        _rotatingTo = frame.toSessionId;
         return false;
       case TranscriptFrameType.pageComplete:
         if (frame.oldestLoadedSeq > 0) _oldestSeq = frame.oldestLoadedSeq;
@@ -761,6 +811,26 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       case TranscriptFrameType.unknown:
         return false;
     }
+  }
+
+  /// Drop everything tied to the session we were following, so the backlog that
+  /// follows a rotation rebuilds the view from scratch. Called from [_ingest]
+  /// (already inside the frame batch that ends in `setState`), so it does not
+  /// set state itself.
+  ///
+  /// The pagination cursor and the centre anchor are reset by the same `hello`;
+  /// what is cleared here is everything keyed on the *old* session's seq/tool
+  /// ids, plus the backlog latches so the new page settles to the bottom exactly
+  /// as a fresh open does.
+  void _clearForNewSession() {
+    _bySeq.clear();
+    _ordered = const [];
+    _resultsByForId.clear();
+    _pending.clear();
+    _loadingOlder = false;
+    _backlogComplete = false;
+    _sawBacklogComplete = false;
+    _pinnedToBottom = true;
   }
 
   void _rebuildOrdered() {

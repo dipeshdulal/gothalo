@@ -24,8 +24,16 @@ const transcriptPollInterval = 250 * time.Millisecond
 // client can detect an incompatible framing without guessing. Bumped to 2 when
 // the backlog became paginated (newest page + load_older) and inbound control
 // frames stopped being end-of-stream; to 3 when hello gained the session's
-// subagent roster and ?subagent= let a client stream a delegated conversation.
-const transcriptProtocol = 3
+// subagent roster and ?subagent= let a client stream a delegated conversation;
+// to 4 when hello stopped being once-per-socket (a session rotation re-sends
+// session_changed + hello + backlog).
+const transcriptProtocol = 4
+
+// transcriptSessionPollInterval is how often the stream re-reads the pane's agent
+// session id to notice a rotation. Slower than the tail poll because it is a
+// round-trip to the Herdr socket, and starting a new session is a human-scale
+// event — a second or two of the old transcript is not worth a chattier poll.
+const transcriptSessionPollInterval = 2 * time.Second
 
 // transcriptNewestPage is how many newest normalized entries the backlog sends on
 // connect. Small enough for a cheap mobile connect; older history is fetched on
@@ -70,6 +78,21 @@ type helloFrame struct {
 	Subagents []transcript.Subagent `json:"subagents,omitempty"`
 }
 
+// sessionChangedFrame announces that the pane's agent started a NEW session and
+// this socket has re-pointed at it. It is followed by a fresh hello, the new
+// session's backlog and a backlog_complete — byte for byte what a client gets on
+// connect — so the whole rotation is handled without a reconnect.
+//
+// A client MUST discard everything it has buffered when it sees this: seq is
+// absolute WITHIN a session, so the new session restarts at 1 and its entries
+// would otherwise collide with (and be de-duped against) the old ones.
+type sessionChangedFrame struct {
+	Type string `json:"type"` // "session_changed"
+	Pane string `json:"pane"`
+	From string `json:"from"` // the session id this socket was following
+	To   string `json:"to"`   // the session id it now follows
+}
+
 // loadOlderFrame is the one client→server control frame: fetch the page of history
 // immediately older than BeforeSeq (up to Limit entries).
 type loadOlderFrame struct {
@@ -112,6 +135,25 @@ type backlogCompleteFrame struct {
 //	entry (live:false) ×N — the newest page, oldest→newest (~transcriptNewestPage)
 //	backlog_complete      — boundary marker
 //	entry (live:true)  …  — new entries as the agent appends them, forever
+//
+// The socket also FOLLOWS THE PANE ACROSS SESSIONS. An agent's session id is not
+// fixed for the life of a pane: /clear, /new, /resume or a restarted agent all
+// rotate it, and the old transcript file then stops growing — a socket pinned to
+// the file it resolved at connect just goes silent, which reads as a hung app.
+// So the stream re-reads the pane's session id every transcriptSessionPollInterval
+// and, when it changes, reopens on the new session and replays the opening
+// sequence in place:
+//
+//	session_changed  — {from, to}: discard everything buffered
+//	hello            — now carrying the NEW session_id
+//	entry (live:false) ×N + backlog_complete — the new session's newest page
+//
+// after which the live tail resumes against the new session. Detection is on the
+// session ID, not on watching for a "/new" being typed, so it fires however the
+// session was started — from the app, from the keyboard at the machine, or by the
+// agent itself. A ?subagent= stream is exempt: it is one delegated conversation
+// belonging to the session that spawned it, and following a rotation would swap
+// the user onto a different conversation than the one they opened.
 //
 // Backlog is PAGINATED: only the newest transcriptNewestPage entries are sent on
 // connect. To read older history the client sends a control frame over the same
@@ -198,7 +240,8 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	defer src.Close()
+	stream := &transcriptStream{src: src, sessionID: agent.SessionID()}
+	defer stream.Close()
 
 	// The roster is advisory: a session that delegated nothing, or a kind with no
 	// subagent concept, yields an empty list. A failure here must not cost the
@@ -214,7 +257,7 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 	// This also arms the source's read cursor, so the live tail below resumes
 	// exactly where this page ended. Entries carry their absolute seq, so the
 	// page's oldest seq is a real cursor into the session.
-	backlog, err := src.Backlog(transcriptNewestPage)
+	backlog, err := stream.Backlog(transcriptNewestPage)
 	if err != nil {
 		log.Error("agent-transcript: backlog read failed", "pane", pane, "kind", agent.Kind, "err", err)
 		http.Error(w, "read transcript failed", http.StatusInternalServerError)
@@ -267,7 +310,7 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 				cancel()
 				return
 			}
-			if err := serveOlder(ctx, src, pane, ctrl, send); err != nil {
+			if err := serveOlder(ctx, stream, pane, ctrl, send); err != nil {
 				cancel()
 				return
 			}
@@ -277,46 +320,72 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 	log.Info("agent-transcript: streaming", "pane", pane, "kind", agent.Kind,
 		"page", len(backlog.Entries), "total", backlog.Total, "has_older", backlog.HasMore)
 
-	if err := send(helloFrame{
-		Type:            "hello",
-		Protocol:        transcriptProtocol,
-		Pane:            pane,
-		AgentKind:       agent.Kind,
-		SessionID:       agent.SessionID(),
-		BacklogCount:    len(backlog.Entries),
-		Total:           backlog.Total,
-		HasMore:         backlog.HasMore,
-		OldestLoadedSeq: backlog.OldestSeq,
-		HasOlder:        backlog.HasMore,
-		Subagent:        sub,
-		Subagents:       subagents,
-	}); err != nil {
-		return
+	opening := transcriptOpening{
+		pane:      pane,
+		kind:      agent.Kind,
+		sessionID: stream.SessionID(),
+		subagent:  sub,
+		subagents: subagents,
 	}
-
-	for i := range backlog.Entries {
-		if err := send(entryFrame{Type: "entry", Live: false, Entry: &backlog.Entries[i]}); err != nil {
-			return
-		}
-	}
-	if err := send(backlogCompleteFrame{Type: "backlog_complete", Count: len(backlog.Entries), HasMore: backlog.HasMore}); err != nil {
+	if err := sendOpening(send, opening, backlog); err != nil {
 		return
 	}
 
 	// Live tail: poll the source, stream each new normalized entry. seq continues
 	// from Total (the newest entry's absolute seq), so new entries keep the same
 	// absolute cursor as the backlog page.
+	//
+	// The second ticker watches for the pane's agent starting a NEW session and
+	// re-points this socket at it (see the header comment). seq restarts with it,
+	// because it is absolute within a session.
+	//
+	// A ?subagent= stream does NOT follow rotations: it is one delegated
+	// conversation belonging to the session that spawned it, and that transcript
+	// is complete in itself. Re-pointing it at the new session's root transcript
+	// would silently swap the user onto a different conversation than the one
+	// they drilled into. A nil channel here simply never fires.
 	seq := backlog.Total
 	ticker := time.NewTicker(transcriptPollInterval)
 	defer ticker.Stop()
+	var sessionTick <-chan time.Time
+	if sub == "" {
+		sessionTicker := time.NewTicker(transcriptSessionPollInterval)
+		defer sessionTicker.Stop()
+		sessionTick = sessionTicker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("agent-transcript: closed", "pane", pane)
 			conn.Close(websocket.StatusNormalClosure, "")
 			return
+		case <-sessionTick:
+			next, ok := s.rotatedSession(c, bare, pane, stream.SessionID())
+			if !ok {
+				continue
+			}
+			// Read the new session's opening page BEFORE swapping: a failure here
+			// leaves the socket on the old session (still live, still tailing)
+			// rather than on a half-open new one, and the next tick retries.
+			nextBacklog, err := next.src.Backlog(transcriptNewestPage)
+			if err != nil {
+				log.Warn("agent-transcript: new-session backlog failed", "pane", pane,
+					"session", next.sessionID, "err", err)
+				_ = next.src.Close()
+				continue
+			}
+			from := stream.Swap(next.src, next.sessionID)
+			log.Info("agent-transcript: session rotated", "pane", pane, "from", from,
+				"to", next.sessionID, "page", len(nextBacklog.Entries), "total", nextBacklog.Total)
+			if err := send(sessionChangedFrame{Type: "session_changed", Pane: pane, From: from, To: next.sessionID}); err != nil {
+				return
+			}
+			if err := sendOpening(send, next.opening(pane), nextBacklog); err != nil {
+				return
+			}
+			seq = nextBacklog.Total
 		case <-ticker.C:
-			ents, err := src.Poll()
+			ents, err := stream.Poll()
 			if err != nil {
 				// Transient (store briefly unavailable, e.g. a file rotation or a
 				// locked database); keep polling.
@@ -334,13 +403,182 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// transcriptOpening is the identity half of a hello — everything the frame says
+// about the conversation, as opposed to the backlog page it introduces. It is a
+// struct because a rotation has to reproduce all of it for the new session, and
+// a five-string parameter list is where "kind" and "sessionID" get swapped.
+type transcriptOpening struct {
+	pane      string
+	kind      string
+	sessionID string
+	subagent  string
+	subagents []transcript.Subagent
+}
+
+// sendOpening writes the three frames that open a session on this socket: hello,
+// the backlog page oldest→newest, then backlog_complete. It runs both on connect
+// and after a session rotation — the client's handling of a new session is
+// therefore identical to its handling of a fresh connect, which is the point.
+func sendOpening(send func(any) error, op transcriptOpening, backlog transcript.Backlog) error {
+	if err := send(helloFrame{
+		Type:            "hello",
+		Protocol:        transcriptProtocol,
+		Pane:            op.pane,
+		AgentKind:       op.kind,
+		SessionID:       op.sessionID,
+		BacklogCount:    len(backlog.Entries),
+		Total:           backlog.Total,
+		HasMore:         backlog.HasMore,
+		OldestLoadedSeq: backlog.OldestSeq,
+		HasOlder:        backlog.HasMore,
+		Subagent:        op.subagent,
+		Subagents:       op.subagents,
+	}); err != nil {
+		return err
+	}
+	for i := range backlog.Entries {
+		if err := send(entryFrame{Type: "entry", Live: false, Entry: &backlog.Entries[i]}); err != nil {
+			return err
+		}
+	}
+	return send(backlogCompleteFrame{Type: "backlog_complete", Count: len(backlog.Entries), HasMore: backlog.HasMore})
+}
+
+// openedSession is a transcript opened on a session the socket has not adopted
+// yet — returned by rotatedSession so the caller can read its first page before
+// committing to it.
+type openedSession struct {
+	src       transcript.Source
+	sessionID string
+	kind      string
+	subagents []transcript.Subagent
+}
+
+// opening is the hello identity for this session. The subagent field is always
+// empty: a ?subagent= stream never rotates (see the live tail), so a rotation is
+// by construction a root transcript.
+func (o openedSession) opening(pane string) transcriptOpening {
+	return transcriptOpening{
+		pane:      pane,
+		kind:      o.kind,
+		sessionID: o.sessionID,
+		subagents: o.subagents,
+	}
+}
+
+// rotatedSession reports whether the pane's agent is now on a session other than
+// current and, if so, returns that session opened and ready to read.
+//
+// Everything here is deliberately quiet: this runs on a timer against a live
+// socket, so an agent that has momentarily vanished, a Herdr blip, or a session
+// whose transcript is not resolvable yet must leave the existing stream alone and
+// let the next tick try again. Only a genuine, openable rotation returns ok.
+func (s *Server) rotatedSession(c *herdr.Client, bare, pane, current string) (openedSession, bool) {
+	agent, err := c.Get(bare)
+	if err != nil {
+		// The agent may be gone for good (the pane closed), but tearing the socket
+		// down here is not this function's job: the client's own reconnect path
+		// already checks whether the pane still exists.
+		log.Debug("agent-transcript: session check failed", "pane", pane, "err", err)
+		return openedSession{}, false
+	}
+	next := agent.SessionID()
+	// An empty id is "Herdr does not know yet", not "the session ended" — holding
+	// the current stream is strictly better than dropping to the newest-file
+	// fallback, which can resolve to another pane's conversation.
+	if next == "" || next == current {
+		return openedSession{}, false
+	}
+	src, err := transcript.Open(agent.Kind, agent.Cwd, next)
+	if err != nil {
+		// Not yet resolvable (or the new kind has no transcript support). Stay put;
+		// the next tick retries. Claude's opener already handles the common case —
+		// a named session whose file has not been written yet — by pointing at
+		// where the file will be, so this is genuinely the unusual path.
+		log.Debug("agent-transcript: new session not openable yet", "pane", pane,
+			"session", next, "kind", agent.Kind, "err", err)
+		return openedSession{}, false
+	}
+	// The roster belongs to the session, so a rotation invalidates the one hello
+	// already sent. A fresh session has usually delegated nothing yet, which is
+	// exactly why it must be re-read rather than carried over. Advisory as on
+	// connect: a discovery failure costs the roster, not the transcript.
+	subagents, err := transcript.Subagents(agent.Kind, agent.Cwd, next)
+	if err != nil {
+		log.Warn("agent-transcript: subagent discovery failed for new session", "pane", pane,
+			"session", next, "kind", agent.Kind, "err", err)
+		subagents = nil
+	}
+	return openedSession{src: src, sessionID: next, kind: agent.Kind, subagents: subagents}, true
+}
+
+// transcriptStream is the session a socket is currently following: its open
+// Source plus that session's id. It exists because the session can rotate under a
+// live socket, so "the source" is no longer a value the handler can close over —
+// the live tail (connection goroutine) and load_older (read goroutine) both reach
+// for it while the tail may be swapping it out.
+//
+// The mutex is held across the underlying call rather than just around the field
+// read, so a swap can never close a Source that another goroutine is mid-read on.
+// Older is the slow one, and it briefly delays a tail poll; that is the right
+// trade for not handing back entries from a closed source.
+type transcriptStream struct {
+	mu        sync.Mutex
+	src       transcript.Source
+	sessionID string
+}
+
+// SessionID returns the id of the session currently being followed.
+func (t *transcriptStream) SessionID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sessionID
+}
+
+// Swap adopts src as the followed session, closing the one it replaces, and
+// returns the id of that previous session.
+func (t *transcriptStream) Swap(src transcript.Source, sessionID string) (previous string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	old := t.src
+	previous, t.src, t.sessionID = t.sessionID, src, sessionID
+	if old != nil {
+		_ = old.Close()
+	}
+	return previous
+}
+
+func (t *transcriptStream) Backlog(cap int) (transcript.Backlog, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.src.Backlog(cap)
+}
+
+func (t *transcriptStream) Older(beforeSeq, limit int) (transcript.OlderPage, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.src.Older(beforeSeq, limit)
+}
+
+func (t *transcriptStream) Poll() ([]transcript.Entry, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.src.Poll()
+}
+
+func (t *transcriptStream) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.src.Close()
+}
+
 // serveOlder handles one load_older control frame: it reads the page of entries
 // immediately older than before_seq (bounded, streaming) and writes them as
 // live:false entry frames oldest→newest, then a page_complete frame carrying the
 // new oldest_loaded_seq + has_older. A read failure is non-fatal to the socket —
 // it is logged and reported as an empty page — so a bad cursor never tears down
 // the live tail. It returns a non-nil error only when a socket write fails.
-func serveOlder(ctx context.Context, src transcript.Source, pane string, req loadOlderFrame, send func(any) error) error {
+func serveOlder(ctx context.Context, stream *transcriptStream, pane string, req loadOlderFrame, send func(any) error) error {
 	limit := req.Limit
 	if limit <= 0 {
 		limit = transcriptDefaultOlderLimit
@@ -349,7 +587,7 @@ func serveOlder(ctx context.Context, src transcript.Source, pane string, req loa
 		limit = transcriptMaxOlderLimit
 	}
 
-	page, err := src.Older(req.BeforeSeq, limit)
+	page, err := stream.Older(req.BeforeSeq, limit)
 	if err != nil {
 		log.Warn("agent-transcript: load_older read failed", "pane", pane, "before_seq", req.BeforeSeq, "err", err)
 		page = transcript.OlderPage{} // empty page; keep the socket alive
