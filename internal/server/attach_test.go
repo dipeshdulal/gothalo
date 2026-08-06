@@ -33,7 +33,7 @@ func TestCRLFAndRepaint(t *testing.T) {
 	})
 
 	t.Run("the seed carries no clear-screen", func(t *testing.T) {
-		// What attachPaneStream writes for the history seed. A clear here would
+		// What runPaneStream writes for the history seed. A clear here would
 		// erase the client's viewport at the moment the seed lands, and — worse
 		// — anything the client had already scrolled to.
 		got := crlf([]byte("old line\nolder line\n"))
@@ -41,4 +41,57 @@ func TestCRLFAndRepaint(t *testing.T) {
 			t.Errorf("seed = %q, must not contain an erase-display", got)
 		}
 	})
+}
+
+// The kind watcher filters a global subscription down to one pane, and Herdr
+// puts the pane id in two different places depending on the event: at the top
+// level on the agent events, nested under "pane" on the structural ones. Miss
+// either shape and a backend swap is silently never noticed.
+func TestMentionsPane(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"top-level pane_id (pane.agent_detected)", `{"pane_id":"w1:p1","agent":"claude"}`, true},
+		{"nested pane_id (pane.updated)", `{"pane":{"pane_id":"w1:p1","agent":""}}`, true},
+		{"the departure signal, which carries no agent", `{"pane_id":"w1:p1","agent":"","agent_status":"unknown"}`, true},
+		{"another pane", `{"pane_id":"w1:p9"}`, false},
+		{"another pane, nested", `{"pane":{"pane_id":"w1:p9"}}`, false},
+		{"no pane id at all", `{"workspace_id":"w1"}`, false},
+		{"not an object", `["w1:p1"]`, false},
+		{"malformed", `{`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mentionsPane([]byte(tc.data), "w1:p1"); got != tc.want {
+				t.Errorf("mentionsPane(%s) = %v, want %v", tc.data, got, tc.want)
+			}
+		})
+	}
+}
+
+// The cheap skip in the kind watcher rests entirely on this: a payload naming
+// an agent proves one is present, while an empty name proves nothing (the
+// departure signal and a trailing pane.updated both carry one). Treat an empty
+// name as "agent present" and a departure is skipped and never noticed.
+func TestNamesAgent(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"agent named at the top level", `{"pane_id":"w1:p1","agent":"claude"}`, true},
+		{"agent named under pane", `{"pane":{"pane_id":"w1:p1","agent":"codex"}}`, true},
+		{"the departure signal", `{"pane_id":"w1:p1","agent":"","agent_status":"unknown"}`, false},
+		{"no agent field at all", `{"pane_id":"w1:p1"}`, false},
+		{"malformed", `{`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := namesAgent([]byte(tc.data)); got != tc.want {
+				t.Errorf("namesAgent(%s) = %v, want %v", tc.data, got, tc.want)
+			}
+		})
+	}
 }

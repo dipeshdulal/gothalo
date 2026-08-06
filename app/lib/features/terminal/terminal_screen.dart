@@ -168,12 +168,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 
       _sub = channel.stream.listen(
         (message) {
-          // The contract is binary-only. Text frames would have closed the
-          // socket server-side; guard anyway so a stray frame can't crash us.
+          // Binary frames are terminal bytes; text frames are out-of-band
+          // control messages from the bridge (see [_handleControl]).
           if (message is List<int>) {
             _decoder?.add(message);
           } else if (message is String) {
-            terminal.write(message);
+            _handleControl(message);
           }
         },
         onDone: _handleDrop,
@@ -183,6 +183,54 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     } catch (_) {
       _handleDrop();
     }
+  }
+
+  /// A text frame is an out-of-band control message from the bridge. The only
+  /// one today is `{"type":"mode","agent":bool}`, sent when the pane's occupant
+  /// changed and the bridge swapped the backend feeding this same socket —
+  /// typing `claude` into a plain shell, or that agent exiting back to it.
+  ///
+  /// Anything that isn't a JSON object is written through rather than dropped:
+  /// terminal bytes are supposed to arrive as binary frames, but losing output
+  /// is worse than rendering a stray one.
+  void _handleControl(String message) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(message);
+    } catch (_) {
+      decoded = null;
+    }
+    if (decoded is! Map) {
+      terminal.write(message);
+      return;
+    }
+    if (decoded['type'] == 'mode') {
+      _resetTerminal();
+      // The next backend paints from scratch, and an agent PTY starts at the
+      // default 80×24 — onResize only fires on *change*, so tell it our real
+      // geometry the way a fresh connection does.
+      _pendingCols = terminal.viewWidth;
+      _pendingRows = terminal.viewHeight;
+      _flushResize();
+    }
+  }
+
+  /// Wipe the emulator between backends. The two streams are different shapes
+  /// of output — an agent's alt-screen TUI versus whole-frame repaints of a
+  /// plain shell — and one's leftovers corrupt the other: an alt-screen that
+  /// was never exited leaves every following frame painting into a buffer the
+  /// user cannot scroll back through.
+  void _resetTerminal() {
+    if (terminal.isUsingAltBuffer) {
+      terminal.useMainBuffer();
+    }
+    terminal.buffer.clear();
+    terminal.write('\x1b[H'); // cursor home; clear() only refills the lines
+    // A swap can split a multi-byte sequence across the two streams, so the
+    // decoder starts fresh too.
+    _decoder = const Utf8Decoder(
+      allowMalformed: true,
+    ).startChunkedConversion(_TerminalSink(terminal));
   }
 
   /// Socket closed or failed to open. Before reconnecting, find out whether the
