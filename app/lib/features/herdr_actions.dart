@@ -232,46 +232,8 @@ Future<bool> restartAgent(
       successMessage: '$kind restarted');
 }
 
-/// Prompt for a branch name and create a new git worktree off [cwd]'s repo.
-Future<void> newWorktreeDialog(
-  BuildContext context,
-  WidgetRef ref, {
-  required String cwd,
-  required String repoLabel,
-}) async {
-  final controller = TextEditingController();
-  final branch = await showDialog<String>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text('New worktree in $repoLabel'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        decoration: const InputDecoration(
-          labelText: 'Branch name',
-          hintText: 'feat/my-change',
-        ),
-        onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-          child: const Text('Create'),
-        ),
-      ],
-    ),
-  );
-  controller.dispose();
-  if (branch == null || branch.isEmpty || !context.mounted) return;
-  await _run(
-    context,
-    ref,
-    'worktree.create',
-    {'cwd': cwd, 'branch': branch, 'label': branch},
-    successMessage: 'Worktree "$branch" created',
-  );
-}
+// Creating a worktree lives in `worktrees/new_worktree_sheet.dart` rather than
+// here. It stopped being a one-call action the day it could also launch an
+// agent into the checkout it just made: two calls, a partial-failure state
+// between them, and progress to show while the second one runs — none of which
+// fits [_run]'s one-call/one-snackbar shape.

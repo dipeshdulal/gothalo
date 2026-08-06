@@ -14,6 +14,7 @@ import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../inbox/widgets/agent_avatar.dart';
 import '../inbox/widgets/status_badge.dart';
+import '../worktrees/new_worktree_sheet.dart';
 
 /// The Overview — the active server's multiplexer laid out like the desktop:
 /// **workspace → tab → panes**, showing *every* pane (shells, dev servers, and
@@ -143,7 +144,7 @@ class OverviewScreen extends ConsumerWidget {
                     case 'tab':
                       newTab(context, ref, workspaceId!);
                     case 'worktree':
-                      newWorktreeDialog(context, ref,
+                      showNewWorktreeSheet(context, ref,
                           cwd: spaceCwd, repoLabel: title);
                     case 'remove':
                       removeWorktree(

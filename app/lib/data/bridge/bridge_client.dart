@@ -58,6 +58,52 @@ class AvailableAgent {
       );
 }
 
+/// What a `worktree.create` proxy call brought into existence.
+///
+/// Herdr answers that call with the whole tree it just made — the workspace,
+/// its first tab, that tab's root pane, and the git worktree — so a client that
+/// wants to do something *in* the new checkout already has the ids and must not
+/// go re-listing workspaces to find one it can only identify by guessing at the
+/// label. See `docs/CONTRACT-herdr-proxy.md` for the captured response.
+class CreatedWorktree {
+  const CreatedWorktree({
+    required this.workspaceId,
+    required this.rootPaneId,
+    required this.checkoutPath,
+  });
+
+  /// Session-qualified by the proxy, so it addresses `worktree.remove` and the
+  /// overview route directly.
+  final String workspaceId;
+
+  /// The workspace's first pane — a plain shell sitting in [checkoutPath], and
+  /// therefore the place an agent for this worktree belongs. Empty if Herdr
+  /// reported none, which a caller must treat as "nothing to launch into"
+  /// rather than substituting a pane of its own choosing.
+  final String rootPaneId;
+
+  /// Where the checkout landed on the host. Shown to the operator, since a
+  /// worktree path is derived by Herdr and is not something they typed.
+  final String checkoutPath;
+
+  factory CreatedWorktree.fromResult(Map<String, dynamic> result) {
+    Map<String, dynamic> obj(dynamic v) =>
+        v is Map ? Map<String, dynamic>.from(v) : const {};
+    final workspace = obj(result['workspace']);
+    final worktree = obj(result['worktree']);
+    return CreatedWorktree(
+      workspaceId: (workspace['workspace_id'] as String?) ?? '',
+      rootPaneId: (obj(result['root_pane'])['pane_id'] as String?) ?? '',
+      // Herdr reports the path twice — on the git worktree and on the
+      // workspace's own worktree block. They agree; prefer the former and fall
+      // back rather than showing nothing if one is absent.
+      checkoutPath: (worktree['path'] as String?) ??
+          (obj(workspace['worktree'])['checkout_path'] as String?) ??
+          '',
+    );
+  }
+}
+
 /// The outcome of `POST /agent/start` — enough to navigate straight to the new
 /// agent without re-reading the snapshot first.
 class StartAgentResult {
@@ -66,6 +112,7 @@ class StartAgentResult {
     required this.kind,
     required this.name,
     required this.promptSent,
+    this.promptError,
   });
 
   /// Session-qualified, so it addresses `/transcript`, `/attach` and `/send`
@@ -80,11 +127,18 @@ class StartAgentResult {
   /// for but didn't land. The agent is up either way; the prompt is not.
   final bool promptSent;
 
+  /// Why the opening prompt did not land, in the bridge's words. Present ONLY
+  /// when one was asked for and failed, which is what tells those two
+  /// [promptSent]-false cases apart — "started, carrying your instruction"
+  /// versus "started, sitting there empty".
+  final String? promptError;
+
   factory StartAgentResult.fromJson(Map<String, dynamic> j) => StartAgentResult(
         paneId: (j['pane_id'] as String?) ?? '',
         kind: (j['kind'] as String?) ?? '',
         name: (j['name'] as String?) ?? '',
         promptSent: j['prompt_sent'] == true,
+        promptError: j['prompt_error'] as String?,
       );
 }
 

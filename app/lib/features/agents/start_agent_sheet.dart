@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
-import '../inbox/widgets/agent_avatar.dart';
+import 'agent_kind_picker.dart';
 import 'agent_lifecycle_providers.dart';
 
 /// Where a new agent should be put. The bridge accepts three targeting forms
@@ -126,29 +126,10 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
 
             Text('Agent', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 8),
-            agents.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: LinearProgressIndicator(),
-              ),
-              error: (err, _) => _Notice(
-                icon: Icons.error_outline,
-                text: err is BridgeException
-                    ? err.message
-                    : 'Could not ask the server which agents it has.',
-              ),
-              data: (list) => list.isEmpty
-                  ? const _Notice(
-                      icon: Icons.info_outline,
-                      text: 'This server reports no installed agents. Install '
-                          'one on the host (or make sure it is on the bridge '
-                          "daemon's PATH) and pull to refresh.",
-                    )
-                  : _KindPicker(
-                      agents: list,
-                      selected: _kind,
-                      onSelect: (k) => setState(() => _kind = k),
-                    ),
+            AgentKindField(
+              agents: agents,
+              selected: _kind,
+              onSelect: (k) => setState(() => _kind = k),
             ),
             const SizedBox(height: 18),
 
@@ -167,7 +148,7 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
                     fontFamily: AppTheme.monoFamily, fontSize: 13),
               ),
             ] else
-              _Notice(
+              SheetNotice(
                 icon: Icons.folder_outlined,
                 text: widget.target.defaultCwd.isEmpty
                     ? "Runs in the pane's current directory."
@@ -286,88 +267,5 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
       setState(() => _starting = false);
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     }
-  }
-}
-
-/// The installed agents as selectable chips, in the order the bridge reported
-/// them (Herdr's own order), so the picker doesn't reshuffle between opens.
-class _KindPicker extends StatelessWidget {
-  const _KindPicker({
-    required this.agents,
-    required this.selected,
-    required this.onSelect,
-  });
-
-  final List<AvailableAgent> agents;
-  final String? selected;
-  final ValueChanged<String> onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final chosen = agents.where((a) => a.kind == selected).firstOrNull;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final a in agents)
-              ChoiceChip(
-                selected: a.kind == selected,
-                onSelected: (_) => onSelect(a.kind),
-                avatar: AgentAvatar(agent: a.kind, radius: 11),
-                label: Text(a.kind),
-              ),
-          ],
-        ),
-        // Only surfaced once a kind is chosen, and only when it matters: an
-        // agent Herdr has no detection manifest for will run but can never be
-        // reported idle/working/blocked, so it will sit at "unknown" forever and
-        // never raise an approval push. Better said before the launch.
-        if (chosen != null && !chosen.stateReporting) ...[
-          const SizedBox(height: 10),
-          _Notice(
-            icon: Icons.warning_amber_rounded,
-            color: scheme.error,
-            text: '${chosen.kind} runs, but this server cannot read its '
-                'status — it will show as unknown and will not notify you when '
-                'it needs input.',
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// A muted icon+text line for the sheet's inline explanations.
-class _Notice extends StatelessWidget {
-  const _Notice({required this.icon, required this.text, this.color});
-
-  final IconData icon;
-  final String text;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final tint = color ?? scheme.onSurfaceVariant;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 16, color: tint),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: tint, height: 1.35),
-          ),
-        ),
-      ],
-    );
   }
 }
