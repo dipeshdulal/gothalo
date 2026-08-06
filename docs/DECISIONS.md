@@ -74,6 +74,22 @@ here**. The shipped default, "Interrupt", sends `esc` — the same keystroke as
 the Esc button three slots over. It earns its place in the transcript composer,
 which has no key strip; on the terminal it was the same key twice.
 
+**Attaching an image is the eighth button, hung off the end of that row.** It
+belongs below the buffer rather than up in the app bar for the same reason the
+composer's paperclip sits inside the input pill: it acts on what you are
+typing, not on the session. But it is appended rather than slotted in beside
+`+`, where it belongs by kind, because the strip is already ~466dp of buttons
+against a 393–412dp phone — it scrolls, and its *tail* is what leaves the
+screen. Inserting earlier would push the keyboard toggle off the edge to make
+room for a control you reach for far less often; appending moves nothing, and
+leaves the pad toggle on the centre line of the seven that came first.
+
+It types the uploaded path into the PTY like any other keystrokes, with no
+carriage return — same insert-don't-send rule as the composer — so it works for
+whatever is running in the pane, and works on a pane with no agent at all. The
+bridge resolves that pane's own cwd for the drop (see `CONTRACT-image.md`); a
+path is just text, and nothing about typing one needs an agent to exist.
+
 **The transcript composer follows the same rules** — the two screens are one
 tap apart doing the same job, so a different toolbar vocabulary on each read as
 an accident. Its actions row is the same evenly-spread `AccessoryButton`s

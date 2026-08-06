@@ -12,7 +12,7 @@ import (
 )
 
 // POST /image?pane=<pane_id> — body is the raw image bytes — writes the image
-// into that agent's working directory and returns the absolute path it wrote.
+// into that pane's working directory and returns the absolute path it wrote.
 //
 // The only uniquely-mobile feature on the roadmap: a screenshot or camera roll
 // photo becomes something an agent can look at. The trick is that no agent
@@ -20,6 +20,11 @@ import (
 // bridge's whole job is to put the bytes inside the agent's tree and answer with
 // the path. The app inserts that path into the composer WITHOUT sending, so the
 // user can write the actual prompt around it ("why is this button misaligned?").
+//
+// A pane with no agent is served too (its own cwd — see paneDropCwd): the
+// terminal screen attaches to plain panes, types the path in through the same
+// PTY stream as every other keystroke, and whatever is running there reads it.
+// The path is text; nothing here needs an agent to exist.
 //
 // The wire format is raw bytes, not multipart, on purpose: multipart exists to
 // carry field names and filenames, and a filename is the one thing this endpoint
@@ -67,7 +72,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cwd, status, err := s.paneCwd(pane)
+	cwd, status, err := s.paneDropCwd(pane)
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return

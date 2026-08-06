@@ -353,6 +353,11 @@ type Pane struct {
 	// empty for a plain shell / dev-server / logs pane.
 	Agent  string `json:"agent"`
 	Status string `json:"agent_status"`
+	// Cwd is the directory the pane was opened in. Herdr also reports a
+	// `foreground_cwd` that follows the foreground process (a shell that has
+	// `cd`-ed, a pager); this is the stable one, which is what a pane-scoped
+	// drop directory wants — see Server.paneDropCwd.
+	Cwd string `json:"cwd"`
 }
 
 // IsAgent reports whether an agent (claude, codex, …) is hosted in the pane.

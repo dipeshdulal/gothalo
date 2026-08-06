@@ -34,6 +34,23 @@ func (f *fakeAgents) Get(pane string) (herdr.Agent, error) {
 	return herdr.Agent{PaneID: pane, Cwd: f.cwd, Kind: f.kind}, nil
 }
 
+// fakePanes stands in for the per-session herdr client on paneDropCwd's
+// agentless fallback (Server.panes), and records the id it was asked for the
+// same way fakeAgents does.
+type fakePanes struct {
+	cwd   string
+	asked string
+	err   error
+}
+
+func (f *fakePanes) GetPane(paneID string) (herdr.Pane, error) {
+	f.asked = paneID
+	if f.err != nil {
+		return herdr.Pane{}, f.err
+	}
+	return herdr.Pane{PaneID: paneID, Cwd: f.cwd}, nil
+}
+
 func pngUpload() []byte {
 	return append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, 64)...)
 }
@@ -231,11 +248,47 @@ func TestImageUnknownSession(t *testing.T) {
 	}
 }
 
-// TestImageNoAgentInPane asserts a plain (non-agent) pane 404s: there is no cwd
-// to resolve, so there is nowhere the image could land that the agent would read.
-func TestImageNoAgentInPane(t *testing.T) {
+// TestImagePlainPaneUsesPaneCwd covers the agentless pane: the terminal screen
+// attaches to plain panes and types the returned path in as ordinary keystrokes,
+// so the upload has to work there too — it just falls back to the pane's own
+// working directory.
+func TestImagePlainPaneUsesPaneCwd(t *testing.T) {
+	s := newTestServer(t)
+	cwd := t.TempDir()
+	s.agents = &fakeAgents{err: herdr.ErrAgentNotFound}
+	panes := &fakePanes{cwd: cwd}
+	s.panes = panes
+
+	rec := httptest.NewRecorder()
+	s.handleImage(rec, imageRequest("/image?pane=acme%2Fw1:p9", pngUpload()))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if panes.asked != "w1:p9" {
+		t.Errorf("herdr was asked for %q, want the bare id %q", panes.asked, "w1:p9")
+	}
+
+	var res imagedrop.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantDir := filepath.Join(cwd, ".gothalo", "images")
+	if filepath.Dir(res.Path) != wantDir {
+		t.Fatalf("path = %q, want a file in %q", res.Path, wantDir)
+	}
+	if _, err := os.Stat(res.Path); err != nil {
+		t.Errorf("returned path does not exist: %v", err)
+	}
+}
+
+// TestImagePaneWithoutCwd asserts the one case that still 404s once agentless
+// panes are served: a pane Herdr reports no directory for. There is nowhere to
+// put the file, and inventing a location would hand back a path that pane can't
+// use.
+func TestImagePaneWithoutCwd(t *testing.T) {
 	s := newTestServer(t)
 	s.agents = &fakeAgents{err: herdr.ErrAgentNotFound}
+	s.panes = &fakePanes{}
 	rec := httptest.NewRecorder()
 	s.handleImage(rec, imageRequest("/image?pane=w1:p9", pngUpload()))
 	if rec.Code != http.StatusNotFound {

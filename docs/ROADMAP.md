@@ -63,8 +63,10 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ✅ Agent transcript reading — the conversation, not just terminal scrollback
       (`internal/transcript`, `docs/CONTRACT-agent-transcript.md`).
       **No competing Herdr client does this.**
-- ✅ Image paste → file in the agent's cwd → send the path (#85,
-      `docs/CONTRACT-image.md`)
+- ✅ Image paste → file in the pane's cwd → send the path (#85,
+      `docs/CONTRACT-image.md`). On the transcript composer and, since the
+      endpoint serves agentless panes too, on the raw terminal — where the path
+      is typed into the PTY (`features/attach/image_attach.dart`).
 - ✅ Recent-activity timeline (#88, `internal/timeline`,
       `docs/CONTRACT-timeline.md`)
 - ✅ Start / restart / stop an agent from the phone (#87,

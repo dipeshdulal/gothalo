@@ -4,11 +4,10 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -20,6 +19,7 @@ import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../attach/image_attach.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
@@ -66,7 +66,6 @@ class TranscriptScreen extends ConsumerStatefulWidget {
 class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
-  final ImagePicker _picker = ImagePicker();
 
   BridgeClient? _client;
   WebSocketChannel? _channel;
@@ -132,16 +131,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// invisible; each is dropped when its matching user message arrives.
   final List<String> _pending = [];
 
-  /// Image-attach state. [_uploadSent]/[_uploadTotal] drive a determinate bar:
-  /// a phone pushing megabytes over a tailnet is slow enough that a spinner
-  /// with no numbers is indistinguishable from a hang, which is the one thing
-  /// this must not look like. [_uploadError] latches a failure in place until
-  /// the user dismisses or retries — a snackbar disappears while they're still
-  /// deciding whether the upload is worth another try.
-  bool _uploading = false;
-  int _uploadSent = 0;
-  int _uploadTotal = 0;
-  String? _uploadError;
+  /// Pick → upload → path, shared with the terminal screen's key row (see
+  /// [ImageAttachController]). Its progress and failures render in the
+  /// [ImageUploadStatus] strip above the composer.
+  final ImageAttachController _attach = ImageAttachController();
 
   /// Whether the agent is still blocked, as a listenable the options sheet can
   /// follow.
@@ -165,6 +158,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _autoPromptPending = widget.openPrompt;
     _scroll.addListener(_onScroll);
     _composer.addListener(_onComposerChanged);
+    // Repaints the upload strip and greys the paperclip while one is in flight.
+    _attach.addListener(_onAttachChanged);
+  }
+
+  void _onAttachChanged() {
+    if (mounted) setState(() {});
   }
 
   /// Keeps [_slash] in step with the composer. Only calls setState when the
@@ -228,6 +227,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _scroll.dispose();
     _composer.removeListener(_onComposerChanged);
     _composer.dispose();
+    _attach.removeListener(_onAttachChanged);
+    _attach.dispose();
     _blocked.dispose();
     super.dispose();
   }
@@ -406,126 +407,28 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     }
   }
 
-  /// Attach a screenshot or photo to the prompt: pick it, upload it to the
-  /// bridge, and drop the path the bridge wrote into the composer.
-  ///
-  /// The path IS the attachment. Coding agents read an image when handed a file
-  /// path, so once the bytes are inside the agent's own working directory (the
-  /// bridge's `POST /image` puts them there — see docs/CONTRACT-image.md) there
-  /// is nothing further to negotiate: the agent just needs to be told where.
-  ///
-  /// **It deliberately does not send.** The whole point is a prompt with words
-  /// around the image — "why is this button misaligned?" — so the path lands in
-  /// the composer, the keyboard comes up, and the user writes the rest.
-  Future<void> _attachImage(ImageSource source) async {
-    final client = _client;
-    if (client == null || _uploading) return;
+  /// Attach a screenshot or photo to the prompt: pick it, upload it, and drop
+  /// the path the bridge wrote into the composer — **without sending**, so the
+  /// user writes the prompt around it. The flow itself lives in
+  /// [ImageAttachController], shared with the terminal screen.
+  Future<void> _attachImage(ImageSource source) => _attach.attach(
+    client: _client,
+    pane: widget.pane,
+    source: source,
+    onPath: (path) {
+      if (mounted) _insertIntoComposer(path);
+    },
+  );
 
-    final XFile? picked;
-    try {
-      picked = await _picker.pickImage(source: source);
-    } on PlatformException catch (e) {
-      // Denied permission, or no camera. The plugin's own message names which.
-      if (mounted) {
-        setState(
-          () => _uploadError = e.message ?? 'Could not open the picker.',
-        );
-      }
-      return;
-    } catch (e) {
-      // Anything else — a missing platform implementation, an interop
-      // failure — must surface too: swallowed, the button just silently
-      // does nothing, which is exactly how a build problem hid here once.
-      if (mounted) setState(() => _uploadError = 'Picker failed: $e');
-      return;
-    }
-    if (picked == null || !mounted) return; // cancelled
-
-    final bytes = await picked.readAsBytes();
-    if (!mounted) return;
-    setState(() {
-      _uploading = true;
-      _uploadSent = 0;
-      _uploadTotal = bytes.length;
-      _uploadError = null;
-    });
-
-    try {
-      final drop = await client.uploadImage(
-        widget.pane,
-        bytes,
-        onProgress: (sent, total) {
-          if (!mounted) return;
-          setState(() {
-            _uploadSent = sent;
-            // A chunked send reports total as -1; keep the byte count we
-            // measured rather than letting the bar go indeterminate mid-upload.
-            if (total > 0) _uploadTotal = total;
-          });
-        },
-      );
-      if (!mounted) return;
-      setState(() => _uploading = false);
-      _insertIntoComposer(drop.path);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _uploading = false;
-        _uploadError = e is BridgeException ? e.message : '$e';
-      });
-    }
-  }
-
-  /// Ask where the image comes from. Two sources, because the two real uses are
-  /// different: a screenshot already in the camera roll ("this screen is
-  /// wrong"), and something in front of you right now (a whiteboard, a monitor,
-  /// a device showing the bug).
-  ///
-  /// The picker is started INSIDE the tap handler, not after awaiting the
-  /// sheet's result: on the web the picker is a synthetic click on a file
-  /// input, which Safari only honors while the tap's user activation is still
-  /// live. Awaiting the sheet's pop animation first spends it — the tap then
-  /// closes the sheet and silently nothing opens (the iOS PWA symptom).
-  Future<void> _pickImageSource() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Photo library'),
-              subtitle: const Text('A screenshot you already took'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                unawaited(_attachImage(ImageSource.gallery));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Camera'),
-              subtitle: const Text('Shoot a screen or whiteboard'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                unawaited(_attachImage(ImageSource.camera));
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Insert [text] at the composer's cursor, leaving the caret after it so the
+  /// Insert [path] at the composer's cursor, leaving the caret after it so the
   /// user can keep typing.
   ///
   /// Spacing is fixed up rather than assumed: appended straight onto an existing
   /// word the path would fuse into it and the agent would be handed a filename
   /// that doesn't exist. A path containing whitespace is quoted for the same
   /// reason — an agent reading a bare path stops at the first space.
-  void _insertIntoComposer(String text) {
-    final quoted = text.contains(RegExp(r'\s')) ? '"$text"' : text;
+  void _insertIntoComposer(String path) {
+    final quoted = attachPathText(path);
     final value = _composer.value;
     final base = value.text;
     // A field that has never been focused reports an invalid (-1) selection;
@@ -1069,15 +972,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
             // Directly above the toolbar that started the upload, so progress
-            // and the button that caused it read as one thing.
-            if (_uploading || _uploadError != null)
-              _UploadStatus(
-                uploading: _uploading,
-                sent: _uploadSent,
-                total: _uploadTotal,
-                error: _uploadError,
-                onDismiss: () => setState(() => _uploadError = null),
-              ),
+            // and the button that caused it read as one thing. Renders nothing
+            // while idle.
+            ImageUploadStatus(controller: _attach),
             // Everything about *how* you're talking to the agent (attach an
             // image, mode, quick commands, raw terminal) lives down here with
             // the composer as ONE scrollable chip row, not the app bar — a
@@ -1114,7 +1011,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             _ComposerBar(
               controller: _composer,
               onSend: _sendComposer,
-              onAttachImage: _uploading ? null : _pickImageSource,
+              onAttachImage: _attach.uploading
+                  ? null
+                  : () => showImageSourceSheet(context, onPick: _attachImage),
               hintText: _agentState?.isBlocked == true
                   ? 'Type a number, or your own reply…'
                   : null,
@@ -2095,101 +1994,6 @@ class _ComposerActionsRow extends ConsumerWidget {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-/// The image-upload strip above the composer toolbar: a determinate progress
-/// bar while bytes are going out, or a failure that stays put until dismissed.
-///
-/// Determinate on purpose. The upload crosses a tailnet from a phone, which can
-/// genuinely take tens of seconds for a few megabytes; against a bare spinner
-/// that is indistinguishable from a hung request, and the user's next move
-/// (wait, or give up and retry) depends entirely on telling those two apart.
-///
-/// The failure does not use a snackbar for the mirror-image reason: it vanishes
-/// on a timer, and "is the tailnet down or was that image just too big?" is a
-/// question people re-read.
-class _UploadStatus extends StatelessWidget {
-  const _UploadStatus({
-    required this.uploading,
-    required this.sent,
-    required this.total,
-    required this.error,
-    required this.onDismiss,
-  });
-
-  final bool uploading;
-  final int sent;
-  final int total;
-  final String? error;
-  final VoidCallback onDismiss;
-
-  static String _mb(int bytes) =>
-      '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final failed = !uploading && error != null;
-
-    return Container(
-      width: double.infinity,
-      color: failed ? scheme.errorContainer : scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-      child: Row(
-        children: [
-          Icon(
-            failed ? Icons.error_outline : Icons.upload_outlined,
-            size: 16,
-            color: failed ? scheme.onErrorContainer : scheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: failed
-                ? Text(
-                    error!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onErrorContainer,
-                    ),
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        total > 0
-                            ? 'Uploading image… ${_mb(sent)} of ${_mb(total)}'
-                            : 'Uploading image…',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: LinearProgressIndicator(
-                          minHeight: 3,
-                          // Null (indeterminate) only before the first progress
-                          // callback, so the bar never sits frozen at zero.
-                          value: total > 0 && sent > 0 ? sent / total : null,
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
-          if (failed)
-            IconButton(
-              tooltip: 'Dismiss',
-              iconSize: 18,
-              visualDensity: VisualDensity.compact,
-              onPressed: onDismiss,
-              icon: Icon(Icons.close, color: scheme.onErrorContainer),
-            ),
-        ],
       ),
     );
   }

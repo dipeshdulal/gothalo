@@ -422,10 +422,10 @@ class AgentState {
 
 /// Where an uploaded image landed, from `POST /image`.
 ///
-/// [path] is the whole point: an absolute path inside the agent's own working
-/// directory. Coding agents read an image when handed a path, so pasting this
-/// into the composer *is* the attachment — no agent protocol is involved. See
-/// docs/CONTRACT-image.md.
+/// [path] is the whole point: an absolute path inside the pane's own working
+/// directory. Coding agents read an image when handed a path, so putting this
+/// where the user is typing — the composer, or the terminal — *is* the
+/// attachment; no agent protocol is involved. See docs/CONTRACT-image.md.
 class ImageDrop {
   const ImageDrop({
     required this.path,
@@ -434,10 +434,10 @@ class ImageDrop {
     required this.bytes,
   });
 
-  /// Absolute path to the written file — what goes into the composer.
+  /// Absolute path to the written file — what gets typed.
   final String path;
 
-  /// The same file relative to the agent's cwd (`.gothalo/images/…`). Display
+  /// The same file relative to the pane's cwd (`.gothalo/images/…`). Display
   /// only; the agent gets [path], since its cwd isn't necessarily the shell's.
   final String relativePath;
 
@@ -929,7 +929,9 @@ class BridgeClient {
   static const int maxImageBytes = 10 * 1024 * 1024;
 
   /// `POST /image?pane=…` with the raw bytes → the absolute path the bridge
-  /// wrote inside that agent's working directory.
+  /// wrote inside that pane's working directory (the agent's when the pane
+  /// hosts one, the pane's own when it doesn't — a plain shell pane can be
+  /// handed a path just as well).
   ///
   /// The body is raw bytes, **not** multipart: a filename is the one thing the
   /// endpoint refuses to accept, so we have nothing to name a part with. The
