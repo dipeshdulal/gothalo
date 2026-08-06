@@ -61,6 +61,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into **any** pane's tree and get the path back, to paste into a prompt or type into the terminal (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |
+| GET  | `/suggestions` | — (query: `pane`) | `{pane, suggestions[]}` | the two or three one-tap actions worth offering for **any** pane, from what is running in it — review changes, resolve a stopped rebase, start an agent in an idle shell (below; see [`CONTRACT-suggestions.md`](CONTRACT-suggestions.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agents/available` | — | `{agents[],known_kinds[],discovery}` | which agent kinds this host can actually launch (below) |
 | POST | `/agent/start` | `{kind, pane_id\|split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id,kind,name,…}` | launch an agent, optionally in a pane it creates (below) |
@@ -351,6 +352,53 @@ an error in front of a working pane. Errors: `400` missing `pane` · `401` bad
 bearer · `404` no such pane, a plain pane, or a bridge predating the endpoint
 (the app hides the typeahead for all three). Full details, plus a live capture
 and the plugin-commands gap, in [`CONTRACT-commands.md`](./CONTRACT-commands.md).
+
+## GET /suggestions — context actions for a pane
+The two or three things worth doing to **this** pane right now, given what is
+actually running in it. The generalisation of `/ports`: same bar (a chip that
+appears is a chip you can tap), wider set of signals — `pane.process_info` plus a
+few `stat()`s on the pane's working directory.
+
+```
+GET /suggestions?pane=acme/w1:p2
+```
+
+```json
+{
+  "pane": "acme/w1:p2",
+  "suggestions": [
+    {
+      "kind": "git_dirty",
+      "label": "Review changes",
+      "detail": "9 files changed",
+      "action": "open_diff",
+      "params": {"pane": "acme/w1:p2"},
+      "rank": 20
+    }
+  ]
+}
+```
+
+Sorted by `rank` descending, capped at three, and **empty most of the time** —
+that is the design, not a degraded state. `kind` says *why* (it only picks the
+icon); `action` says *what* (`open_diff` | `start_agent`) and is the only field
+the app branches on. An `action` a client does not implement must be **dropped,
+not rendered**: that is what lets a newer bridge add a source without an app
+release.
+
+Three sources today: `git_conflict` (an unfinished merge/rebase/cherry-pick,
+which outranks and suppresses the next one), `git_dirty` (uncommitted changes),
+and `shell_idle` (no agent, shell at its prompt, cwd inside a git work tree).
+The first two require an agent in the pane because `/diff` resolves its tree
+through one.
+
+Errors: `400` missing `pane` · `401` bad bearer · `404` no such pane, or a bridge
+predating the endpoint (the app renders no chip row for either) · `502` herdr
+unreachable. A pane with **no agent** is not an error — it is the ordinary input
+to `shell_idle`. Cached per pane for 6s; the app refetches on screen open and on
+the pane's agent-status changes rather than polling. Full details, the cost
+model, and how this should converge with `/ports`, in
+[`CONTRACT-suggestions.md`](./CONTRACT-suggestions.md).
 
 ## GET /timeline — recent agent activity
 The only read that describes the **past**. Every other endpoint says what is true

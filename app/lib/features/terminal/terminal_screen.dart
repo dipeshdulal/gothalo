@@ -20,6 +20,7 @@ import '../../features/approvals/approve_action.dart';
 import '../attach/image_attach.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../suggestions/pane_suggestions_bar.dart';
 import '../transcript/quick_commands_providers.dart';
 import 'accessory_key_row.dart';
 import 'direction_pad.dart';
@@ -567,6 +568,18 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           ),
           // No point typing into a pane that no longer exists.
           if (_conn != _Conn.closed) ...[
+            // Context chips for whatever is actually running in this pane —
+            // open the dev server it is serving, review the agent's changes,
+            // resolve a stopped rebase, start an agent in an idle shell.
+            // Renders nothing at all when the bridge has nothing to offer,
+            // which is the usual case.
+            //
+            // This screen is where it earns its place: the chat view already
+            // carries a diff button in its app bar, and a plain shell pane —
+            // where the dev server usually runs — has no chat view at all, so
+            // the terminal is the only surface where every one of these is
+            // otherwise several taps away.
+            PaneSuggestionsBar(pane: widget.pane),
             // Directly above the bar whose button started the upload, so
             // progress and the button that caused it read as one thing. Renders
             // nothing while idle.

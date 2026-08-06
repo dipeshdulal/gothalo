@@ -25,6 +25,7 @@ internal/
 ├── browse/             read-only, directories-only host listing + its containment rules
 ├── imagedrop/          land an uploaded image in the agent's cwd -> a path it can read
 ├── gitbranch/          is a branch safe to delete, and delete it (Herdr has no branches)
+├── suggest/            pane observation -> a short list of one-tap actions (GET /suggestions)
 ├── notify/             bus consumer: dismiss stale "blocked" pushes
 └── web/                embedded web-push receiver page (go:embed)
 ```
@@ -51,6 +52,7 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 | GET  | `/agent-state` | device bearer or admin | parsed compact state for one agent pane |
 | GET  | `/diff` | device bearer or admin | an agent pane's working-tree changes (branch + per-file unified diff) |
 | GET  | `/diff/expand` | device bearer or admin | the unchanged lines around a hunk, for the diff viewer's collapsed regions |
+| GET  | `/suggestions` | device bearer or admin | context actions for a pane, from what is running in it |
 | GET  | `/agent-transcript` | device bearer or admin (`?token=`) | WS normalized transcript chat + backlog |
 | GET  | `/events` | device bearer or admin (`?token=`) | WS unified event bus (state changes, push lifecycle) |
 | GET  | `/browse` | device bearer or admin | host directory picker — read-only, directories-only, root-confined |

@@ -102,6 +102,27 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       without the SSH) is deliberately deferred until the badge shows how often
       that case actually comes up — it would open ports outside the bearer check,
       so it should be an explicit per-port "Expose" tap rather than automatic.
+- ✅ **Pane suggestions** — `GET /suggestions` plus a chip row above the terminal
+      (`internal/suggest`, `app/lib/features/suggestions/`,
+      `docs/CONTRACT-suggestions.md`): the two or three things worth doing to a
+      pane given what is running in it. Three sources — a stopped
+      merge/rebase/cherry-pick, an agent tree with uncommitted changes, and a
+      plain shell parked at its prompt inside a worktree.
+
+      The generalisation of the dev-server work above, and the shape the two
+      should converge on. **`/ports` is untouched**: a port scan is a *host*
+      question that `?pane=` narrows afterwards, so folding it in would make every
+      per-pane read pay for an `lsof`. Merging belongs on the app side first — one
+      chip row fed by both endpoints, interleaved by `rank` — and only then, if it
+      earns it, as a `dev_server` source reading the already-cached scan. See the
+      contract's convergence section.
+
+      The design constraint that mattered most was **restraint**: the row renders
+      nothing at all for a pane with nothing to offer, which on the development
+      host is most of them. A rerun-the-test-runner source was scoped out on
+      purpose — recognising the runner is easy, but a watcher wants a keystroke
+      and a finished run wants the command retyped, and the process list cannot
+      tell the two apart.
 
 ## Known gaps
 - **Codex transcripts** — `internal/transcript/codex.go` is an honest stub that

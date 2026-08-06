@@ -410,6 +410,71 @@ class SlashCommand {
       );
 }
 
+/// One offered action for a pane, from `GET /suggestions` — see
+/// `docs/CONTRACT-suggestions.md`.
+///
+/// The bridge decides *what* is worth offering (it is the only side that can
+/// see the pane's processes and working tree); the app decides how to render it
+/// and which [action] values it knows how to perform. Anything else is dropped
+/// on the floor — see [isActionable] — which is what lets a newer bridge add a
+/// suggestion kind without breaking an app that predates it.
+class PaneSuggestion {
+  const PaneSuggestion({
+    required this.kind,
+    required this.label,
+    required this.action,
+    this.detail = '',
+    this.params = const {},
+    this.rank = 0,
+  });
+
+  /// Why it was offered: `git_conflict` | `git_dirty` | `shell_idle`. Only
+  /// drives the icon — never whether the chip renders, so an unrecognised kind
+  /// with a known action still works.
+  final String kind;
+
+  /// The chip text, already short enough for a phone. Rendered verbatim: the
+  /// bridge is what knows whether the tree has one file changed or forty.
+  final String label;
+
+  /// One line of justification under the label. May be empty.
+  final String detail;
+
+  /// What to do on tap: `open_diff` | `start_agent`.
+  final String action;
+
+  /// The action's arguments. Always carries `pane` (session-qualified).
+  final Map<String, String> params;
+
+  /// Usefulness, highest first. The bridge has already sorted; this is kept so
+  /// a caller merging in suggestions from elsewhere can interleave them.
+  final int rank;
+
+  /// The pane this acts on — the same id `/attach`, `/diff` and `/send` take.
+  String get pane => params['pane'] ?? '';
+
+  /// Whether THIS build knows how to perform the action. A chip that cannot do
+  /// anything is worse than a missing chip, so an unknown action is dropped
+  /// rather than rendered as a dead button.
+  bool get isActionable =>
+      pane.isNotEmpty && (action == 'open_diff' || action == 'start_agent');
+
+  factory PaneSuggestion.fromJson(Map<String, dynamic> j) => PaneSuggestion(
+        kind: (j['kind'] as String?) ?? '',
+        label: (j['label'] as String?) ?? '',
+        detail: (j['detail'] as String?) ?? '',
+        action: (j['action'] as String?) ?? '',
+        params: switch (j['params']) {
+          final Map<dynamic, dynamic> p => {
+              for (final e in p.entries)
+                e.key.toString(): e.value?.toString() ?? '',
+            },
+          _ => const <String, String>{},
+        },
+        rank: (j['rank'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// One recorded agent status transition from `GET /timeline` — see
 /// `docs/CONTRACT-timeline.md`.
 ///
@@ -1048,6 +1113,37 @@ class BridgeClient {
           .whereType<Map>()
           .map((c) => SlashCommand.fromJson(Map<String, dynamic>.from(c)))
           .where((c) => c.name.isNotEmpty)
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return const [];
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /suggestions?pane=<id>` → the handful of one-tap actions that make
+  /// sense for what is running in that pane right now. See
+  /// CONTRACT-suggestions.md.
+  ///
+  /// Returns an empty list rather than throwing for every "nothing to offer
+  /// here" case, including a bridge too old to have the endpoint (404) and a
+  /// pane that has since closed (404). This is a convenience surface: an error
+  /// state in front of it would cost the user more attention than the feature
+  /// gives back, and there is nothing they could do about either cause.
+  ///
+  /// Suggestions carrying an action this build does not implement are dropped
+  /// here, so a caller never has to render a chip it cannot honour.
+  Future<List<PaneSuggestion>> getSuggestions(String pane) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/suggestions',
+        queryParameters: {'pane': pane},
+      );
+      final list = (res.data ?? const {})['suggestions'];
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((s) => PaneSuggestion.fromJson(Map<String, dynamic>.from(s)))
+          .where((s) => s.label.isNotEmpty && s.isActionable)
           .toList();
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return const [];

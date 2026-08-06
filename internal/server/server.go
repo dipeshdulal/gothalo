@@ -53,8 +53,15 @@ type Server struct {
 	// Separate from portsCache and longer-lived: a pane's shell pid never
 	// changes, so it survives many scans.
 	paneMap paneMapCache
+	// suggestions memoises per-pane suggestions behind GET /suggestions. Short
+	// TTL: the app is allowed to refetch on every focus and status change, and
+	// this is what stops that reaching Herdr each time.
+	suggestions suggestCache
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
+	// processInfo backs the pane observation behind /suggestions in tests; nil in
+	// production, where it comes from the pane's own session client.
+	processInfo processInfoGetter
 	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
 	// production, where the agent is fetched from the pane's own session client.
 	agents agentGetter
@@ -108,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
 	mux.HandleFunc("/commands", s.handleCommands)
 	mux.HandleFunc("/ports", s.handlePorts)
+	mux.HandleFunc("/suggestions", s.handleSuggestions)
 	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
 	mux.HandleFunc("/agent/start", s.handleAgentStart)
 	mux.HandleFunc("/agent/restart", s.handleAgentRestart)
@@ -366,7 +374,15 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	10 — GET /browse: pick a directory on the host, so a space can be opened
 //	    from the phone on a session with nothing open at all. Same gating rule
 //	    as 5 — an older bridge 404s and the app hides the picker.
-const BridgeVersion = 10
+//	11 — GET /suggestions: context-aware one-tap actions for a pane, from what
+//	    is running in it — the host's dev servers (discovered by GET /ports),
+//	    the pane's git situation (read by GET /diff, which also carries a `git`
+//	    object and answers `?context=1` for it alone), and a shell at its
+//	    prompt. Same gating rule — an older bridge 404s and the app shows no
+//	    chip row — and the app additionally ignores any `action` it does not
+//	    implement, so a bridge that grows a new suggestion kind does not need an
+//	    app release to stay safe.
+const BridgeVersion = 11
 
 // GET /info -> this bridge's identity and capability level.
 //
