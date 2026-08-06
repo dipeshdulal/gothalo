@@ -357,6 +357,17 @@ func (r *Recorder) paneExists(pane string) bool {
 	return live[pane]
 }
 
+// restingStates are the statuses that mean "not working". Herdr reports two,
+// but they are one state: `idle` is a resting agent whose tab has been seen,
+// `done` is the same agent before anyone looked. See [sameRestingState].
+var restingStates = map[string]bool{"idle": true, "done": true}
+
+// sameRestingState reports whether a status change is really just the seen/unseen
+// distinction on a resting agent, and therefore not a transition at all.
+func sameRestingState(from, to string) bool {
+	return from == to || (restingStates[from] && restingStates[to])
+}
+
 // record appends one transition and re-opens the pane's span.
 //
 // A repeat of the status already open is dropped. The ingester already dedupes,
@@ -368,7 +379,20 @@ func (r *Recorder) record(pane, agent, session, workspace, status, title string,
 	at := time.UnixMilli(tsMillis)
 	r.mu.Lock()
 	prev, open := r.spans[pane]
-	if open && prev.status == status {
+	if open && sameRestingState(prev.status, status) {
+		// Not a transition. Herdr's `done` IS its `idle` — the same underlying
+		// resting state, distinguished only by whether the tab has been SEEN. So
+		// a done->idle flip records nothing about the agent; it records that a
+		// human glanced at a tab.
+		//
+		// Recording it is not merely noise, it is wrong: re-opening the span resets
+		// the clock, so an agent that had been resting since 11:40 reported
+		// "working after 0.1s idle" at 11:46 because the glance a second earlier
+		// had restarted the measurement. The duration is the whole feature, and
+		// this was silently destroying it for any agent you happened to look at.
+		//
+		// Leaving the span untouched keeps the resting period whole, and the next
+		// REAL transition reports the duration a person would expect.
 		r.mu.Unlock()
 		return
 	}

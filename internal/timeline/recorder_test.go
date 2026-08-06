@@ -522,3 +522,61 @@ func TestDeadPaneDropDoesNotBlockItsLaterReuse(t *testing.T) {
 		t.Fatalf("len = %d, want 1 — a pane that appears after a miss must record", len(got))
 	}
 }
+
+// TestSeenFlipIsNotATransition covers the bug that quietly destroyed the number
+// this whole feature exists to report.
+//
+// Herdr's `done` and `idle` are one state — a resting agent — distinguished only
+// by whether its tab has been seen. Treating the flip as a transition re-opened
+// the span, so glancing at a tab reset the clock: an agent resting since 11:40
+// reported "working after 0.1s idle" at 11:46.
+func TestSeenFlipIsNotATransition(t *testing.T) {
+	f := newFixture(t)
+	f.status(t, 0, "w1:p1", "claude", "done")             // resting since t=0
+	f.status(t, 6*time.Minute, "w1:p1", "claude", "idle") // someone looks at the tab
+	f.status(t, 6*time.Minute, "w1:p1", "claude", "working")
+
+	got := f.log.Entries(0, "")
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 — the seen flip must not be recorded: %+v", len(got), got)
+	}
+	e := got[0] // newest first
+	if e.To != "working" {
+		t.Fatalf("newest = %q, want working", e.To)
+	}
+	if e.PrevMS == nil {
+		t.Fatal("prev_ms absent")
+	}
+	if want := (6 * time.Minute).Milliseconds(); *e.PrevMS != want {
+		t.Errorf("prev_ms = %d, want %d — the rest period must survive the glance", *e.PrevMS, want)
+	}
+}
+
+// TestRestingFlipBothDirections: idle->done is the same non-event as done->idle
+// (work finishes unseen while the agent is already resting).
+func TestRestingFlipBothDirections(t *testing.T) {
+	f := newFixture(t)
+	f.status(t, 0, "w1:p1", "claude", "idle")
+	f.status(t, time.Minute, "w1:p1", "claude", "done")
+	if got := f.log.Entries(0, ""); len(got) != 1 {
+		t.Fatalf("len = %d, want 1 — idle->done is not a transition: %+v", len(got), got)
+	}
+}
+
+// TestRealTransitionsStillRecorded guards against over-filtering: leaving and
+// entering the resting state are exactly what a reader wants to see.
+func TestRealTransitionsStillRecorded(t *testing.T) {
+	f := newFixture(t)
+	f.status(t, 0, "w1:p1", "claude", "idle")
+	f.status(t, time.Minute, "w1:p1", "claude", "working")
+	f.status(t, 2*time.Minute, "w1:p1", "claude", "blocked")
+	f.status(t, 3*time.Minute, "w1:p1", "claude", "done")
+
+	got := f.log.Entries(0, "")
+	if len(got) != 4 {
+		t.Fatalf("len = %d, want 4 real transitions: %+v", len(got), got)
+	}
+	if got[0].From != "blocked" || got[0].To != "done" {
+		t.Errorf("newest = %q -> %q, want blocked -> done", got[0].From, got[0].To)
+	}
+}
