@@ -324,13 +324,20 @@ class _EntryTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Flexible(
+                      // Expanded, not Flexible: two Flexible children split the
+                      // row evenly, so the title was ellipsised at half width
+                      // while the short pane id left the rest of its half blank.
+                      // The title takes everything the pane id does not need.
+                      Expanded(
                         child: Text(
-                          // The bridge omits the kind for a pane it never
-                          // learned one for; a row still has to name something.
-                          entry.agent.isEmpty
-                              ? 'Agent'
-                              : brandFor(entry.agent).label,
+                          // Name the WORK, not the kind. Every row on a host
+                          // running several Claudes otherwise reads "Claude",
+                          // which identifies nothing. Fall back to the kind, and
+                          // then to a generic label, only when there is no title.
+                          entry.title ??
+                              (entry.agent.isEmpty
+                                  ? 'Agent'
+                                  : brandFor(entry.agent).label),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -340,16 +347,16 @@ class _EntryTile extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          entry.pane,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: scheme.onSurfaceVariant,
-                            fontFamily: AppTheme.monoFamily,
-                            fontSize: 11,
-                          ),
+                      // Sizes to its content — a pane id is short and fixed-ish,
+                      // so it never needs to compete with the title for width.
+                      Text(
+                        entry.pane,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: scheme.onSurfaceVariant,
+                          fontFamily: AppTheme.monoFamily,
+                          fontSize: 11,
                         ),
                       ),
                     ],

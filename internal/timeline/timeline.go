@@ -75,6 +75,13 @@ type Entry struct {
 	Agent string `json:"agent,omitempty"`
 	// Session is the Herdr session label ("default"), matching the bus payloads.
 	Session string `json:"session,omitempty"`
+	// Title is the pane's human name at the time of the transition, e.g. "Fix the
+	// failing parser test". Without it a row can only say its KIND, and a host
+	// running a dozen Claudes produces a dozen rows that all read "Claude" — the
+	// log becomes unreadable exactly when there is enough going on to want one.
+	// Recorded per entry rather than looked up later, so a pane that has since
+	// closed still names itself.
+	Title string `json:"title,omitempty"`
 	// Workspace is the session-qualified workspace id. It comes free on the bus
 	// payload; the tab id does not, and resolving one would cost a Herdr read per
 	// transition, so it is deliberately absent.

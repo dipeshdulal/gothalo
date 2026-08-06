@@ -30,6 +30,11 @@ type PaneState struct {
 	Session   string
 	Workspace string
 	Status    string
+	// Title is the pane's human name. It comes from the authoritative read rather
+	// than the bus, because most of the signals a status change is scavenged from
+	// do not carry one — and a row that cannot name its work is unreadable on a
+	// host running several agents of the same kind.
+	Title string
 }
 
 // stateReader is an authoritative read of every agent pane's current status.
@@ -59,6 +64,7 @@ type span struct {
 	agent     string
 	session   string
 	workspace string
+	title     string
 }
 
 // Recorder is the process-wide bus consumer that turns agent status transitions
@@ -228,14 +234,14 @@ func (r *Recorder) reconcile(reason string) {
 			}
 			r.spans[s.Pane] = span{
 				status: s.Status, since: now, known: false,
-				agent: s.Agent, session: s.Session, workspace: s.Workspace,
+				agent: s.Agent, session: s.Session, workspace: s.Workspace, title: s.Title,
 			}
 			corrected++
 			continue
 		}
 		sp := span{
 			status: s.Status, since: now, known: false,
-			agent: s.Agent, session: s.Session, workspace: s.Workspace,
+			agent: s.Agent, session: s.Session, workspace: s.Workspace, title: s.Title,
 		}
 		if last, ok := r.log.Latest(s.Pane); ok && last.To == s.Status {
 			sp.since = time.UnixMilli(last.TS)
@@ -276,11 +282,12 @@ func (r *Recorder) handle(env events.Envelope) {
 			Agent       string `json:"agent"`
 			AgentStatus string `json:"agent_status"`
 			Session     string `json:"session"`
+			Title       string `json:"title"`
 		}
 		if json.Unmarshal(env.Payload, &p) != nil || p.PaneID == "" || p.AgentStatus == "" {
 			return
 		}
-		r.record(p.PaneID, p.Agent, p.Session, p.WorkspaceID, p.AgentStatus, env.TS)
+		r.record(p.PaneID, p.Agent, p.Session, p.WorkspaceID, p.AgentStatus, p.Title, env.TS)
 
 	// The pane is gone. Recorded as a transition to StatusGone so the open span
 	// is closed with a real duration ("worked for 40m, then finished and the pane
@@ -334,12 +341,17 @@ func (r *Recorder) paneExists(pane string) bool {
 		return true
 	}
 	live := make(map[string]bool, len(states))
+	r.mu.Lock()
 	for _, s := range states {
-		if s.Pane != "" {
-			live[s.Pane] = true
+		if s.Pane == "" {
+			continue
+		}
+		live[s.Pane] = true
+		if sp, open := r.spans[s.Pane]; open && s.Title != "" && sp.title != s.Title {
+			sp.title = s.Title
+			r.spans[s.Pane] = sp
 		}
 	}
-	r.mu.Lock()
 	r.live, r.liveAt = live, r.now()
 	r.mu.Unlock()
 	return live[pane]
@@ -352,7 +364,7 @@ func (r *Recorder) paneExists(pane string) bool {
 // same status can legitimately be re-announced, and recording it would show the
 // user a transition that never happened AND reset the duration that made the row
 // worth reading.
-func (r *Recorder) record(pane, agent, session, workspace, status string, tsMillis int64) {
+func (r *Recorder) record(pane, agent, session, workspace, status, title string, tsMillis int64) {
 	at := time.UnixMilli(tsMillis)
 	r.mu.Lock()
 	prev, open := r.spans[pane]
@@ -390,7 +402,7 @@ func (r *Recorder) record(pane, agent, session, workspace, status string, tsMill
 			return
 		}
 	}
-	e := Entry{TS: tsMillis, Pane: pane, Agent: agent, Session: session, Workspace: workspace, To: status}
+	e := Entry{TS: tsMillis, Pane: pane, Agent: agent, Session: session, Workspace: workspace, Title: title, To: status}
 	if open {
 		e.From = prev.status
 		if prev.known {
@@ -408,10 +420,19 @@ func (r *Recorder) record(pane, agent, session, workspace, status string, tsMill
 		if e.Workspace == "" {
 			e.Workspace = prev.workspace
 		}
+		// The span's title WINS over the event's. Herdr's status events carry the
+		// raw terminal title, which for a freshly-started agent is the generic
+		// "Claude Code" until it renames itself — while the span's came from an
+		// authoritative read and is the name a person would recognise. Letting the
+		// event overwrite it turns "Evaluate Elasticsearch instance reduction" back
+		// into "Claude Code" on the next transition.
+		if prev.title != "" {
+			e.Title = prev.title
+		}
 	}
 	r.spans[pane] = span{
 		status: status, since: at, known: true,
-		agent: e.Agent, session: e.Session, workspace: e.Workspace,
+		agent: e.Agent, session: e.Session, workspace: e.Workspace, title: e.Title,
 	}
 	r.mu.Unlock()
 	r.log.Append(e)

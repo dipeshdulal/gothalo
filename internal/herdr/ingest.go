@@ -452,9 +452,10 @@ func (i *Ingester) paneSession(ctx context.Context, pane string) error {
 			WorkspaceID string `json:"workspace_id"`
 			Agent       string `json:"agent"`
 			AgentStatus string `json:"agent_status"`
+			Title       string `json:"title"`
 		}
 		if json.Unmarshal(msg.Data, &d) == nil && d.PaneID != "" {
-			i.emitAgentStatus(d.PaneID, d.WorkspaceID, d.Agent, d.AgentStatus)
+			i.emitAgentStatus(d.PaneID, d.WorkspaceID, d.Agent, d.AgentStatus, d.Title)
 		}
 	}
 }
@@ -477,9 +478,10 @@ func (i *Ingester) handle(ctx context.Context, msg SocketMessage) {
 			WorkspaceID string `json:"workspace_id"`
 			Agent       string `json:"agent"`
 			AgentStatus string `json:"agent_status"`
+			Title       string `json:"title"`
 		}
 		_ = json.Unmarshal(msg.Data, &d)
-		i.emitAgentStatus(d.PaneID, d.WorkspaceID, d.Agent, d.AgentStatus)
+		i.emitAgentStatus(d.PaneID, d.WorkspaceID, d.Agent, d.AgentStatus, d.Title)
 		return
 	}
 
@@ -529,10 +531,11 @@ func (i *Ingester) deriveAgentStatus(msg SocketMessage) {
 				WorkspaceID string `json:"workspace_id"`
 				Agent       string `json:"agent"`
 				AgentStatus string `json:"agent_status"`
+				Title       string `json:"terminal_title_stripped"`
 			} `json:"pane"`
 		}
 		if json.Unmarshal(msg.Data, &d) == nil && d.Pane.Agent != "" {
-			i.emitAgentStatus(d.Pane.PaneID, d.Pane.WorkspaceID, d.Pane.Agent, d.Pane.AgentStatus)
+			i.emitAgentStatus(d.Pane.PaneID, d.Pane.WorkspaceID, d.Pane.Agent, d.Pane.AgentStatus, d.Pane.Title)
 		}
 	case events.TypePaneAgentDetected:
 		var d struct {
@@ -542,7 +545,7 @@ func (i *Ingester) deriveAgentStatus(msg SocketMessage) {
 			FinalStatus string `json:"final_status"`
 		}
 		if json.Unmarshal(msg.Data, &d) == nil {
-			i.emitAgentStatus(d.PaneID, d.WorkspaceID, d.Agent, d.FinalStatus)
+			i.emitAgentStatus(d.PaneID, d.WorkspaceID, d.Agent, d.FinalStatus, "")
 		}
 	case events.TypePaneClosed, events.TypePaneExited:
 		var d struct {
@@ -560,7 +563,7 @@ func (i *Ingester) deriveAgentStatus(msg SocketMessage) {
 // only when the status actually changed for that pane (dedup across the several
 // source signals). Herdr's event does not carry state_change_seq, so the app
 // pairs the pane with /snapshot to get the seq for /approve.
-func (i *Ingester) emitAgentStatus(pane, workspace, agent, status string) {
+func (i *Ingester) emitAgentStatus(pane, workspace, agent, status, title string) {
 	if pane == "" || status == "" {
 		return
 	}
@@ -579,6 +582,13 @@ func (i *Ingester) emitAgentStatus(pane, workspace, agent, status string) {
 		"agent":        agent,
 		"agent_status": status,
 		"session":      i.cli.SessionLabel(),
+		// The pane's human name. Every consumer that shows a row to a person needs
+		// it: "claude" identifies a KIND, and a host running a dozen Claudes has a
+		// dozen rows that all say the same thing. Herdr sends it on the status
+		// event already; it was simply not being read. Empty for the signals that
+		// genuinely carry no title, so consumers must fall back rather than
+		// overwrite a known one with "".
+		"title": title,
 	})
 }
 

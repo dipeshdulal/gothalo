@@ -176,6 +176,7 @@ func (a agentReader) Agents() ([]timeline.PaneState, error) {
 				Session:   c.SessionLabel(),
 				Workspace: herdr.Qualify(c.Session(), ag.Workspace),
 				Status:    ag.Status,
+				Title:     ag.Title,
 			})
 		}
 	}

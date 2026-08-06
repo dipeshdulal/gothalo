@@ -165,6 +165,7 @@ class TimelineEntry {
     this.session,
     this.workspace,
     this.previous,
+    this.title,
   });
 
   /// When the bridge observed the transition.
@@ -180,6 +181,14 @@ class TimelineEntry {
 
   final String? session;
   final String? workspace;
+
+  /// The pane's human name at the time of the transition ("Fix the failing
+  /// parser test").
+  ///
+  /// This, not [agent], is what identifies a row to a person: [agent] is a KIND,
+  /// so a host running a dozen Claudes yields a dozen rows that all read
+  /// "Claude". Null for a pane the bridge never learned a title for.
+  final String? title;
 
   /// The status being left. **Null for a first sighting** — a newly detected
   /// agent, not a transition out of an unnamed state.
@@ -213,6 +222,7 @@ class TimelineEntry {
       agent: (j['agent'] as String?) ?? '',
       session: nonEmpty(j['session']),
       workspace: nonEmpty(j['workspace']),
+      title: nonEmpty(j['title']),
       from: nonEmpty(j['from']),
       to: (j['to'] as String?) ?? '',
       previous: prevMs == null ? null : Duration(milliseconds: prevMs),
