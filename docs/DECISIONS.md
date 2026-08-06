@@ -210,4 +210,29 @@ alt-screen agent pane; herdr-mobile-relay snapshots each pane every 4 s and
 sequence-merges the diff into a reconstructed 10k-line history, which is lossy
 and plain-text. For agent history gothalo already has the transcript (D16), read
 from the agent's own log — complete and structured. Plain (non-alt-screen) panes
-are the one case where a `recent` read is worth having; that stays open.
+are the one case where a `recent` read is worth having — see D22.
+
+## D22 — A plain pane's scrollback is seeded once, not paged
+A plain pane has no application to send a wheel to (D21) and no live byte stream:
+the client receives whole frames prefixed with a clear-screen, so its buffer holds
+nothing to scroll back through. `WS /attach` therefore sends **one** history frame
+before the first repaint — `pane read --source recent-unwrapped`, without the
+clear-screen prefix, so it lands in the emulator's own scrollback. Later repaints
+erase only the viewport (ED 2 leaves scrollback alone), so the seed survives.
+
+Once, not paged, because **Herdr caps `pane read` at 1000 rows** and exposes no
+offset parameter. Measured on two panes holding far more: a `docker compose logs -f`
+pane with 10,467 rows and a server log with 1,960 — `--lines` of 1100, 1500 and
+20000 all returned exactly 999. So 1000 rows is the entire reachable history and a
+merino-style growing window buys nothing (merino's own 2000-line cap is above what
+Herdr will return). Deeper history needs an offset method Herdr does not have.
+
+Unwrapped, because the captured rows are folded at the *desktop's* column count;
+replaying those folds on a phone double-wraps every long log line. Reading is
+side-effect-free for the operator — on a pane sitting 1,254 rows back, a read left
+`offset_from_bottom` untouched, so the old warning in `bridge_client.dart` (that
+history could only be captured by physically scrolling the pane) no longer holds.
+
+Accepted wart: the seed ends with the current frame, so a few lines can appear both
+in scrollback and on screen. Trimming by the pane's row count would risk cutting
+past the overlap and leaving a silent gap, and a repeated line beats a lost one.

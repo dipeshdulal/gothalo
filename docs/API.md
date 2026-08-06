@@ -449,6 +449,20 @@ client can't tell them apart:
   straight to the pane's PTY. This is a full-frame repaint stream, so a plain
   pane refreshes on a short interval rather than character-by-character.
 
+  **The first frame is a scrollback seed**, not a repaint: up to 1000 rows of
+  `herdr pane read --source recent-unwrapped`, sent **without** the clear-screen
+  prefix so it lands in the emulator's scrollback and the user can drag back
+  through it. Every later frame is a normal repaint, and its erase-display
+  clears only the viewport, leaving the seed intact. A client needs no new code
+  — just enough buffer to hold it (`Terminal(maxLines:)`) — but should expect a
+  large first frame: 82 KB for a busy `docker compose logs -f` pane.
+
+  1000 rows is Herdr's ceiling, not a choice: `pane read` returns at most that
+  many however many are asked for, and there is no offset parameter, so deeper
+  history is unreachable and a "load more" is not worth building. Agent panes
+  get no seed — they run on the alternate screen, where Herdr holds no
+  scrollback at all (see D21).
+
 Binary frames are raw terminal bytes; **text** frames are out-of-band control
 messages (today: `resize`). The backend (PTY process or poller) is stopped when
 the socket closes (either side). Reconnect + re-fetch `/snapshot` is the

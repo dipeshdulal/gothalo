@@ -238,6 +238,31 @@ func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 		}
 	}()
 
+	// Seed the client's scrollback, once, before the first repaint. A plain pane
+	// has no live byte stream to replay: the client only ever receives whole
+	// frames prefixed with a clear-screen, so its buffer holds nothing to scroll
+	// back through. Herdr does hold the history — a `docker compose logs -f`
+	// pane had 10,467 rows of it — and hands over the last [herdr.PaneHistoryRows]
+	// on request, which is the whole reachable window (no offset method exists).
+	//
+	// This goes out WITHOUT repaint's clear-screen prefix, so it scrolls into the
+	// client's scrollback; the first repaint then erases only the viewport (ED 2
+	// leaves scrollback intact) and paints the live frame over it.
+	//
+	// The seed ends with the current frame, so a few of its last lines can show
+	// up both in scrollback and on screen. That overlap is deliberate: trimming
+	// by the pane's row count would risk cutting past it and leaving a silent gap
+	// in the history, and a repeated line is easier to live with than a lost one.
+	if hist, err := c.ReadPaneHistory(pane); err != nil {
+		// History is a nicety; a live pane still streams without it.
+		log.Error("attach: history read failed", "pane", pane, "err", err)
+	} else if len(bytes.TrimSpace(hist)) > 0 {
+		if e := conn.Write(ctx, websocket.MessageBinary, crlf(hist)); e != nil {
+			return
+		}
+		log.Info("attach: seeded scrollback", "pane", pane, "bytes", len(hist))
+	}
+
 	// Repaint loop: read + repaint on a change (or the fallback tick), then hold
 	// off briefly so a burst of events collapses into a bounded repaint rate.
 	go func() {
@@ -301,9 +326,15 @@ func applyResize(ptmx *os.File, data []byte, pane string) {
 // erase display, then the pane's rows with CRLF line endings so each row lands
 // at column 0 regardless of the emulator's newline mode.
 func repaint(frame []byte) []byte {
-	frame = bytes.ReplaceAll(frame, []byte("\r\n"), []byte("\n"))
-	frame = bytes.ReplaceAll(frame, []byte("\n"), []byte("\r\n"))
+	frame = crlf(frame)
 	out := make([]byte, 0, len(frame)+8)
 	out = append(out, "\x1b[H\x1b[2J"...) // cursor home, erase entire display
 	return append(out, frame...)
+}
+
+// crlf gives every row a CRLF ending so it lands at column 0 regardless of the
+// emulator's newline mode. Idempotent: an already-CRLF stream is unchanged.
+func crlf(frame []byte) []byte {
+	frame = bytes.ReplaceAll(frame, []byte("\r\n"), []byte("\n"))
+	return bytes.ReplaceAll(frame, []byte("\n"), []byte("\r\n"))
 }
