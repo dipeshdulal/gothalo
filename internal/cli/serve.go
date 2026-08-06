@@ -101,7 +101,18 @@ func runServe(configPath string) error {
 	// recorder's first bus event.
 	tl := timeline.Open(cfg.TimelinePath())
 
-	srv = server.New(cfg, mgr, pc, st, pm, web.FS(), bus, tl)
+	// GOTHALO_WEB_DIR serves the static site from a directory instead of the
+	// embedded assets. It exists so a web UI can be iterated on without
+	// rebuilding the bridge — and, more importantly, so a browser client is
+	// served from the BRIDGE'S OWN ORIGIN. Same origin means no CORS on the API
+	// and no mixed-content rules to satisfy; a UI hosted anywhere else needs both.
+	webFS := web.FS()
+	if dir := os.Getenv("GOTHALO_WEB_DIR"); dir != "" {
+		webFS = os.DirFS(dir)
+		log.Info("serving web from directory", "dir", dir)
+	}
+
+	srv = server.New(cfg, mgr, pc, st, pm, webFS, bus, tl)
 	go mgr.Run(context.Background())
 
 	// The notification-clearer is the process-wide bus consumer that dismisses a
