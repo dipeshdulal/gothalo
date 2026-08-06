@@ -79,6 +79,10 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       lists what the agent really accepts, read off the host's disk
       (`internal/commands`, `docs/CONTRACT-commands.md`). Plugin commands are a
       recorded gap, not an omission; see the contract.
+- ✅ One-tap **Create PR** — the app asks the pane's own agent to commit, push
+      and `gh pr create`, gated on a host-side git read (`GET /diff?context=1`,
+      `docs/CONTRACT-diff.md`, D26). Agent-agnostic by construction; the bridge
+      runs no git itself. The prompt is editable before it is sent.
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
