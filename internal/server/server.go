@@ -17,6 +17,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/events"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/pairing"
+	"github.com/dipeshdulal/gothalo/internal/ports"
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/store"
 	"github.com/dipeshdulal/gothalo/internal/timeline"
@@ -44,6 +45,14 @@ type Server struct {
 	// than an empty history — "no recorder running" and "nothing happened yet"
 	// are different answers and a client should be able to tell them apart.
 	timeline *timeline.Log
+	// portsCache memoises the host port scan behind GET /ports. The list page
+	// polls it alongside /snapshot, so the scan is shared across callers rather
+	// than run per request.
+	portsCache ports.Cache
+	// paneMap memoises the pane -> shell-pid map that attribution joins against.
+	// Separate from portsCache and longer-lived: a pane's shell pid never
+	// changes, so it survives many scans.
+	paneMap paneMapCache
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
 	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
@@ -98,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
 	mux.HandleFunc("/commands", s.handleCommands)
+	mux.HandleFunc("/ports", s.handlePorts)
 	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
 	mux.HandleFunc("/agent/start", s.handleAgentStart)
 	mux.HandleFunc("/agent/restart", s.handleAgentRestart)

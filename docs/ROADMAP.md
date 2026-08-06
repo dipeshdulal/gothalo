@@ -82,8 +82,26 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
-- ⬜ Browser preview (agent's dev server in a WebView). Low value over a
-      tailnet, where the phone browser already reaches it directly.
+- 🚧 **Dev-server preview** — `GET /ports` ships (`internal/ports`,
+      `docs/CONTRACT-preview.md`): the host's HTTP listeners, probed so only real
+      servers are listed, each attributed to the pane that spawned it by walking
+      the process tree to a pane's `shell_pid`. App-side chip is not built yet.
+
+      This supersedes the earlier "browser preview in a WebView — low value over
+      a tailnet" note, which was half right and half wrong. Right: the **tunnel**
+      is redundant. Tailscale already reaches a server bound to `0.0.0.0`, so
+      there is nothing to forward and no WebView is wanted — the chip opens the
+      system browser. Wrong on two counts: dev servers **default to
+      `127.0.0.1`** (Vite, `next dev`, `rails s`), which no amount of tailnet
+      reaches; and with agents in parallel worktrees, **discovery and attribution**
+      is the real problem — three servers on 5173/5174/5175 and a bare port
+      number tells you nothing about whose is whose.
+
+      Loopback-bound servers are reported with no `url` and render as a dimmed
+      "localhost-only" badge. Relaying them (a bridge-side TCP splice, `ssh -L`
+      without the SSH) is deliberately deferred until the badge shows how often
+      that case actually comes up — it would open ports outside the bearer check,
+      so it should be an explicit per-port "Expose" tap rather than automatic.
 
 ## Known gaps
 - **Codex transcripts** — `internal/transcript/codex.go` is an honest stub that
