@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -390,6 +391,30 @@ func (c *Client) GetPane(paneID string) (Pane, error) {
 // this and repaints the WebSocket for non-agent panes.
 func (c *Client) ReadPane(paneID string) ([]byte, error) {
 	return c.run("pane", "read", paneID, "--source", "visible", "--format", "ansi")
+}
+
+// PaneHistoryRows is what the attach bridge asks for when seeding a plain pane's
+// scrollback, and it is also Herdr's ceiling: `pane read` returns at most 1000
+// rows however many are requested. Measured on two panes holding far more than
+// that — a `docker compose logs -f` pane with 10,467 rows of scrollback and a
+// server log with 1,960 — where `--lines` of 1100, 1500 and 20000 all returned
+// exactly 999. There is no offset parameter either, so those 1000 rows are the
+// entire reachable history; asking for more only costs a slower read.
+const PaneHistoryRows = 1000
+
+// ReadPaneHistory returns up to [PaneHistoryRows] rows of a pane's recent
+// scrollback with ANSI colour, soft wraps joined (`herdr pane read --source
+// recent-unwrapped`). Unwrapped because the phone re-wraps at its own width: the
+// rows Herdr captured are folded at the *desktop's* column count, and replaying
+// those folds on a narrow viewport double-wraps every long log line.
+//
+// Reading does not disturb the operator — on a pane sitting 1,254 rows back, a
+// read left `offset_from_bottom` exactly where it was.
+func (c *Client) ReadPaneHistory(paneID string) ([]byte, error) {
+	return c.run("pane", "read", paneID,
+		"--source", "recent-unwrapped",
+		"--lines", strconv.Itoa(PaneHistoryRows),
+		"--format", "ansi")
 }
 
 // CreateTab opens a new tab (and its root pane) in a workspace

@@ -1,10 +1,12 @@
 import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../core/firebase_web_options.dart';
 import '../../data/bridge/bridge_providers.dart';
 import 'notification_actions.dart';
 import 'push_payload.dart';
@@ -311,7 +313,12 @@ class PushController extends _$PushController {
       // Re-register the token whenever the active bridge changes.
       ref.listen(bridgeClientProvider, (_, _) => _registerCurrent());
 
-      _token = await messaging.getToken();
+      // Web push needs the VAPID public key; native does not take one at all.
+      // Without it the browser refuses the subscription, and the error reads
+      // like a permissions failure rather than a missing key.
+      _token = await messaging.getToken(
+        vapidKey: kIsWeb ? firebaseWebVapidKey : null,
+      );
       await _registerCurrent();
       return _token;
     } catch (e) {

@@ -79,6 +79,15 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
+  # The PWA gets the same ram, from the same source, so a browser tab and a home
+  # screen icon are not a third hand-made variant that drifts from the other two.
+  # ic_ios.png for the same reason iOS uses it: an installed PWA icon is composited
+  # on an opaque tile, and ic_legacy's transparent corners show as artefacts.
+  web:
+    generate: true
+    image_path: "assets/icon/ic_ios.png"
+    background_color: "#0A0E0F"
+    theme_color: "#0A0E0F"
   image_path: "assets/icon/ic_legacy.png"
   adaptive_icon_background: "assets/icon/ic_bg.png"
   adaptive_icon_foreground: "assets/icon/ic_foreground.png"

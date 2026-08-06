@@ -33,3 +33,19 @@ config.local.*
 
 # local dev credentials (per-device bearer) — never commit
 .gothalo-dev.json
+
+# Web UI built into the bridge by scripts/build.sh. Generated, not committed:
+# go:embed reads the working tree, so a fresh clone simply embeds the
+# hand-written files and serves no app until the script has run.
+/internal/web/assets/index.html
+/internal/web/assets/.last_build_id
+/internal/web/assets/main.dart.js
+/internal/web/assets/flutter*.js
+/internal/web/assets/manifest.json
+/internal/web/assets/favicon.png
+/internal/web/assets/version.json
+/internal/web/assets/*.wasm
+/internal/web/assets/drift_worker.js
+/internal/web/assets/assets/
+/internal/web/assets/canvaskit/
+/internal/web/assets/icons/

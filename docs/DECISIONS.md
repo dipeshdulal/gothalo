@@ -178,3 +178,61 @@ Consequences:
 - The metadata-server branch means a future hosted relay (D12) can run with **no**
   key material anywhere. That is a free consequence of following ADC, not a
   commitment to build the relay.
+
+## D21 — Terminal scroll is a wheel report to the application, not scrollback
+Dragging the live terminal scrolls the **remote application**, by sending it SGR
+mouse-wheel reports on the same PTY stream as every keystroke (D6). There is no
+client-side scrollback to scroll, and no host-side one either:
+
+- Every agent pane runs on the **alternate screen** (herdr replays `?1049h` on
+  attach), so herdr keeps no scrollback for it — `max_offset_from_bottom` is `0`
+  on every agent pane and `pane read --source recent` returns exactly the visible
+  frame. A bigger `--lines` cannot recover what left the alt screen.
+- Herdr has **no scroll-offset API** (149 socket methods, none of them set
+  `scroll`), so the bridge can't ask for a window of history either.
+- Claude Code turns on mouse tracking and SGR coordinates (`?1000h ?1002h ?1003h
+  ?1006h`), so it consumes wheel reports itself. Verified on a live pane:
+  `ESC[<64;20;20M` scrolls it.
+
+Consequence, accepted: the pane's own viewport moves, so a desktop operator
+watching that pane sees it scroll too. That is inherent to alt-screen apps —
+Moshi has it as well (its docs describe the same drag → wheel forwarding when
+attached to a multiplexer).
+
+The shim is `PtyMouseHandler`: xterm.dart encodes wheel-up/down as buttons 68/69
+(`64 + 4`, which sets the **shift** bit) instead of 64/65, and applications
+ignore shift+wheel. Everything else about xterm's gesture path already worked.
+
+**Not chosen** — the two things the open-source herdr clients do instead, both of
+which give up the live terminal: merino re-reads `--source recent` with a growing
+line budget (400→2000) and renders it as text, which yields nothing on an
+alt-screen agent pane; herdr-mobile-relay snapshots each pane every 4 s and
+sequence-merges the diff into a reconstructed 10k-line history, which is lossy
+and plain-text. For agent history gothalo already has the transcript (D16), read
+from the agent's own log — complete and structured. Plain (non-alt-screen) panes
+are the one case where a `recent` read is worth having — see D22.
+
+## D22 — A plain pane's scrollback is seeded once, not paged
+A plain pane has no application to send a wheel to (D21) and no live byte stream:
+the client receives whole frames prefixed with a clear-screen, so its buffer holds
+nothing to scroll back through. `WS /attach` therefore sends **one** history frame
+before the first repaint — `pane read --source recent-unwrapped`, without the
+clear-screen prefix, so it lands in the emulator's own scrollback. Later repaints
+erase only the viewport (ED 2 leaves scrollback alone), so the seed survives.
+
+Once, not paged, because **Herdr caps `pane read` at 1000 rows** and exposes no
+offset parameter. Measured on two panes holding far more: a `docker compose logs -f`
+pane with 10,467 rows and a server log with 1,960 — `--lines` of 1100, 1500 and
+20000 all returned exactly 999. So 1000 rows is the entire reachable history and a
+merino-style growing window buys nothing (merino's own 2000-line cap is above what
+Herdr will return). Deeper history needs an offset method Herdr does not have.
+
+Unwrapped, because the captured rows are folded at the *desktop's* column count;
+replaying those folds on a phone double-wraps every long log line. Reading is
+side-effect-free for the operator — on a pane sitting 1,254 rows back, a read left
+`offset_from_bottom` untouched, so the old warning in `bridge_client.dart` (that
+history could only be captured by physically scrolling the pane) no longer holds.
+
+Accepted wart: the seed ends with the current frame, so a few lines can appear both
+in scrollback and on screen. Trimming by the pane's row count would risk cutting
+past the overlap and leaving a silent gap, and a repeated line beats a lost one.
