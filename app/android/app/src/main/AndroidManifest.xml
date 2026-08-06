@@ -52,6 +52,21 @@
             android:exported="false"
             android:enabled="true" />
 
+        <!-- The home-screen widget: blocked/working/done across every paired
+             bridge, tapping through to Priority. It only ever renders what the
+             app last wrote (updatePeriodMillis is 0 in fleet_widget_info.xml),
+             so it schedules nothing and wakes nothing. -->
+        <receiver
+            android:name=".FleetWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/fleet_widget_info" />
+        </receiver>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

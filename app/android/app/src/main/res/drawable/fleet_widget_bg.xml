@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The widget's card. Dark in both system themes on purpose: the app is
+  dark-first (see AppTheme), and a card that flips to white on a light launcher
+  reads as a different product sitting next to the app icon.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/fleet_background" />
+    <corners android:radius="20dp" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/fleet_border" />
+</shape>

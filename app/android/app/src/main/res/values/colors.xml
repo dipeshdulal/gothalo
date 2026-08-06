@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0D4A45</color>
+
+    <!-- Home-screen widget. Taken from AppTheme's dark palette so the card
+         reads as the same product as the app it opens: scaffold base, the
+         Herdr-ish teal seed, and the inbox's blocked red. -->
+    <color name="fleet_background">#EB0A0E0F</color>
+    <color name="fleet_border">#1F00BFA5</color>
+    <color name="fleet_number">#E6F1F6F5</color>
+    <color name="fleet_alert">#FF5252</color>
+    <color name="fleet_line">#B3F1F6F5</color>
+    <color name="fleet_muted">#8000BFA5</color>
 </resources>

@@ -8,6 +8,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/firebase_web_options.dart';
 import '../../data/bridge/bridge_providers.dart';
+import '../home_widget/fleet_widget_sync.dart';
 import 'notification_actions.dart';
 import 'notification_permission_io.dart'
     if (dart.library.js_interop) 'notification_permission_web.dart';
@@ -199,9 +200,20 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (p.isOsRendered) return;
   if (p.isDismiss) {
     await _dismiss(p);
-    return;
+  } else {
+    await _show(p);
   }
-  await _show(p);
+  // Every alert and every dismiss is, by definition, an agent changing between
+  // the states the home-screen widget counts — so this is the one moment
+  // outside the app when the widget is certainly wrong. The tray still comes
+  // first: the notification is drawn before we go near the network, and the
+  // refresh no-ops entirely when no widget is on a home screen, and it can
+  // never fail the notification that got us here.
+  try {
+    await refreshWidgetFromBridges();
+  } catch (e) {
+    debugPrint('gothalo: widget refresh after push failed: $e');
+  }
 }
 
 /// Foreground taps and action buttons.

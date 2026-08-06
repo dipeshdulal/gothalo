@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home-screen widget. Labels are short because they sit under a 26sp
+         number in a 2x2 cell; anything longer wraps or clips. -->
+    <string name="fleet_widget_label">AGENTS</string>
+    <string name="fleet_widget_description">Blocked, working and finished agents across every paired bridge.</string>
+    <string name="fleet_widget_needs_you">need you</string>
+    <string name="fleet_widget_working">working</string>
+    <string name="fleet_widget_done">done</string>
+    <string name="fleet_widget_all_clear">Nothing needs you.</string>
+    <string name="fleet_widget_unpaired">No bridges paired yet.</string>
+    <!-- Counts without titles: the app knew the numbers but not which agents,
+         which happens when a server answered a count but its titles were empty. -->
+    <string name="fleet_widget_no_detail">Tap to see which.</string>
+</resources>

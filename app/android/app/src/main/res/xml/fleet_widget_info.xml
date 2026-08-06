@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  updatePeriodMillis="0" is the whole battery story: the widget never wakes the
+  phone on its own. It is repainted only when the app has just learned something
+  (an /events snapshot, a cross-server refresh) or when a push arrives — see
+  docs/CONTRACT-android-widget.md.
+
+  targetCellWidth/Height are Android 12+; minWidth/minHeight are what everything
+  below it uses. 2x2 is the design size, and the layout simply gets more air on
+  a bigger cell.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/fleet_widget"
+    android:previewLayout="@layout/fleet_widget"
+    android:previewImage="@mipmap/ic_launcher"
+    android:description="@string/fleet_widget_description" />

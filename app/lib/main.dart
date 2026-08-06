@@ -1,3 +1,5 @@
+import 'dart:async' show StreamSubscription;
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -8,6 +10,8 @@ import 'core/connection/server_switch.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
 import 'data/bridge/bridge_providers.dart';
+import 'features/home_widget/fleet_widget_providers.dart';
+import 'features/home_widget/fleet_widget_tap.dart';
 import 'features/inbox/inbox_providers.dart';
 import 'features/push/push_payload.dart';
 import 'core/firebase_web_options.dart';
@@ -47,6 +51,8 @@ class GothaloApp extends ConsumerStatefulWidget {
 }
 
 class _GothaloAppState extends ConsumerState<GothaloApp> {
+  StreamSubscription<Uri?>? _widgetTaps;
+
   @override
   void initState() {
     super.initState();
@@ -54,11 +60,25 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
     // Web taps arrive from the service worker (launch URL or message stream)
     // rather than the plugin channels; this queues them the same way.
     initWebNotificationTaps();
+    // A tap on the home-screen widget while the app is already running.
+    _widgetTaps = fleetWidgetTaps.listen(_handleWidgetTap);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Start push (permission, token, listeners); no-ops if Firebase is absent.
       ref.read(pushControllerProvider);
       _handleDeepLink(); // a cold-start deep-link may already be queued
+      // …and so may a widget tap, if that is what launched us.
+      unawaited(initialFleetWidgetTap().then(_handleWidgetTap));
     });
+  }
+
+  /// Open Priority for a home-screen widget tap.
+  ///
+  /// No server switching, unlike a notification tap: the widget counts the whole
+  /// fleet rather than one machine, and Priority is already cross-server — so
+  /// there is nothing to disambiguate and nothing to get wrong.
+  void _handleWidgetTap(Uri? uri) {
+    if (!isFleetWidgetTap(uri) || !mounted) return;
+    ref.read(routerProvider).push(kWidgetRoute);
   }
 
   /// Navigate to the agent a tapped notification is about.
@@ -110,6 +130,7 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
   @override
   void dispose() {
     pendingDeepLink.removeListener(_handleDeepLink);
+    _widgetTaps?.cancel();
     super.dispose();
   }
 
@@ -136,6 +157,10 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
     // and everything downstream of it looked frozen. With no server configured
     // this settles into an error state and starts nothing, which is correct.
     ref.listen(snapshotControllerProvider, (_, _) {});
+    // Feed the Android home-screen widget off that same socket. Subscribed here
+    // rather than from a screen because the widget's whole point is being
+    // current when no screen of ours is open. No-op off Android.
+    ref.listen(fleetWidgetSyncProvider, (_, _) {});
     return MaterialApp.router(
       title: 'gothalo',
       scaffoldMessengerKey: scaffoldMessengerKey,

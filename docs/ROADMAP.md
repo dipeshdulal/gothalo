@@ -79,6 +79,11 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       lists what the agent really accepts, read off the host's disk
       (`internal/commands`, `docs/CONTRACT-commands.md`). Plugin commands are a
       recorded gap, not an omission; see the contract.
+- ✅ Android home-screen widget — blocked/working/done across every paired
+      bridge, tapping through to Priority (`app/lib/features/home_widget`,
+      `docs/CONTRACT-android-widget.md`). Refreshed from the app's existing
+      `/events` socket and from the push handler; it polls nothing itself, so a
+      frozen app process means a stale widget with an honest age label.
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.

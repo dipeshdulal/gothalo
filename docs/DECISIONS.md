@@ -436,6 +436,38 @@ the payload and the UI states it. Pushing a branch deletion from a phone affects
 everyone and reaches outside the host; nothing else on this bridge does that, and
 this does not either.
 
+## D25 — The home-screen widget is fed, never self-fed
+The Android widget (`docs/CONTRACT-android-widget.md`) is a pure renderer:
+`updatePeriodMillis` is `0`, it registers no `WorkManager` job and no alarm, and
+every number on it was written there by the app. Three feeds, and no timer:
+
+- the **active** server's live `/events` snapshot, which is already open for the
+  whole session, so that machine tracks as closely on the home screen as it does
+  in the app;
+- **every** saved server at app start and on each resume;
+- **every** saved server from the FCM background handler — an alert or a dismiss
+  is by definition an agent crossing between the states the widget counts, so it
+  is the one moment outside the app when the widget is certainly wrong.
+
+A widget that polls is the obvious alternative and is rejected for the reason D3
+splits push from interactive: reaching N bridges over a tailnet on a schedule is
+exactly the battery-and-network cost push exists to avoid, and Priority's own
+cross-server poll is already confined to the seconds that screen is on screen for
+the same reason.
+
+The accepted cost is that a **frozen app process leaves a stale widget** — when
+Android draws only the `os` half of an alert and never runs our Dart
+(`CONTRACT-notifications.md` §2), nothing refreshes. So the widget renders **how
+old its freshest number is** (`now` / `12m` / `3h` / `old`) rather than implying
+it is live. A stale count that looks current is worse than a stale count that
+says so.
+
+Counts are stored **per server** and merged, not as one aggregate, because the
+app almost never has a live view of every server at once: an aggregate written by
+whichever feed fired last would let the active server's update erase the others.
+An unreachable server therefore contributes its last known numbers instead of
+zeros, which is the honest answer to "I could not ask it".
+
 ## D28 — The diff viewer derives everything it can from the payload; only the lines git never sent are an endpoint
 The Changes screen shows a directory tree, per-line numbering, word-level
 intra-line highlighting, and collapsed unchanged regions. Exactly one of those

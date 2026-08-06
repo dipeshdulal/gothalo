@@ -55,6 +55,7 @@ dependencies:
   flutter_local_notifications: ^22.2.0
   flutter_markdown: ^0.7.7+1
   image_picker: ^1.2.3 # camera roll / camera -> bytes for POST /image (needs the Info.plist + manifest usage strings)
+  home_widget: ^0.9.3 # android home-screen widget: the shared prefs store both sides read, plus the launch intent (see docs/CONTRACT-android-widget.md). 0.9.3 is the first release that handles AGP 9 / built-in Kotlin.
 
 dev_dependencies:
   flutter_test:
