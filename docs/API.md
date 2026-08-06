@@ -475,6 +475,9 @@ shells, dev-servers, logs — not just agent ones.
   the agent's line-editing (autocomplete, wrapping, history) redraws at your
   actual width. Agent panes apply it with `pty.Setsize`; plain panes own their
   geometry via Herdr and ignore it. Unknown/malformed text frames are ignored.
+- **WS → mode** (control): the server sends a **text** frame
+  `{"type":"mode","agent":<bool>}` when the pane's occupant changed and the
+  backend was swapped underneath this same socket — see below.
 
 Two backends behind the one contract, picked automatically by pane kind — the
 client can't tell them apart:
@@ -505,13 +508,33 @@ client can't tell them apart:
   get no seed — they run on the alternate screen, where Herdr holds no
   scrollback at all (see D21).
 
+**A pane's kind is not fixed for the life of the socket.** Type `claude` into a
+plain shell and Herdr hosts an agent in it; exit that agent and it is a plain
+shell again. The bridge follows both transitions and swaps the backend
+underneath the same WebSocket — no reconnect, no new `pane_id`.
+
+On each swap the server sends a **text** frame `{"type":"mode","agent":<bool>}`
+**before** the new backend's first byte. A client MUST reset its emulator when
+it arrives: exit the alternate screen, clear the buffer, and start a fresh
+UTF-8 decoder. The two streams are different shapes of output — an alt-screen
+TUI versus whole-frame repaints — and one's leftovers corrupt the other. Resend
+your geometry too: a freshly started agent PTY is back at 80×24. Swapping to a
+plain pane re-seeds scrollback, so expect another large first frame.
+
+Detecting the transition is the bridge's problem, not the client's, and it is
+subtler than it looks: Herdr's `pane.agent_detected` fires on an agent
+appearing **and** on one exiting, and the `pane.updated` trailing an exit still
+carries the departed agent. Only `pane.agent_status_changed` with `agent:""`
+reports the departure. So the bridge treats every signal as "re-resolve" and
+lets `herdr pane get` decide.
+
 Binary frames are raw terminal bytes; **text** frames are out-of-band control
-messages (today: `resize`). The backend (PTY process or poller) is stopped when
-the socket closes (either side). Reconnect + re-fetch `/snapshot` is the
-resilience story (no mosh-style state sync). The PTY starts at 80×24 and is
-resized to the client's geometry by the first `resize` frame. Errors before the
-upgrade: `404` if `pane` doesn't exist, `401` no/invalid token, `400` missing
-`pane`.
+messages (`resize` inbound, `mode` outbound). The backend (PTY process or
+poller) is stopped when the socket closes (either side). Reconnect + re-fetch
+`/snapshot` is the resilience story (no mosh-style state sync). The PTY starts
+at 80×24 and is resized to the client's geometry by the first `resize` frame.
+Errors before the upgrade: `404` if `pane` doesn't exist, `401` no/invalid
+token, `400` missing `pane`.
 
 ## WS /events — unified push event stream
 `GET /events?token=<bearer>` upgraded to a **WebSocket** carrying a single
