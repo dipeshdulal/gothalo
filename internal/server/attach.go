@@ -34,9 +34,9 @@ const paneCoalesce = 40 * time.Millisecond
 //   - Agent panes keep the high-fidelity path: `herdr agent attach <pane>` under
 //     a PTY, bridging raw bytes both ways.
 //   - Plain panes have no agent to attach, so the bridge polls
-//     `herdr pane read` and repaints the socket, and forwards inbound bytes to
-//     `herdr pane send-text` (which passes raw bytes — Enter, arrows, Ctrl-C —
-//     straight to the pane's PTY).
+//     `herdr pane read` and repaints the socket, and forwards inbound bytes as
+//     a mix of `pane send-text` (literal text) and `pane send-keys` (Enter,
+//     arrows, Ctrl-C — see splitPaneInput, since send-text drops those).
 //
 // Frame types: **binary** frames are raw terminal bytes (the accessory key row
 // writes control bytes straight into this stream, D6). **text** frames are
@@ -190,9 +190,17 @@ func attachPaneStream(conn *websocket.Conn, c *herdr.Client, pane string) {
 			if typ == websocket.MessageText {
 				continue
 			}
-			if len(data) > 0 {
-				if e := c.Send(pane, string(data)); e != nil {
-					log.Error("attach: send-text failed", "pane", pane, "err", e)
+			// send-text types text and drops control sequences, so keys are
+			// split out and pressed via send-keys — see splitPaneInput.
+			for _, chunk := range splitPaneInput(string(data)) {
+				var e error
+				if chunk.key != "" {
+					e = c.SendKeys(pane, chunk.key)
+				} else {
+					e = c.Send(pane, chunk.text)
+				}
+				if e != nil {
+					log.Error("attach: pane input failed", "pane", pane, "chunk", chunk, "err", e)
 				}
 			}
 		}
