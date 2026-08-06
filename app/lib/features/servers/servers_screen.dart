@@ -93,7 +93,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
       asset: Backgrounds.servers,
       child: Scaffold(
         appBar: AppBar(
-          titleSpacing: 12,
           title: Row(
             mainAxisSize: MainAxisSize.min,
             children: const [

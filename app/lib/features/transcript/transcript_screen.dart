@@ -871,12 +871,6 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        // Material reserves a fixed 56dp slot for the leading widget whatever
-        // the icon's real width, and titleSpacing is added on top — so the back
-        // arrow sat in a wide empty box while the title, which is long and
-        // ellipsises, was pushed into less room than it needed.
-        leadingWidth: 40,
-        titleSpacing: 4,
         title: PaneTitle(
           title: agent?.displayTitle ?? widget.pane,
           subtitle: [
@@ -1228,9 +1222,16 @@ class _GapBlock extends _Block {
   final bool afterTool;
 }
 
-/// The shortest pause worth drawing. Below this, a label per entry would be
-/// noise on every fast turn and would push the messages apart for nothing.
-const _minShownGap = Duration(seconds: 10);
+/// The shortest pause worth drawing.
+///
+/// A minute, not a few seconds. The first attempt used 10s and marked almost
+/// every tool call — "took 14s", "took 17s", "took 37s" down the whole
+/// transcript. All true, none of it useful: nothing you would do differently,
+/// and enough of it to bury the one pause that mattered.
+///
+/// The bar is whether you would have NOTICED the wait. Under a minute you would
+/// not, so the marker earns nothing and costs a row.
+const _minShownGap = Duration(minutes: 1);
 
 /// The time between two entries, drawn as a quiet timeline marker.
 ///
