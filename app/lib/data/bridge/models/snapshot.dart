@@ -75,6 +75,19 @@ sealed class Agent with _$Agent {
     /// Null on an older bridge that doesn't send it — see [attention], which
     /// falls back to the local [AgentStatus.rank].
     @JsonKey(name: 'attention_rank') int? attentionRank,
+
+    /// When this agent last wrote to its transcript, in unix milliseconds —
+    /// the bridge's answer to "how long has it been like this".
+    ///
+    /// Every other field describes NOW. This is the only one that dates it, and
+    /// it is what turns "blocked" into "blocked 50m" — the difference that
+    /// decides whether you pick the phone up.
+    ///
+    /// **Null means unknown, never "just now".** Absent for a kind whose
+    /// sessions share one store (the bridge refuses to report another agent's
+    /// age as this one's) and for an agent that has not spoken yet. Render
+    /// nothing rather than "0s".
+    @JsonKey(name: 'last_activity_ts') int? lastActivityTs,
   }) = _Agent;
 
   factory Agent.fromJson(Map<String, dynamic> json) => _$AgentFromJson(json);
@@ -85,6 +98,21 @@ sealed class Agent with _$Agent {
 
   /// A human label for the row when the terminal title is empty.
   String get displayTitle => title.isNotEmpty ? title : agent;
+
+  /// How long since this agent last did anything, or null when the bridge could
+  /// not date it.
+  ///
+  /// Null is not zero: an agent whose age is unknown must render no duration at
+  /// all, rather than "0s", which would read as "just now" — the opposite of the
+  /// truth for an agent that has been parked for hours.
+  Duration? get sinceLastActivity {
+    final ts = lastActivityTs;
+    if (ts == null || ts <= 0) return null;
+    final d = DateTime.now().difference(
+      DateTime.fromMillisecondsSinceEpoch(ts),
+    );
+    return d.isNegative ? Duration.zero : d;
+  }
 
   /// The rank to order this agent by: the bridge's authoritative
   /// [attentionRank] when it sends one, else the locally derived

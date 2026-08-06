@@ -8,6 +8,7 @@ import '../../core/theme.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/widgets/agent_avatar.dart';
+import '../../core/widgets/agent_age.dart';
 import '../inbox/widgets/status_badge.dart';
 import '../priority/priority_providers.dart';
 
@@ -234,6 +235,14 @@ class _PriorityTile extends StatelessWidget {
               padding: EdgeInsets.only(right: 6),
               child: Icon(Icons.star, size: 15, color: Color(0xFFF5C043)),
             ),
+          // How long it has been like this. "Done" is a state; "Done · 4m" is a
+          // decision. This is the first screen you see, so the number belongs
+          // here more than anywhere.
+          AgentAge(
+            hit.agent.sinceLastActivity,
+            emphasize: hit.agent.agentStatus == AgentStatus.blocked,
+          ),
+          const SizedBox(width: 8),
           StatusBadge(hit.agent.agentStatus),
         ],
       ),
