@@ -44,6 +44,7 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ✅ FCM registration + push handling → deep-link to the blocked agent
 - ✅ Live terminal via `xterm.dart` fed by `WS /attach`
 - ✅ Accessory key row — Esc / Tab / arrows / **sticky-Ctrl**
+- ✅ Floating arrow pad over the terminal — draggable, hold-to-repeat
 - ✅ Tap-to-approve (`features/approvals`)
 - ✅ Saved bridge hosts (`features/servers`, multi-bridge since #83)
 - ✅ Theme (`ThemeMode.system`; no in-app picker, which is fine)

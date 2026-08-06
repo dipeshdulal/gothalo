@@ -468,7 +468,8 @@ shells, dev-servers, logs — not just agent ones.
 - **terminal → WS**: server sends **binary** frames — raw terminal bytes; feed
   them straight into your terminal emulator (`xterm.dart`).
 - **WS → terminal**: send **binary** frames — raw keystrokes and control bytes
-  (the accessory key row writes Esc `0x1b`, Ctrl-C `0x03`, arrows `\e[A`… here).
+  (the accessory key row and the floating arrow pad write Esc `0x1b`, Ctrl-C
+  `0x03`, arrows `\e[A`… here).
 - **WS → resize** (control): send a **text** frame `{"type":"resize","cols":C,"rows":R}`
   to set the PTY geometry — send it on connect and on every viewport change, so
   the agent's line-editing (autocomplete, wrapping, history) redraws at your
@@ -480,10 +481,15 @@ client can't tell them apart:
 - **Agent panes**: unchanged — `herdr agent attach <pane>` under a PTY, copied
   byte-for-byte both ways (identical to before).
 - **Plain panes**: the bridge polls `herdr pane read` (~5×/s) and repaints the
-  socket (cursor-home + clear-screen + frame), and forwards inbound bytes to
-  `herdr pane send-text`, which delivers raw bytes — Enter, arrows, Ctrl-C —
-  straight to the pane's PTY. This is a full-frame repaint stream, so a plain
-  pane refreshes on a short interval rather than character-by-character.
+  socket (cursor-home + clear-screen + frame), and splits inbound bytes between
+  `herdr pane send-text` (literal text) and `herdr pane send-keys` (Enter, Tab,
+  Esc, arrows, Ctrl-*, Backspace). The split is required, not stylistic:
+  `send-text` **types** text and silently drops control sequences, so an arrow
+  sent as `\e[B` never reaches the pane — verified live against a `less` pane
+  that stayed put for `send-text` and scrolled for `send-keys down`. Sequences
+  Herdr has no key name for (Home, End, PageUp/Down) fall through as text.
+  This is a full-frame repaint stream, so a plain pane refreshes on a short
+  interval rather than character-by-character.
 
   **The first frame is a scrollback seed**, not a repaint: up to 1000 rows of
   `herdr pane read --source recent-unwrapped`, sent **without** the clear-screen
