@@ -19,6 +19,8 @@ import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import '../transcript/quick_commands_providers.dart';
+import '../../core/widgets/accessory_button.dart';
+import 'direction_pad.dart';
 import 'pty_mouse_handler.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
@@ -52,6 +54,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   );
   bool _stickyCtrl = false;
 
+  /// Whether the arrow pad is popped open. Static so it stays as you left it
+  /// while hopping between panes — there's no prefs store yet, so this is
+  /// session-scoped rather than persisted.
+  static bool _padOpen = false;
+
+  /// The terminal's focus, held here so the pad's keyboard key can summon and
+  /// dismiss the soft keyboard: focus is what drives xterm's text-input
+  /// connection, and therefore whether the keyboard is up.
+  final _termFocus = FocusNode();
+
   BridgeClient? _client;
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
@@ -79,11 +91,30 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     // Viewport changes (first layout, rotation, keyboard show/hide) flow here →
     // out as a resize control frame so the remote PTY matches the phone's width.
     terminal.onResize = _sendResize;
+    // The pad's keyboard key shows which way it will go, so it has to repaint
+    // when focus changes by any other route (tapping the buffer, Back).
+    _termFocus.addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    if (mounted) setState(() {});
+  }
+
+  /// Summon or dismiss the soft keyboard. Unfocusing tears down xterm's text
+  /// input connection, which is what actually lowers the keyboard.
+  void _toggleKeyboard() {
+    if (_termFocus.hasFocus) {
+      _termFocus.unfocus();
+    } else {
+      _termFocus.requestFocus();
+    }
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _termFocus.removeListener(_onFocusChange);
+    _termFocus.dispose();
     _reconnectTimer?.cancel();
     _resizeDebounce?.cancel();
     _sub?.cancel();
@@ -382,6 +413,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 Positioned.fill(
                   child: TerminalView(
                     terminal,
+                    focusNode: _termFocus,
                     theme: TerminalThemes.defaultTheme,
                     textStyle: const TerminalStyle(
                       fontFamily: AppTheme.monoFamily,
@@ -389,6 +421,37 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                     padding: const EdgeInsets.all(8),
                   ),
                 ),
+                // The arrow pad, popped open by the accessory row's toggle and
+                // anchored just above it. Kept mounted while closed so a
+                // held-then-hidden key can still cancel its own repeat.
+                if (_conn != _Conn.closed)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 8,
+                    child: Align(
+                      // Centred, not tucked into the corner: the thumb reaches
+                      // either side of it equally, and it reads as part of the
+                      // bar below rather than something stuck to one edge.
+                      alignment: Alignment.bottomCenter,
+                      child: IgnorePointer(
+                        ignoring: !_padOpen,
+                        child: AnimatedScale(
+                          // Grows up out of the bar rather than appearing on
+                          // top of the text all at once.
+                          scale: _padOpen ? 1 : 0.85,
+                          alignment: Alignment.bottomCenter,
+                          duration: const Duration(milliseconds: 120),
+                          curve: Curves.easeOutCubic,
+                          child: AnimatedOpacity(
+                            opacity: _padOpen ? 1 : 0,
+                            duration: const Duration(milliseconds: 120),
+                            child: DirectionPad(onKey: _send),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 // The pane is gone — dim the last frame and offer a way out
                 // rather than sitting on a stale terminal.
                 if (_conn == _Conn.closed)
@@ -405,13 +468,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           ),
           // No point typing into a pane that no longer exists.
           if (_conn != _Conn.closed) ...[
-            // Reusable snippets/keystrokes (Interrupt + your custom ones),
-            // the same shared list as the transcript composer — sent here as
-            // raw PTY bytes.
-            QuickCommandsBar(onCommand: _handleQuickCommand),
             _AccessoryKeyRow(
+              padOpen: _padOpen,
+              onTogglePad: () => setState(() => _padOpen = !_padOpen),
+              keyboardOpen: _termFocus.hasFocus,
+              onToggleKeyboard: _toggleKeyboard,
               stickyCtrl: _stickyCtrl,
               onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
+              onCommand: _handleQuickCommand,
               onKey: _send,
             ),
           ],
@@ -494,78 +558,137 @@ class _ClosedOverlay extends StatelessWidget {
   }
 }
 
-/// D6: a toolbar above the soft keyboard that writes control bytes the on-screen
-/// keyboard lacks — Esc/Tab/arrows, and a sticky-Ctrl toggle.
-class _AccessoryKeyRow extends StatelessWidget {
+/// D6: the single bar above the soft keyboard. Left to right: the quick
+/// commands (Interrupt + your own, the same shared list the transcript composer
+/// shows), then the control bytes a soft keyboard lacks — the arrow-pad toggle,
+/// Esc, Ctrl (sticky), Tab, ^C.
+///
+/// One strip of identical [AccessoryButton]s, not two stacked bars: vertical
+/// space is the scarcest thing on a phone terminal, and one vocabulary reads as
+/// one control surface. It centres while everything fits and scrolls as a whole
+/// once your own commands push it past the edge — a uniform strip running off
+/// the edge stays legible, where a chip clipped mid-word beside a pinned button
+/// (an earlier attempt at this) did not.
+///
+/// The arrows themselves are not keys here; they live in the [DirectionPad] the
+/// toggle opens. One home for arrows, and this row never shifts under a thumb.
+class _AccessoryKeyRow extends ConsumerWidget {
   const _AccessoryKeyRow({
+    required this.padOpen,
+    required this.onTogglePad,
+    required this.keyboardOpen,
+    required this.onToggleKeyboard,
     required this.stickyCtrl,
     required this.onToggleCtrl,
+    required this.onCommand,
     required this.onKey,
   });
 
+  final bool padOpen;
+  final VoidCallback onTogglePad;
+  final bool keyboardOpen;
+  final VoidCallback onToggleKeyboard;
   final bool stickyCtrl;
   final VoidCallback onToggleCtrl;
+  final void Function(QuickCommand) onCommand;
   final void Function(String bytes) onKey;
 
+  /// Key names this bar already has a button for. A quick command that just
+  /// fires one of them is a duplicate here — the shipped default, "Interrupt",
+  /// sends `esc`, which is precisely the Esc key two slots over. They earn
+  /// their place in the transcript composer, which has no key strip; here they
+  /// would be the same keystroke twice.
+  static const _keysAlreadyInBar = {'esc', 'escape', 'tab', 'ctrl+c', '^c'};
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final commands =
+        (ref.watch(quickCommandsProvider).asData?.value ?? const [])
+            .where(
+              (c) =>
+                  c.key == null ||
+                  !_keysAlreadyInBar.contains(c.key!.toLowerCase().trim()),
+            )
+            .toList();
+
     return SafeArea(
       top: false,
       child: Container(
-        color: scheme.surfaceContainerHigh,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _Key(label: 'Esc', onTap: () => onKey('\x1b')),
-              _Key(label: 'Ctrl', active: stickyCtrl, onTap: onToggleCtrl),
-              _Key(label: 'Tab', onTap: () => onKey('\t')),
-              _Key(label: '↑', onTap: () => onKey('\x1b[A')),
-              _Key(label: '↓', onTap: () => onKey('\x1b[B')),
-              _Key(label: '←', onTap: () => onKey('\x1b[D')),
-              _Key(label: '→', onTap: () => onKey('\x1b[C')),
-              _Key(label: '^C', onTap: () => onKey('\x03')),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Key extends StatelessWidget {
-  const _Key({required this.label, required this.onTap, this.active = false});
-
-  final String label;
-  final VoidCallback onTap;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Material(
-        color: active ? scheme.primary : scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Container(
-            constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: active ? scheme.onPrimary : scheme.onSurface,
-                fontWeight: FontWeight.w600,
-                fontFamily: AppTheme.monoFamily,
+        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
+        // one: at one step the buttons and the bar behind them are close enough
+        // to read as a single flat slab.
+        color: scheme.surfaceContainerLow,
+        // Wide side margins: a curved screen's glass falls away at the edge, so
+        // a button sitting 8dp in gets its corner cut off. SafeArea covers a
+        // notch, not a curve — phones don't report a side inset for one in
+        // portrait — so the clearance has to be spent here.
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Seven buttons, so the pad toggle is the middle one — the bar's
+            // centre line, directly under the pad it opens. The keyboard key
+            // earns its place here rather than inside the pad partly for that
+            // count, and partly because it's a screen control, not a keystroke.
+            final buttons = <Widget>[
+              for (final c in commands)
+                AccessoryButton(
+                  label: c.label,
+                  // Marks a command that fires a raw keystroke rather than
+                  // typing text — the same cue the composer's chips use.
+                  leading: c.key != null ? Icons.keyboard_command_key : null,
+                  onTap: () => onCommand(c),
+                  onLongPress: () async {
+                    final all =
+                        ref.read(quickCommandsProvider).asData?.value ??
+                        const <QuickCommand>[];
+                    final i = all.indexOf(c);
+                    if (i < 0) return;
+                    if (await confirmRemoveQuickCommand(context, c.label)) {
+                      await ref
+                          .read(quickCommandsProvider.notifier)
+                          .removeAt(i);
+                    }
+                  },
+                ),
+              AccessoryButton(
+                icon: Icons.add,
+                onTap: () => showAddQuickCommand(context, ref),
+                semanticLabel: 'Add a quick command',
+                tooltip: 'Add a quick command',
               ),
-            ),
-          ),
+              AccessoryButton(label: 'Esc', onTap: () => onKey('\x1b')),
+              AccessoryButton(
+                label: 'Ctrl',
+                active: stickyCtrl,
+                onTap: onToggleCtrl,
+              ),
+              DirectionPadToggle(open: padOpen, onToggle: onTogglePad),
+              AccessoryButton(label: 'Tab', onTap: () => onKey('\t')),
+              AccessoryButton(label: '^C', onTap: () => onKey('\x03')),
+              KeyboardToggle(open: keyboardOpen, onToggle: onToggleKeyboard),
+            ];
+
+            // Spread evenly while it fits; scroll as one strip once the user's
+            // own commands push it past the edge. A fixed 6dp gap in the
+            // scrolling case, because spaceEvenly inside a scroll view has no
+            // free space to distribute.
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    for (var i = 0; i < buttons.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 6),
+                      buttons[i],
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

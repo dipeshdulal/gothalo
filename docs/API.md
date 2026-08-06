@@ -59,6 +59,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into an **agent** pane's tree and get the path back, to paste into a prompt (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
+| GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agents/available` | — | `{agents[],known_kinds[],discovery}` | which agent kinds this host can actually launch (below) |
 | POST | `/agent/start` | `{kind, pane_id\|split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id,kind,name,…}` | launch an agent, optionally in a pane it creates (below) |
@@ -296,6 +297,41 @@ Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` no agent
 that pane · `405` non-POST · `413` over the cap · `415` not an accepted image
 type · `500` the drop directory couldn't be written · `502` herdr command failed.
 Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
+
+## GET /commands — slash commands for the composer typeahead
+What the pane's agent will **actually accept** after a `/`, so the phone offers a
+list instead of asking the user to recall and thumb-type `/compact`.
+
+```
+GET /commands?pane=w5:p18
+```
+
+```json
+{
+  "pane": "w5:p18",
+  "agent_kind": "claude",
+  "commands": [
+    {"name": "migrations", "description": "…", "source": "skill", "scope": "project"},
+    {"name": "compact", "description": "…", "argument_hint": "[instructions]", "source": "builtin"}
+  ]
+}
+```
+
+`source` is `command` (`.claude/commands/**.md`) · `skill`
+(`.claude/skills/<name>/SKILL.md`) · `builtin`. The first two are read off disk
+per request and are ground truth; `builtin` is a hand-maintained list, because
+built-ins live inside the agent's binary with no manifest to read — it is a
+separate `source` precisely so the app can badge what it cannot verify. `scope`
+is `user`/`project` for discovered commands, absent for built-ins. Sorted
+most-specific first: project → user → built-in.
+
+An agent kind with no command surface (codex, opencode) is **`200` with an empty
+list, not an error** — "no typeahead here" is a normal state, and a 404 would put
+an error in front of a working pane. Errors: `400` missing `pane` · `401` bad
+bearer · `404` no such pane, a plain pane, or a bridge predating the endpoint
+(the app hides the typeahead for all three). Full details, plus a live capture
+and the plugin-commands gap, in [`CONTRACT-commands.md`](./CONTRACT-commands.md).
+
 ## GET /timeline — recent agent activity
 The only read that describes the **past**. Every other endpoint says what is true
 now, which is why none of them can tell you whether an agent blocked fifty
@@ -432,7 +468,8 @@ shells, dev-servers, logs — not just agent ones.
 - **terminal → WS**: server sends **binary** frames — raw terminal bytes; feed
   them straight into your terminal emulator (`xterm.dart`).
 - **WS → terminal**: send **binary** frames — raw keystrokes and control bytes
-  (the accessory key row writes Esc `0x1b`, Ctrl-C `0x03`, arrows `\e[A`… here).
+  (the accessory key row and the floating arrow pad write Esc `0x1b`, Ctrl-C
+  `0x03`, arrows `\e[A`… here).
 - **WS → resize** (control): send a **text** frame `{"type":"resize","cols":C,"rows":R}`
   to set the PTY geometry — send it on connect and on every viewport change, so
   the agent's line-editing (autocomplete, wrapping, history) redraws at your
@@ -444,10 +481,15 @@ client can't tell them apart:
 - **Agent panes**: unchanged — `herdr agent attach <pane>` under a PTY, copied
   byte-for-byte both ways (identical to before).
 - **Plain panes**: the bridge polls `herdr pane read` (~5×/s) and repaints the
-  socket (cursor-home + clear-screen + frame), and forwards inbound bytes to
-  `herdr pane send-text`, which delivers raw bytes — Enter, arrows, Ctrl-C —
-  straight to the pane's PTY. This is a full-frame repaint stream, so a plain
-  pane refreshes on a short interval rather than character-by-character.
+  socket (cursor-home + clear-screen + frame), and splits inbound bytes between
+  `herdr pane send-text` (literal text) and `herdr pane send-keys` (Enter, Tab,
+  Esc, arrows, Ctrl-*, Backspace). The split is required, not stylistic:
+  `send-text` **types** text and silently drops control sequences, so an arrow
+  sent as `\e[B` never reaches the pane — verified live against a `less` pane
+  that stayed put for `send-text` and scrolled for `send-keys down`. Sequences
+  Herdr has no key name for (Home, End, PageUp/Down) fall through as text.
+  This is a full-frame repaint stream, so a plain pane refreshes on a short
+  interval rather than character-by-character.
 
   **The first frame is a scrollback seed**, not a repaint: up to 1000 rows of
   `herdr pane read --source recent-unwrapped`, sent **without** the clear-screen

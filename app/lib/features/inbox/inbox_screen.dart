@@ -10,6 +10,7 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
 import '../jump/jump_sheet.dart';
+import '../push/enable_push_banner.dart';
 import 'inbox_providers.dart';
 import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
@@ -108,23 +109,31 @@ class InboxScreen extends ConsumerWidget {
               ],
             ),
           ),
-          body: snapshot.when(
-            skipLoadingOnRefresh: true,
-            skipLoadingOnReload: true,
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (err, _) => _ErrorState(error: err),
-            data: (snap) => TabBarView(
-              children: [
-                _Refreshable(
-                  ref: ref,
-                  child: _AgentsTab(snap: snap),
+          body: Column(
+            children: [
+              const EnablePushBanner(),
+              Expanded(
+                child: snapshot.when(
+                  skipLoadingOnRefresh: true,
+                  skipLoadingOnReload: true,
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (err, _) => _ErrorState(error: err),
+                  data: (snap) => TabBarView(
+                    children: [
+                      _Refreshable(
+                        ref: ref,
+                        child: _AgentsTab(snap: snap),
+                      ),
+                      _Refreshable(
+                        ref: ref,
+                        child: _SpacesTab(snap: snap),
+                      ),
+                    ],
+                  ),
                 ),
-                _Refreshable(
-                  ref: ref,
-                  child: _SpacesTab(snap: snap),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

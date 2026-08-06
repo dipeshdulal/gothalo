@@ -12,6 +12,8 @@ import 'features/inbox/inbox_providers.dart';
 import 'features/push/push_payload.dart';
 import 'core/firebase_web_options.dart';
 import 'features/push/push_service.dart';
+import 'features/push/web_tap_io.dart'
+    if (dart.library.js_interop) 'features/push/web_tap_web.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,6 +51,9 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
   void initState() {
     super.initState();
     pendingDeepLink.addListener(_handleDeepLink);
+    // Web taps arrive from the service worker (launch URL or message stream)
+    // rather than the plugin channels; this queues them the same way.
+    initWebNotificationTaps();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Start push (permission, token, listeners); no-ops if Firebase is absent.
       ref.read(pushControllerProvider);
@@ -80,9 +85,11 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
       _showUnroutable(target.serverName);
       return;
     }
+    // `prompt=1` asks the transcript to surface the blocked prompt's options
+    // sheet unasked — a notification tap means the user is coming to answer.
     ref
         .read(routerProvider)
-        .push('/transcript/${Uri.encodeComponent(target.pane)}');
+        .push('/transcript/${Uri.encodeComponent(target.pane)}?prompt=1');
   }
 
   void _showUnroutable(String serverName) {

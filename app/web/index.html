@@ -31,6 +31,29 @@
 
   <title>gothalo</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- mobile_scanner 7.4.0's web stop() drops its MediaStream reference without
+       stopping the tracks, so the camera (and iOS's indicator) stays on for the
+       life of the page. Remember every stream getUserMedia hands out so the app
+       can force-stop the tracks when the scanner goes away. -->
+  <script>
+    (function () {
+      var streams = [];
+      var orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = function (constraints) {
+        return orig(constraints).then(function (stream) {
+          streams.push(stream);
+          return stream;
+        });
+      };
+      window.__stopCameraStreams = function () {
+        streams.forEach(function (s) {
+          s.getTracks().forEach(function (t) { t.stop(); });
+        });
+        streams = [];
+      };
+    })();
+  </script>
 </head>
 <body>
   <!--

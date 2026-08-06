@@ -14,6 +14,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/accessory_button.dart';
 import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
@@ -23,6 +24,7 @@ import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import 'quick_commands_providers.dart';
+import 'slash_commands.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -44,9 +46,18 @@ enum _AgentLifecycleAction { restart, stop }
 /// message. A permanent pre-upgrade error (e.g. codex/opencode → 404
 /// "transcript not supported") shows a message instead of reconnecting forever.
 class TranscriptScreen extends ConsumerStatefulWidget {
-  const TranscriptScreen({super.key, required this.pane});
+  const TranscriptScreen({
+    super.key,
+    required this.pane,
+    this.openPrompt = false,
+  });
 
   final String pane;
+
+  /// Surface the blocked prompt's options sheet as soon as it is known —
+  /// set when arriving from a notification tap, where the user is coming
+  /// specifically to answer.
+  final bool openPrompt;
 
   @override
   ConsumerState<TranscriptScreen> createState() => _TranscriptScreenState();
@@ -143,10 +154,30 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// sheet in front of it did not.
   final ValueNotifier<bool> _blocked = ValueNotifier(false);
 
+  /// The active `/…` token in the composer, or null when the typeahead should be
+  /// hidden. Recomputed on every composer change (text AND caret — moving the
+  /// caret out of the token dismisses the list just as typing a space does).
+  SlashQuery? _slash;
+
   @override
   void initState() {
     super.initState();
+    _autoPromptPending = widget.openPrompt;
     _scroll.addListener(_onScroll);
+    _composer.addListener(_onComposerChanged);
+  }
+
+  /// Keeps [_slash] in step with the composer. Only calls setState when the
+  /// typeahead's visibility or query actually changes — this fires on every
+  /// keystroke, and rebuilding the whole transcript for each one is exactly the
+  /// cost that would make typing feel heavy.
+  void _onComposerChanged() {
+    final next = SlashQuery.parse(
+      _composer.text,
+      _composer.selection.baseOffset,
+    );
+    if (next?.query == _slash?.query) return;
+    setState(() => _slash = next);
   }
 
   /// Publish the live blocked-ness to anything following it. Called from every
@@ -157,6 +188,36 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _blocked.value = s != null && s.isBlocked;
   }
 
+  /// Arm of [TranscriptScreen.openPrompt]: still waiting for the first agent
+  /// state on a notification-tap visit.
+  bool _autoPromptPending = false;
+
+  /// Opened from a notification: surface the prompt's options sheet without
+  /// the extra tap on the approval card. Runs at most once, on the first agent
+  /// state — if the agent has already moved past the prompt by then, the
+  /// moment has passed and no sheet appears.
+  void _maybeAutoOpenPrompt(AgentState s) {
+    if (!_autoPromptPending) return;
+    _autoPromptPending = false;
+    if (!s.isBlocked || s.options.isEmpty) return;
+    final question = (s.blockedQuestion?.trim().isNotEmpty ?? false)
+        ? s.blockedQuestion!.trim()
+        : (s.headline.isNotEmpty ? s.headline : 'Approve?');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showBlockedOptionsSheet(
+        context,
+        question: question,
+        options: s.options,
+        danger: s.blockSeverity == BlockSeverity.danger,
+        blocked: _blocked,
+        onApprove: _approveDefault,
+        onOption: _handleOption,
+        onFreeText: _sendAnswer,
+      );
+    });
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -165,6 +226,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _channel?.sink.close(ws_status.normalClosure);
     _agentStateTimer?.cancel();
     _scroll.dispose();
+    _composer.removeListener(_onComposerChanged);
     _composer.dispose();
     _blocked.dispose();
     super.dispose();
@@ -226,6 +288,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       if (mounted) {
         setState(() => _agentState = s);
         _publishBlocked();
+        _maybeAutoOpenPrompt(s);
       }
     } catch (_) {
       // Non-agent / gone / transient — no bar.
@@ -363,7 +426,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       picked = await _picker.pickImage(source: source);
     } on PlatformException catch (e) {
       // Denied permission, or no camera. The plugin's own message names which.
-      if (mounted) setState(() => _uploadError = e.message ?? 'Could not open the picker.');
+      if (mounted) {
+        setState(
+          () => _uploadError = e.message ?? 'Could not open the picker.',
+        );
+      }
       return;
     }
     if (picked == null || !mounted) return; // cancelled
@@ -878,6 +945,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
 
+    // The slash typeahead's matches, or empty when it should not show — no
+    // active `/…` token, the fetch has not landed, or nothing matches what was
+    // typed. Watched unconditionally (hooks cannot be conditional) but the
+    // provider is cheap and returns an empty list for every pane without a
+    // command surface, so a non-claude pane costs one 200 and renders nothing.
+    final slashMatches = switch (_slash) {
+      final q? => rankSlashCommands(
+        ref.watch(slashCommandsProvider(widget.pane)).asData?.value ?? const [],
+        q.query,
+      ),
+      null => const <SlashCommand>[],
+    };
+
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
@@ -912,11 +992,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
           },
         ),
         actions: [
-          IconButton(
-            tooltip: 'Jump to an agent',
-            onPressed: () => showJumpSheet(context, currentPane: widget.pane),
-            icon: const Icon(Icons.bolt),
-          ),
+          // Jump moved down to the composer's actions row, where the thumb
+          // already is — the app bar is a stretch away on a phone.
           IconButton(
             tooltip: 'Changes',
             onPressed: () =>
@@ -950,8 +1027,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               PopupMenuItem(
                 value: _AgentLifecycleAction.stop,
                 child: ListTile(
-                  leading: Icon(Icons.stop_circle_outlined,
-                      color: Theme.of(ctx).colorScheme.error),
+                  leading: Icon(
+                    Icons.stop_circle_outlined,
+                    color: Theme.of(ctx).colorScheme.error,
+                  ),
                   title: const Text('Stop agent'),
                   contentPadding: EdgeInsets.zero,
                 ),
@@ -999,25 +1078,37 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // cluttered header, and a fragmented "chip pinned left / icon
             // pinned right / second row below" layout, both read worse than
             // one consistent strip.
-            _ComposerActionsRow(
-              modeLabel: _agentState?.permissionMode != null
-                  ? _modeLabel(_agentState!.permissionMode!)
-                  : null,
-              onCycleMode: _cycleMode,
-              onOpenTerminal: () =>
-                  context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
-              onQuickCommand: _handleQuickCommand,
-              onAttachImage: _uploading ? null : _pickImageSource,
-              enabled:
-                  _conn != _Conn.closed &&
-                  _conn != _Conn.failed &&
-                  _failure == null,
-            ),
+            // While the slash typeahead is up it REPLACES the actions row rather
+            // than stacking on top of it. Two reasons: with a keyboard open the
+            // phone has no room for both above the composer, and mid-command the
+            // chips are not what you are reaching for — the list is.
+            if (slashMatches.isNotEmpty)
+              SlashCommandList(
+                commands: slashMatches,
+                onSelected: (c) => applySlashCommand(_composer, c),
+              )
+            else
+              _ComposerActionsRow(
+                modeLabel: _agentState?.permissionMode != null
+                    ? _modeLabel(_agentState!.permissionMode!)
+                    : null,
+                onCycleMode: _cycleMode,
+                onOpenTerminal: () => context.push(
+                  '/terminal/${Uri.encodeComponent(widget.pane)}',
+                ),
+                onJump: () => showJumpSheet(context, currentPane: widget.pane),
+                onQuickCommand: _handleQuickCommand,
+                enabled:
+                    _conn != _Conn.closed &&
+                    _conn != _Conn.failed &&
+                    _failure == null,
+              ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(
               controller: _composer,
               onSend: _sendComposer,
+              onAttachImage: _uploading ? null : _pickImageSource,
               hintText: _agentState?.isBlocked == true
                   ? 'Type a number, or your own reply…'
                   : null,
@@ -1079,7 +1170,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       return const _CenteredNotice(
         icon: Icons.chat_bubble_outline,
         title: 'No messages yet',
-        message: 'This agent hasn\'t said anything so far. '
+        message:
+            'This agent hasn\'t said anything so far. '
             'Send it a prompt below to get started.',
       );
     }
@@ -1182,7 +1274,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         }
       }
       if (at != null) prevAt = at;
-      prevWasTool = e.kind == EntryKind.toolCall || e.kind == EntryKind.toolResult;
+      prevWasTool =
+          e.kind == EntryKind.toolCall || e.kind == EntryKind.toolResult;
 
       if (e.kind == EntryKind.toolCall) {
         (run ??= <TranscriptEntry>[]).add(e);
@@ -1647,9 +1740,7 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
 
     return Padding(
       // Lift the whole sheet above the keyboard rather than letting it overflow.
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
-      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
         top: false,
         child: Padding(
@@ -1855,108 +1946,55 @@ class _CategoryPill extends StatelessWidget {
   }
 }
 
-/// A live "thinking…" indicator shown above the composer while the agent is
-/// working — three pulsing dots, like a chat typing indicator.
-class _ThinkingIndicator extends StatefulWidget {
+/// Shown while the agent is working: a bar sweeping left-to-right along the
+/// seam between the transcript and the composer's controls.
+///
+/// Just the bar — no "thinking…" label, because the motion already says it, and
+/// a word costs a line of transcript on a phone. A bar rather than the chat-app
+/// pulsing dots, too: dots say "someone is typing a reply", where this is a
+/// machine holding a turn open for anything from two seconds to ten minutes,
+/// and a sweep reads as ongoing work rather than an imminent message.
+class _ThinkingIndicator extends StatelessWidget {
   const _ThinkingIndicator();
-
-  @override
-  State<_ThinkingIndicator> createState() => _ThinkingIndicatorState();
-}
-
-class _ThinkingIndicatorState extends State<_ThinkingIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  )..repeat();
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 30,
-            height: 8,
-            child: AnimatedBuilder(
-              animation: _c,
-              builder: (context, _) => Row(
-                mainAxisSize: MainAxisSize.min,
-                children: List.generate(3, (i) {
-                  // Stagger each dot's pulse so they ripple left-to-right.
-                  final t = (_c.value - i * 0.2) % 1.0;
-                  final pulse = (1 - (t * 2 - 1).abs()).clamp(0.0, 1.0);
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Opacity(
-                      opacity: 0.35 + 0.65 * pulse,
-                      child: Container(
-                        width: 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: scheme.primary,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            'thinking…',
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-              fontSize: 13,
-            ),
-          ),
-        ],
-      ),
+    return LinearProgressIndicator(
+      minHeight: 2,
+      backgroundColor: scheme.outlineVariant.withValues(alpha: 0.3),
+      color: scheme.primary,
+      semanticsLabel: 'The agent is working',
     );
   }
 }
 
-/// A single horizontally scrollable chip row above the composer for
-/// everything that's an action about *how* you're talking to the agent
-/// rather than the chat itself: the Claude permission-mode switcher, quick-
-/// command snippets (see docs/RESEARCH-feature-ideas.md, #7), a jump to the
-/// raw terminal, and "+" to add a custom quick command. One row, one layout
-/// rule (left-to-right, scrollable, every item chip-styled) — deliberately
-/// not split into a "chip pinned left / icon pinned right" strip plus a
-/// second scrollable strip below it, which read as two different, unrelated
-/// layouts for what's conceptually one toolbar.
+/// One row above the composer for everything that's an action about *how*
+/// you're talking to the agent rather than the chat itself: the Claude
+/// permission-mode switcher, quick-command snippets (see
+/// docs/RESEARCH-feature-ideas.md, #7), "+" to add one, a jump to another
+/// agent, and a jump to the raw terminal.
+///
+/// Built from the same [AccessoryButton] as the terminal's key bar, spread
+/// evenly and scrolling as one strip when it overflows. It had been Material
+/// chips, which read as a different toolbar from the terminal's for what is
+/// the same job on the next screen over. Attaching an image is not here — it
+/// acts on the message being written, so it lives inside the composer pill.
 class _ComposerActionsRow extends ConsumerWidget {
   const _ComposerActionsRow({
     required this.modeLabel,
     required this.onCycleMode,
     required this.onOpenTerminal,
+    required this.onJump,
     required this.onQuickCommand,
-    required this.onAttachImage,
     required this.enabled,
   });
 
   final String? modeLabel;
   final VoidCallback onCycleMode;
   final VoidCallback onOpenTerminal;
+  final VoidCallback onJump;
   final void Function(QuickCommand) onQuickCommand;
-
-  /// Null while an upload is already in flight — one at a time, so the progress
-  /// bar always describes the upload the user is actually watching.
-  final Future<void> Function()? onAttachImage;
   final bool enabled;
 
   @override
@@ -1966,67 +2004,94 @@ class _ComposerActionsRow extends ConsumerWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh,
+        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
+        // one: at one step the buttons and the bar behind them are close enough
+        // to read as a single flat slab.
+        color: scheme.surfaceContainerLow,
         border: Border(
           top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-      child: SizedBox(
-        height: 34,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          children: [
-            // First in the row: it acts on the message being written, so it
-            // sits closest to the composer's own affordances.
-            ActionChip(
-              avatar: const Icon(Icons.image_outlined, size: 15),
-              label: const Text('Image'),
-              labelStyle: const TextStyle(fontSize: 12),
-              visualDensity: VisualDensity.compact,
-              onPressed: enabled ? onAttachImage : null,
-            ),
-            const SizedBox(width: 6),
-            if (modeLabel != null) ...[
-              ActionChip(
-                avatar: const Icon(Icons.tune, size: 15),
-                label: Text(modeLabel!),
-                labelStyle: const TextStyle(fontSize: 12),
-                visualDensity: VisualDensity.compact,
-                onPressed: onCycleMode,
+      // Same generous side margins as the terminal's bar: a curved screen's
+      // glass falls away at the edge, and SafeArea covers a notch, not a curve.
+      // Tighter vertically — this row and the composer under it are one block,
+      // and every dp here is a dp of transcript.
+      padding: const EdgeInsets.fromLTRB(22, 8, 22, 4),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final buttons = <Widget>[
+            if (modeLabel != null)
+              AccessoryButton(
+                label: modeLabel!,
+                leading: Icons.tune,
+                onTap: onCycleMode,
+                semanticLabel: 'Permission mode: $modeLabel',
+                tooltip: 'Cycle permission mode',
               ),
-              const SizedBox(width: 6),
-            ],
-            for (var i = 0; i < commands.length; i++) ...[
-              QuickCommandChip(
-                command: commands[i],
-                enabled: enabled,
-                onTap: () => onQuickCommand(commands[i]),
-                onRemove: () =>
-                    ref.read(quickCommandsProvider.notifier).removeAt(i),
+            for (final c in commands)
+              AccessoryButton(
+                label: c.label,
+                // Marks a command that fires a raw keystroke rather than
+                // typing text.
+                leading: c.key != null ? Icons.keyboard_command_key : null,
+                onTap: enabled ? () => onQuickCommand(c) : () {},
+                onLongPress: () async {
+                  final all =
+                      ref.read(quickCommandsProvider).asData?.value ??
+                      const <QuickCommand>[];
+                  final i = all.indexOf(c);
+                  if (i < 0) return;
+                  if (await confirmRemoveQuickCommand(context, c.label)) {
+                    await ref.read(quickCommandsProvider.notifier).removeAt(i);
+                  }
+                },
               ),
-              const SizedBox(width: 6),
-            ],
-            ActionChip(
-              avatar: const Icon(Icons.add, size: 16),
-              label: const Text('Add'),
-              visualDensity: VisualDensity.compact,
-              onPressed: () => showAddQuickCommand(context, ref),
+            AccessoryButton(
+              icon: Icons.add,
+              onTap: () => showAddQuickCommand(context, ref),
+              semanticLabel: 'Add a quick command',
+              tooltip: 'Add a quick command',
             ),
-            const SizedBox(width: 6),
-            ActionChip(
-              avatar: const Icon(Icons.terminal, size: 15),
-              label: const Text('Terminal'),
-              labelStyle: const TextStyle(fontSize: 12),
-              visualDensity: VisualDensity.compact,
-              onPressed: onOpenTerminal,
+            // Jump and Terminal are both "leave this conversation for another
+            // view". They live here rather than in the app bar because this is
+            // where a thumb already is — the app bar is a stretch away at the
+            // top of a phone.
+            AccessoryButton(
+              icon: Icons.bolt,
+              onTap: onJump,
+              semanticLabel: 'Jump to an agent',
+              tooltip: 'Jump to an agent',
             ),
-          ],
-        ),
+            AccessoryButton(
+              icon: Icons.terminal,
+              onTap: onOpenTerminal,
+              semanticLabel: 'Open the raw terminal',
+              tooltip: 'Open the raw terminal',
+            ),
+          ];
+
+          // Spread evenly while everything fits; scroll as one strip once the
+          // user's own commands push it past the edge. A uniform strip running
+          // off the edge stays legible where a half-clipped chip does not.
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (var i = 0; i < buttons.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 6),
+                    buttons[i],
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
-
 }
 
 /// The image-upload strip above the composer toolbar: a determinate progress
@@ -2065,9 +2130,7 @@ class _UploadStatus extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      color: failed
-          ? scheme.errorContainer
-          : scheme.surfaceContainerHigh,
+      color: failed ? scheme.errorContainer : scheme.surfaceContainerHigh,
       padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
       child: Row(
         children: [
@@ -2133,12 +2196,20 @@ class _ComposerBar extends StatefulWidget {
   const _ComposerBar({
     required this.controller,
     required this.onSend,
+    required this.onAttachImage,
     required this.enabled,
     this.hintText,
   });
 
   final TextEditingController controller;
   final Future<void> Function() onSend;
+
+  /// Attaching acts on the message being written, so it lives inside the input
+  /// pill rather than out in the actions row — the same place every messaging
+  /// app puts it, and one fewer button competing in that row. Null while an
+  /// upload is already in flight: one at a time, so the progress bar always
+  /// describes the upload the user is actually watching.
+  final Future<void> Function()? onAttachImage;
   final bool enabled;
 
   /// Overrides the default hint — e.g. while an approval card is up, to make
@@ -2184,8 +2255,11 @@ class _ComposerBarState extends State<_ComposerBar> {
     final focused = _focus.hasFocus;
 
     return Container(
-      color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      // One tone with the actions row above, so the two read as a single block
+      // of controls rather than two stacked bars. The input pill's own darker
+      // `surface` then reads as a well sunk into it.
+      color: scheme.surfaceContainerLow,
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -2194,7 +2268,7 @@ class _ComposerBarState extends State<_ComposerBar> {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeOut,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.fromLTRB(4, 0, 16, 0),
               decoration: BoxDecoration(
                 color: scheme.surface,
                 borderRadius: BorderRadius.circular(26),
@@ -2205,27 +2279,40 @@ class _ComposerBarState extends State<_ComposerBar> {
                   width: focused ? 1.5 : 1,
                 ),
               ),
-              child: TextField(
-                controller: widget.controller,
-                focusNode: _focus,
-                enabled: enabled,
-                minLines: 1,
-                maxLines: 5,
-                keyboardType: TextInputType.multiline,
-                textInputAction: TextInputAction.newline,
-                style: const TextStyle(fontSize: 15, height: 1.3),
-                decoration: InputDecoration(
-                  isCollapsed: true,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                  hintText: !enabled
-                      ? 'Unavailable'
-                      : (widget.hintText ?? 'Message the agent…'),
-                  hintStyle: TextStyle(color: scheme.onSurfaceVariant),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  disabledBorder: InputBorder.none,
-                ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _AttachButton(
+                    onTap: enabled ? widget.onAttachImage : null,
+                    scheme: scheme,
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: widget.controller,
+                      focusNode: _focus,
+                      enabled: enabled,
+                      minLines: 1,
+                      maxLines: 5,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      style: const TextStyle(fontSize: 15, height: 1.3),
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                        ),
+                        hintText: !enabled
+                            ? 'Unavailable'
+                            : (widget.hintText ?? 'Message the agent…'),
+                        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -2237,6 +2324,43 @@ class _ComposerBarState extends State<_ComposerBar> {
             onTap: enabled ? widget.onSend : null,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The paperclip inside the composer pill. Greyed while an upload is already in
+/// flight (the caller passes null then) so a second pick can't start one the
+/// progress bar isn't describing.
+class _AttachButton extends StatelessWidget {
+  const _AttachButton({required this.onTap, required this.scheme});
+
+  final Future<void> Function()? onTap;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Attach an image',
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap == null ? null : () => onTap!(),
+          child: SizedBox(
+            width: 40,
+            height: 44,
+            child: Icon(
+              Icons.add_photo_alternate_outlined,
+              size: 21,
+              semanticLabel: 'Attach an image',
+              color: onTap == null
+                  ? scheme.onSurfaceVariant.withValues(alpha: 0.4)
+                  : scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
       ),
     );
   }
