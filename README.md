@@ -188,10 +188,19 @@ breaks everyone at once, and the audit log cannot say who sent what. With the
 gcloud path each person authenticates as themselves, so the project owner grants
 and revokes access per person in IAM and nobody copies a key around.
 
-To let a teammate in, add them to the Firebase project with **Firebase Cloud
-Messaging Admin**, or a custom role carrying `cloudmessaging.messages.create`.
+To let a teammate in, grant them **Firebase Cloud Messaging API Admin** on the
+project — from the Firebase console (Project settings → Users and permissions)
+or, for a narrower grant, GCP IAM with a custom role carrying only
+`cloudmessaging.messages.create`. Both write the same IAM policy; the Firebase
+console just offers a coarser set of roles.
+
 Until then their `push status` reports the credential as valid but not permitted
-— which is the one failure they cannot fix by logging in again.
+— the one failure they cannot fix by logging in again.
+
+**The grant takes up to a minute to take effect.** Measured at ~30s. Re-run
+`gothalo push status` rather than concluding it is broken: a teammate who checks
+the instant you grant access sees exactly the same "not allowed" message as one
+you never granted, and there is nothing on their end that distinguishes the two.
 
 Credentials are found by Google's Application Default Credentials search order,
 first hit wins:
