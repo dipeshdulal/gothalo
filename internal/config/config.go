@@ -50,7 +50,18 @@ type Transport struct {
 
 // Push holds Firebase Cloud Messaging settings.
 type Push struct {
+	// ServiceAccountPath is tried first when resolving credentials. It is only
+	// the FIRST candidate, not the only one: if the file is absent the push
+	// package falls through to Google's Application Default Credentials search
+	// order, which is what lets a teammate authenticate with
+	// `gothalo push login` instead of being handed a copy of someone's key.
 	ServiceAccountPath string `json:"service_account_path"`
+
+	// ProjectID is the Firebase project to send to. A service-account file names
+	// its own project, so this is optional there. User credentials identify a
+	// PERSON and name no project, so on that path this is required — it is what
+	// `gothalo push login` writes into the config.
+	ProjectID string `json:"project_id"`
 }
 
 // DevicesPath is where the paired-device registry lives.
@@ -100,6 +111,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("GOTHALO_SERVICE_ACCOUNT"); v != "" {
 		cfg.Push.ServiceAccountPath = v
+	}
+	if v := os.Getenv("GOTHALO_FCM_PROJECT"); v != "" {
+		cfg.Push.ProjectID = v
 	}
 	if v := os.Getenv("GOTHALO_ADMIN_TOKEN"); v != "" {
 		cfg.AdminToken = v

@@ -2,7 +2,9 @@ package push
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -98,6 +100,99 @@ func TestTagTruncated(t *testing.T) {
 	got, _ := android["collapse_key"].(string)
 	if len(got) != maxTagBytes {
 		t.Errorf("collapse_key length = %d, want %d", len(got), maxTagBytes)
+	}
+}
+
+// TestClassifyVerify covers the reason Verify exists: the failures that look
+// alike from the outside must come back as different, actionable answers.
+func TestClassifyVerify(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr bool
+		// wantDenied marks the case a user cannot fix alone: authenticated, but
+		// never granted access to the project.
+		wantDenied bool
+	}{
+		{
+			name:   "accepted",
+			status: http.StatusOK,
+			body:   `{"name":"projects/p/messages/1"}`,
+		},
+		{
+			// Reaching a rejection of the placeholder token proves auth and
+			// project access are fine, which is exactly what we are testing for.
+			name:   "placeholder token rejected means auth is fine",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"status":"INVALID_ARGUMENT","details":[{"errorCode":"INVALID_ARGUMENT"}]}}`,
+		},
+		{
+			name:    "unauthenticated",
+			status:  http.StatusUnauthorized,
+			body:    `{"error":{"status":"UNAUTHENTICATED"}}`,
+			wantErr: true,
+		},
+		{
+			name:       "permission denied",
+			status:     http.StatusForbidden,
+			body:       `{"error":{"status":"PERMISSION_DENIED"}}`,
+			wantErr:    true,
+			wantDenied: true,
+		},
+		{
+			name:    "project not found",
+			status:  http.StatusNotFound,
+			body:    `{"error":{"status":"NOT_FOUND","message":"project not found"}}`,
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := classifyVerify(tc.status, []byte(tc.body))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got := errors.Is(err, ErrPermissionDenied); got != tc.wantDenied {
+				t.Errorf("ErrPermissionDenied = %v, want %v (err: %v)", got, tc.wantDenied, err)
+			}
+		})
+	}
+}
+
+// TestVerifyDoesNotDeliver: Verify must set validate_only, or "check my setup"
+// would push a junk notification to somebody's phone.
+func TestVerifyDoesNotDeliver(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"at","expires_in":3600}`))
+	}))
+	defer tokenSrv.Close()
+
+	var body map[string]any
+	fcmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer at" {
+			t.Errorf("Authorization = %q, want the minted token", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"name":"projects/p/messages/1"}`))
+	}))
+	defer fcmSrv.Close()
+
+	old := fcmBaseURL
+	fcmBaseURL = fcmSrv.URL
+	defer func() { fcmBaseURL = old }()
+
+	c := &Client{creds: &credentials{
+		kind: kindAuthorizedUser, projectID: "p", tokenURI: tokenSrv.URL,
+		clientID: "cid", clientSecret: "cs", refreshToken: "rt",
+	}}
+	if err := c.Verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if body["validate_only"] != true {
+		t.Errorf("validate_only = %v, want true — Verify must not deliver a real push", body["validate_only"])
 	}
 }
 

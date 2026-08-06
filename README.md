@@ -161,10 +161,49 @@ GOTHALO_PUBLIC_URL=https://<host>.<tailnet>.ts.net:8787 \
 | `GOTHALO_MODE` | `direct` (active) or `relay` (stub) |
 | `GOTHALO_PUBLIC_URL` | base URL embedded in the pairing QR |
 | `GOTHALO_SERVICE_ACCOUNT` | path to the FCM service-account JSON |
+| `GOTHALO_FCM_PROJECT` | Firebase project id to send pushes to |
 | `GOTHALO_ADMIN_TOKEN` | admin token (else generated + persisted) |
 | `WATCHER=poll` | fall back to the polling watcher |
 
 The same values can live in `~/.gothalo/config.json`; env wins.
+
+### Push notifications (optional)
+
+The bridge runs fine without push credentials — everything works except
+notifications, which fall back to logging. To turn them on:
+
+```bash
+gothalo push login --project <firebase-project-id>   # authenticate as yourself
+gothalo push status                                  # what's in use, and can it send
+```
+
+`push login` wraps `gcloud auth application-default login` with the right
+scopes. That matters: gcloud's default scope set does **not** include
+`firebase.messaging`, and a token minted without it fails at send time with a
+403 that looks like a permissions problem rather than a scope problem.
+
+**Why not just share a service-account key.** A downloaded key is a shared
+bearer secret — everyone holding the file is the same identity, rotating it
+breaks everyone at once, and the audit log cannot say who sent what. With the
+gcloud path each person authenticates as themselves, so the project owner grants
+and revokes access per person in IAM and nobody copies a key around.
+
+To let a teammate in, add them to the Firebase project with **Firebase Cloud
+Messaging Admin**, or a custom role carrying `cloudmessaging.messages.create`.
+Until then their `push status` reports the credential as valid but not permitted
+— which is the one failure they cannot fix by logging in again.
+
+Credentials are found by Google's Application Default Credentials search order,
+first hit wins:
+
+1. `push.service_account_path` in config (`GOTHALO_SERVICE_ACCOUNT`)
+2. `$GOOGLE_APPLICATION_CREDENTIALS`
+3. gcloud's `application_default_credentials.json` — what `push login` writes
+4. the GCE/Cloud Run metadata server (no key material anywhere)
+
+Both credential shapes are accepted. A service-account file names its own
+project; user credentials name a *person*, so they need `push.project_id` —
+which `push login` saves for you.
 
 ### Pair a phone
 
