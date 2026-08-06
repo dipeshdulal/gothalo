@@ -11,6 +11,7 @@ import '../inbox/widgets/agent_avatar.dart';
 import '../../core/widgets/agent_age.dart';
 import '../inbox/widgets/status_badge.dart';
 import 'priority_providers.dart';
+import 'widgets/priority_overflow_bar.dart';
 
 /// A cross-server "priority" view: star the agents you care about and see them
 /// pinned here, aggregated from every saved server. Star management lives
@@ -36,6 +37,14 @@ class PriorityScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final servers = watchAllServerAgents(ref);
     final hits = ref.watch(priorityHitsProvider);
+    // Same cap, same remembered state as the home surface — this is the same
+    // list rendered twice, and it would read as a bug if one of them were open
+    // and the other shut. Nothing becomes unreachable here either way: every
+    // agent, starred or not, is also listed under its server below.
+    final overflow = PriorityOverflow.of(
+      hits,
+      expanded: ref.watch(priorityExpandedProvider),
+    );
 
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
@@ -59,8 +68,8 @@ class PriorityScreen extends ConsumerWidget {
                 'Nothing needs you right now. Blocked agents appear here '
                 'automatically; star any agent to always pin it.',
               )
-            else
-              for (final h in hits)
+            else ...[
+              for (final h in overflow.visible)
                 _AgentRow(
                   server: h.server,
                   agent: h.agent,
@@ -71,6 +80,12 @@ class PriorityScreen extends ConsumerWidget {
                       .read(starredAgentsProvider.notifier)
                       .toggle(h.server.id, h.agent.paneId),
                 ),
+              PriorityOverflowBar(
+                overflow: overflow,
+                onToggle: () =>
+                    ref.read(priorityExpandedProvider.notifier).toggle(),
+              ),
+            ],
             const Divider(height: 28),
             // All agents, grouped by server, with star toggles.
             for (final sa in servers) ...[
