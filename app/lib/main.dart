@@ -12,6 +12,8 @@ import 'features/inbox/inbox_providers.dart';
 import 'features/push/push_payload.dart';
 import 'core/firebase_web_options.dart';
 import 'features/push/push_service.dart';
+import 'features/push/web_tap_io.dart'
+    if (dart.library.js_interop) 'features/push/web_tap_web.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,6 +51,9 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
   void initState() {
     super.initState();
     pendingDeepLink.addListener(_handleDeepLink);
+    // Web taps arrive from the service worker (launch URL or message stream)
+    // rather than the plugin channels; this queues them the same way.
+    initWebNotificationTaps();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Start push (permission, token, listeners); no-ops if Firebase is absent.
       ref.read(pushControllerProvider);

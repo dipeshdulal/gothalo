@@ -43,8 +43,29 @@ messaging.onBackgroundMessage(async (payload) => {
   });
 });
 
-// Focus/open the app when the notification is tapped.
+// Route a tapped notification to its agent. iOS web push cannot carry action
+// buttons (WebKit doesn't implement Notification actions), so landing the tap
+// directly on the blocked agent's prompt is the closest it gets to
+// approve-from-the-notification. The payload travels differently depending on
+// whether the app is running: an open window gets it posted as a prefixed
+// string (see lib/features/push/web_tap_web.dart, the other half of this
+// contract); a cold start carries it in the launch URL.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  event.waitUntil(clients.openWindow("/"));
+  const d = event.notification.data || {};
+  event.waitUntil(
+    (async () => {
+      const wins = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      if (wins.length > 0) {
+        wins[0].postMessage("gothalo:notification-tap:" + JSON.stringify(d));
+        return wins[0].focus();
+      }
+      return self.clients.openWindow(
+        "/?push=" + encodeURIComponent(JSON.stringify(d)),
+      );
+    })(),
+  );
 });
