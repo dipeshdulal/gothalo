@@ -5,7 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/connection/connection_providers.dart';
 
-/// One reusable prompt or keystroke, shown as a chip above the composer —
+/// One reusable prompt or keystroke, shown as a button in the composer's
+/// actions row and in the terminal's accessory bar —
 /// the Termius/Blink "snippets" table stake gothalo lacked (see
 /// docs/RESEARCH-feature-ideas.md, #7). Exactly one of [text]/[key] is set:
 /// [text] is typed and submitted like a composer message; [key] sends a raw
@@ -87,92 +88,9 @@ class QuickCommands extends AsyncNotifier<List<QuickCommand>> {
   }
 }
 
-/// A horizontally scrollable row of the user's [QuickCommand]s plus an "Add"
-/// chip, shared by the transcript composer and the raw terminal. [onCommand]
-/// decides how a tapped command is delivered — the transcript types it via
-/// the bridge; the terminal writes raw PTY bytes — so the same list stays in
-/// sync across both surfaces. Long-press a chip to remove it.
-class QuickCommandsBar extends ConsumerWidget {
-  const QuickCommandsBar({
-    super.key,
-    required this.onCommand,
-    this.enabled = true,
-  });
-
-  final void Function(QuickCommand) onCommand;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final commands = ref.watch(quickCommandsProvider).asData?.value ?? const [];
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-      child: SizedBox(
-        height: 34,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          children: [
-            for (var i = 0; i < commands.length; i++) ...[
-              QuickCommandChip(
-                command: commands[i],
-                enabled: enabled,
-                onTap: () => onCommand(commands[i]),
-                onRemove: () =>
-                    ref.read(quickCommandsProvider.notifier).removeAt(i),
-              ),
-              const SizedBox(width: 6),
-            ],
-            ActionChip(
-              avatar: const Icon(Icons.add, size: 16),
-              label: const Text('Add'),
-              visualDensity: VisualDensity.compact,
-              onPressed: () => showAddQuickCommand(context, ref),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// One quick command as a tappable chip; long-press to remove (with a confirm).
-class QuickCommandChip extends StatelessWidget {
-  const QuickCommandChip({
-    super.key,
-    required this.command,
-    required this.enabled,
-    required this.onTap,
-    required this.onRemove,
-  });
-
-  final QuickCommand command;
-  final bool enabled;
-  final VoidCallback onTap;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onLongPress: () async {
-        if (await confirmRemoveQuickCommand(context, command.label)) onRemove();
-      },
-      child: ActionChip(
-        avatar: command.key != null
-            ? const Icon(Icons.keyboard_command_key, size: 15)
-            : null,
-        label: Text(command.label),
-        visualDensity: VisualDensity.compact,
-        onPressed: enabled ? onTap : null,
-      ),
-    );
-  }
-}
-
 /// The long-press "remove this quick command?" confirm, shared by every surface
-/// that shows the list — the transcript's chips and the terminal's key-styled
-/// buttons — so removing one means the same thing wherever you do it.
+/// that shows the list — the transcript composer and the terminal's accessory
+/// bar — so removing one means the same thing wherever you do it.
 Future<bool> confirmRemoveQuickCommand(
   BuildContext context,
   String label,

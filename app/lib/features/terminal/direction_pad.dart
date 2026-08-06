@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'accessory_bar.dart';
+import '../../core/widgets/accessory_button.dart';
 
 /// An arrow cluster for the terminal — the inverted-T layout of a desktop
 /// keyboard's arrow keys, which is what agent TUIs (menus, history, approval

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gothalo/features/terminal/accessory_bar.dart';
+import 'package:gothalo/core/widgets/accessory_button.dart';
 import 'package:gothalo/features/terminal/direction_pad.dart';
 
 /// Mounts the pad the way the terminal screen does: centred along the bottom of

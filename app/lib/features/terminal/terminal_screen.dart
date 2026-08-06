@@ -19,7 +19,7 @@ import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import '../transcript/quick_commands_providers.dart';
-import 'accessory_bar.dart';
+import '../../core/widgets/accessory_button.dart';
 import 'direction_pad.dart';
 import 'pty_mouse_handler.dart';
 
@@ -615,7 +615,10 @@ class _AccessoryKeyRow extends ConsumerWidget {
     return SafeArea(
       top: false,
       child: Container(
-        color: scheme.surfaceContainerHigh,
+        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
+        // one: at one step the buttons and the bar behind them are close enough
+        // to read as a single flat slab.
+        color: scheme.surfaceContainerLow,
         // Wide side margins: a curved screen's glass falls away at the edge, so
         // a button sitting 8dp in gets its corner cut off. SafeArea covers a
         // notch, not a curve — phones don't report a side inset for one in

@@ -67,13 +67,26 @@ and mono type, width the only variable. Two earlier attempts are worth not
 repeating: the quick commands as Material chips (outlined, proportional,
 stadium) stacked above filled mono key blocks read as two unrelated toolbars;
 and packing labelled chips *plus* a pinned toggle *plus* four keys into one row
-needs ~470dp of a ~393dp phone, so something always clipped mid-word. The
-transcript keeps its chips, where they sit among other chips and belong.
+needs ~470dp of a ~393dp phone, so something always clipped mid-word.
 
 Quick commands that merely fire a key this bar already has are **filtered out
 here**. The shipped default, "Interrupt", sends `esc` — the same keystroke as
 the Esc button three slots over. It earns its place in the transcript composer,
 which has no key strip; on the terminal it was the same key twice.
+
+**The transcript composer follows the same rules** — the two screens are one
+tap apart doing the same job, so a different toolbar vocabulary on each read as
+an accident. Its actions row is the same evenly-spread `AccessoryButton`s
+(mode, quick commands, `+`, jump, terminal); attaching an image moved *inside*
+the composer pill, where every messaging app puts it and where it belongs, as
+it acts on the message being written rather than on the session; and jump moved
+down from the app bar, which is a stretch away at the top of a phone.
+
+The agent's "working" state there is now a **bar sweeping the seam** above those
+controls, with no `thinking…` label — the motion says it, and the word cost a
+line of transcript. Pulsing dots were the wrong borrow: they promise an imminent
+message, where this is a machine holding a turn open for anything up to ten
+minutes.
 
 ## D7 — Multi-agent is free
 Herdr detects and normalizes ~20 agents below the API into one status model, so

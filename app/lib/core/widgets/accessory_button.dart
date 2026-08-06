@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme.dart';
+import '../theme.dart';
 
 /// One button of the terminal's accessory bars — the single visual vocabulary
 /// for everything below the buffer: the key strip (Esc/Ctrl/Tab/^C), the arrow
