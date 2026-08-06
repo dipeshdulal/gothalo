@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../core/theme.dart';
+
 import '../../core/connection/connection_providers.dart';
 import '../push/push_service.dart';
 import 'pairing_service.dart';
@@ -116,6 +118,7 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('Pair via QR'),
@@ -176,8 +179,11 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
                       const SizedBox(height: 12),
                       Row(
                         children: [
-                          Icon(Icons.error_outline,
-                              color: scheme.error, size: 18),
+                          Icon(
+                            Icons.error_outline,
+                            color: scheme.error,
+                            size: 18,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -246,8 +252,7 @@ class _CameraError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final denied =
-        error.errorCode == MobileScannerErrorCode.permissionDenied;
+    final denied = error.errorCode == MobileScannerErrorCode.permissionDenied;
     return ColoredBox(
       color: Colors.black,
       child: Center(
@@ -256,13 +261,16 @@ class _CameraError extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.no_photography_outlined,
-                  color: Colors.white70, size: 56),
+              const Icon(
+                Icons.no_photography_outlined,
+                color: Colors.white70,
+                size: 56,
+              ),
               const SizedBox(height: 16),
               Text(
                 denied
                     ? 'Camera permission is needed to scan the pairing QR. '
-                        'Enable it in Settings, then reopen this screen.'
+                          'Enable it in Settings, then reopen this screen.'
                     : 'Couldn\'t start the camera.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70),

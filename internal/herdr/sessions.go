@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+
+	"github.com/dipeshdulal/gothalo/internal/gitdiff"
+	"github.com/dipeshdulal/gothalo/internal/transcript"
 )
 
 // defaultSessionName is how Herdr names its default session.
@@ -269,16 +272,16 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 				results[i] = result{err: err}
 				return
 			}
+			// SnapshotRaw returns the socket's result object — the same
+			// {type, snapshot} the CLI printed inside its `result` envelope.
 			var env struct {
-				Result struct {
-					Snapshot map[string]any `json:"snapshot"`
-				} `json:"result"`
+				Snapshot map[string]any `json:"snapshot"`
 			}
-			if err := json.Unmarshal(raw, &env); err != nil || env.Result.Snapshot == nil {
+			if err := json.Unmarshal(raw, &env); err != nil || env.Snapshot == nil {
 				results[i] = result{err: fmt.Errorf("parse snapshot: %w", err)}
 				return
 			}
-			results[i] = result{node: env.Result.Snapshot}
+			results[i] = result{node: env.Snapshot}
 		}(i, c)
 	}
 	wg.Wait()
@@ -327,8 +330,159 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 	}
 	merged["sessions"] = sessions
 
+	enrichAgentBranches(merged["agents"])
+	enrichAgentAttention(merged["agents"])
+	enrichAgentLastActivity(merged["agents"])
+
 	return json.Marshal(map[string]any{
 		"id":     "gothalo:snapshot",
 		"result": map[string]any{"snapshot": merged},
 	})
+}
+
+// enrichAgentBranches fills a `branch` field on every agent in the snapshot,
+// computed by running git in the pane's live cwd — the authoritative branch,
+// not one inferred from the path (which only works for herdr worktrees) or
+// read from the transcript (which records the session's start cwd). It prefers
+// `foreground_cwd` (the pane's current dir, tracking a shell `cd`) over the
+// launch `cwd`. The field is always set — "" when the pane isn't in a git work
+// tree (e.g. a home dir) or on a detached HEAD — so the app can render "no
+// branch" rather than a misleading folder name.
+//
+// git runs once per *unique* cwd (agents in the same repo dir share one call)
+// and those calls run concurrently, so enrichment costs one git round-trip of
+// wall time regardless of agent count.
+func enrichAgentBranches(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok || len(agents) == 0 {
+		return
+	}
+
+	cwdFor := func(obj map[string]any) string {
+		if fg, ok := obj["foreground_cwd"].(string); ok && fg != "" {
+			return fg
+		}
+		if cwd, ok := obj["cwd"].(string); ok {
+			return cwd
+		}
+		return ""
+	}
+
+	// Unique cwds → resolve each branch once, concurrently.
+	seen := map[string]struct{}{}
+	var uniq []string
+	for _, it := range agents {
+		if obj, ok := it.(map[string]any); ok {
+			cwd := cwdFor(obj)
+			if _, dup := seen[cwd]; !dup {
+				seen[cwd] = struct{}{}
+				uniq = append(uniq, cwd)
+			}
+		}
+	}
+
+	branches := make(map[string]string, len(uniq))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, cwd := range uniq {
+		wg.Add(1)
+		go func(cwd string) {
+			defer wg.Done()
+			b := gitdiff.Branch(cwd)
+			mu.Lock()
+			branches[cwd] = b
+			mu.Unlock()
+		}(cwd)
+	}
+	wg.Wait()
+
+	for _, it := range agents {
+		if obj, ok := it.(map[string]any); ok {
+			obj["branch"] = branches[cwdFor(obj)]
+		}
+	}
+}
+
+// attentionRanks is the bridge's canonical "who needs a human first" ordering,
+// lowest rank first. It is the one place that priority is defined, so every
+// surface that consumes /snapshot (inbox list, priority screen, counts, the
+// aggregate header) orders identically instead of each re-deriving it.
+//
+// This lives here rather than on Herdr's `agent.view` projection deliberately:
+// Herdr accepts `agent.view.set` and reports the view active, but as of herdr
+// 0.8.0 (protocol 19) no read applies it — `agent.list` and `session.snapshot`
+// both return the unprojected list — so there is no projected read for the
+// bridge to forward. The bridge is the authority instead.
+var attentionRanks = map[string]int{
+	"blocked": 0, // waiting on an approval or an answer — the whole point of the app
+	"done":    1, // finished a turn; needs you to look at it and continue
+	"working": 2, // busy, nothing to do
+	"idle":    3, // parked at a prompt
+	"unknown": 4, // undetected; sorts last so it never displaces a real signal
+}
+
+// unknownAttentionRank is what an unrecognised (or missing) agent_status gets —
+// the same slot as "unknown", so a status Herdr adds later degrades to "sorts
+// last" instead of jumping to the top of the inbox.
+const unknownAttentionRank = 4
+
+// enrichAgentLastActivity stamps `last_activity_ts` (unix milliseconds) on every
+// agent whose transcript can be found, and leaves it off every agent whose
+// cannot.
+//
+// It is what lets a client show "blocked 50m" instead of "blocked". The snapshot
+// is otherwise entirely a statement about NOW: it can say an agent is waiting,
+// never for how long, and the difference is the whole question you have when you
+// pick your phone up. See [transcript.LastActivity] for why the transcript's
+// mtime is the source rather than anything the bridge observes — briefly, it
+// survives a restart and knows spans that predate the bridge entirely.
+//
+// ABSENT means unknown, never "just now". A client must render nothing rather
+// than "0s" for an agent whose transcript could not be resolved (a kind that
+// keeps sessions in a shared database, or an agent that has not spoken yet).
+func enrichAgentLastActivity(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok {
+		return
+	}
+	for _, it := range agents {
+		obj, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		kind, _ := obj["agent"].(string)
+		cwd, _ := obj["cwd"].(string)
+		var sessionID string
+		if sess, ok := obj["agent_session"].(map[string]any); ok {
+			sessionID, _ = sess["value"].(string)
+		}
+		if at, ok := transcript.LastActivity(kind, cwd, sessionID); ok {
+			obj["last_activity_ts"] = at.UnixMilli()
+		}
+	}
+}
+
+// enrichAgentAttention stamps `attention_rank` on every agent in the snapshot
+// from its `agent_status`. Ordering by this field (then by whatever tiebreak the
+// surface wants) is what makes the app's list authoritative rather than
+// client-sorted. The field is always set, so a client can sort on it
+// unconditionally.
+func enrichAgentAttention(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok {
+		return
+	}
+	for _, it := range agents {
+		obj, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		rank := unknownAttentionRank
+		if status, ok := obj["agent_status"].(string); ok {
+			if r, known := attentionRanks[status]; known {
+				rank = r
+			}
+		}
+		obj["attention_rank"] = rank
+	}
 }

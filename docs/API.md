@@ -51,11 +51,19 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 ## Endpoints (per-device bearer)
 | Method | Path | Body | Response | Notes |
 |---|---|---|---|---|
+| GET  | `/info` | — | `{server_id, server_name}` | this bridge's identity — map an incoming push's `server_id` to a saved server |
 | GET  | `/snapshot` | — | raw Herdr snapshot JSON | live agent state (shape below) |
 | POST | `/send` | `{pane, text}` | `{ok:true}` | types text into a pane |
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
+| GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
+| POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into an **agent** pane's tree and get the path back, to paste into a prompt (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
+| GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
+| GET  | `/agents/available` | — | `{agents[],known_kinds[],discovery}` | which agent kinds this host can actually launch (below) |
+| POST | `/agent/start` | `{kind, pane_id\|split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id,kind,name,…}` | launch an agent, optionally in a pane it creates (below) |
+| POST | `/agent/restart` | `{pane_id, prompt?}` | `{restarted:true,pane_id,kind,…}` | replace the agent in a pane — **loses the conversation** (below) |
+| POST | `/agent/stop` | `{pane_id}` | `{stopped:true,pane_id,kind}` | quit the agent, keep the pane (below) |
 | GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
 | GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
@@ -70,10 +78,12 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 { "result": { "snapshot": { "agents": [
   { "agent": "claude",
     "agent_status": "idle|working|blocked|done|unknown",
+    "attention_rank": 0,
     "pane_id": "wN:p2",
     "state_change_seq": 42,
     "terminal_title_stripped": "…",
     "workspace_id": "wN",
+    "branch": "feat/x",
     "cwd": "/…" }
 ] } } }
 ```
@@ -82,36 +92,65 @@ Group by `workspace_id`; badge on `agent_status`; title = `terminal_title_stripp
 `state_change_seq` is a per-agent monotonic counter Herdr bumps on every state
 transition — pass it to `/approve` as the idempotency token (see below).
 
+**`attention_rank`** is the bridge's authoritative priority ordering — sort the
+inbox on it ascending: `blocked` 0, `done` 1, `working` 2, `idle` 3, `unknown` 4
+(an unrecognised status also ranks 4, so it sorts last). It is added by gothalo,
+not herdr, and is always present. Sorting every surface on this one field is
+what keeps list order and the counts derived from it consistent — don't
+re-derive priority per screen. `branch` is likewise gothalo-added; both are
+described in full in [`CONTRACT.md`](../CONTRACT.md).
+
 ## Push messages (what your FCM handler receives)
-Messages are **data-only** (no `notification` block) so your handler always runs
-and renders the notification itself (reliable on locked Android). Data keys:
+Each alert arrives as **two** messages, both at `android.priority: "high"` and
+sharing one `tag`, told apart by the `render` key:
+
+- `render:"os"` — carries a `notification` block. Android draws it with no app
+  process involved, which is what makes it survive the app being killed. Android
+  does **not** hand this one to your handler while backgrounded, so it can never
+  have buttons.
+- `render:"app"` — data-only, so your handler *does* run. Redraw the same tag
+  (id `0`) with action buttons; it replaces the one above in place.
+
+**Ignore `render:"os"` in your handler**: rendering it duplicates what Android
+drew, and logging it double-counts, since a foreground app receives both.
+
 ```
-title             e.g. "Herdr agent blocked"
-body              the agent's terminal title
+type              "alert"
+render            "os" | "app"
 agent             the pane_id (e.g. "wN:p2")  -> deep-link target
 status            "blocked" | "done"
 state_change_seq  the agent's seq at this transition (string int) -> pass to /approve
+server_id         which bridge sent this  -> which server the tap should open
+server_name       that bridge's name, e.g. "Mac Studio"
+agent_title       the pane's terminal title
+title, body       the composed notification text
+question          (blocked, best-effort) what the agent is actually asking
+options           (blocked, best-effort) JSON [{index,label,selected,key}]
+category          (blocked, best-effort) e.g. "dangerous_command_approval"
 ```
-Render a local notification from `title`/`body`; tapping it should deep-link to
-the agent identified by `agent` (== `pane_id`). Carry `state_change_seq` into any
-lock-screen/banner **Approve** action so `/approve` can no-op a stale tap (D8).
 
-### `dismiss` — auto-clear a stale "blocked" notification
-A **second, data-only** message shape the bridge sends when a `blocked` agent is
+`server_id` matters because one phone registers the **same** FCM token with every
+bridge it pairs with: without it an alert can't be attributed and its tap can't
+be routed. Resolve it against `GET /info`. Carry `state_change_seq` into any
+lock-screen **Approve** so `/approve` can no-op a stale tap (D8).
+
+### `dismiss` — auto-clear a stale notification
+A **second, data-only** message the bridge sends when a notified agent is
 **resolved from anywhere** (this phone, another device, the desktop Herdr app, or
 the agent just moving on). It tells every device to cancel the tray notification
-it raised for that pane, so a handled block doesn't linger on other phones.
+it raised for that pane.
 ```
-type    "dismiss"           <- the discriminator; normal pushes have NO type key
-agent   the pane_id (e.g. "wN:p2")  <- cancel the notification keyed to this pane
+type       "dismiss"    <- the discriminator; an alert carries "alert"
+agent      the pane_id (e.g. "wN:p2")
+server_id  the sending bridge; cancel the notification tagged "<server_id>/<pane_id>"
 ```
 There is **no** `title`/`body`/`status` (data-only, so your background handler
-runs and cancels silently). Match on `data["type"] == "dismiss"`; if absent, treat
-it as a normal push (above). It targets the **same** device set as the blocked
-push (all registered devices). Triggered when the bus shows the pane leaving
-`blocked` (`pane_agent_status_changed` with `agent_status != "blocked"`) or the
-pane closing (`pane_closed` / `pane_exited`) — full contract in
-[`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md).
+runs and cancels silently). Triggered when the bus shows the pane leaving the
+state it was notified about, or the pane closing (`pane_closed` / `pane_exited`)
+— full contract in [`CONTRACT-notif-clear.md`](CONTRACT-notif-clear.md).
+
+The complete payload, channel, tag, action and routing contract lives in
+[`CONTRACT-notifications.md`](CONTRACT-notifications.md).
 
 ### Native FCM setup
 Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
@@ -146,9 +185,27 @@ struct: what the agent is doing, its last message, and — when blocked — the 
 question and choices it's waiting on (which pair with `POST /approve`). Use it for
 agent panes; keep raw `/attach` for non-agent panes.
 ```
-GET /agent-state?pane=<pane_id>
+GET /agent-state?pane=<pane_id>[&recent=1]
 Authorization: Bearer <bearer>          // same auth as everything; ?token= also works
 ```
+The card is assembled from two sources, deliberately:
+
+| Field | Source |
+|---|---|
+| `headline`, `detail`, `transcript` | the agent's own **transcript store** (the same one `/agent-transcript` streams) |
+| `blocked` (question + options) | the pane's **current screen** |
+
+`blocked` cannot come from a transcript: a permission or question prompt is UI the
+agent is drawing *right now* to ask you something, not conversation, so nothing
+records it. Everything else is read from structured data — already parsed, not
+truncated by the viewport, and with no effect on the operator's screen.
+
+For a kind with **no transcript reader**, `headline`/`detail`/`transcript` fall
+back to the current screen. `?recent=1` additionally reads the pane's
+**scrollback** for a richer fallback, but Herdr can only capture an
+alternate-screen pane's history by physically **scrolling the pane**, which
+whoever is watching it sees as a jump, once per call. It is therefore **off by
+default** and only worth requesting for a kind with no transcript.
 Response `200` — the **stable contract** (kind-agnostic; the same shape for every
 agent kind):
 ```jsonc
@@ -201,6 +258,80 @@ Parsing never fails the request: an unrecognised layout degrades to `parsed:fals
 rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` no
 agent in that pane · `502` herdr command failed.
 
+## POST /image — attach a screenshot to a prompt
+Upload an image from the phone; the bridge writes it into the target agent's
+working directory and returns the **absolute path** it wrote. Coding agents read
+an image when handed a path, so that path — pasted into the composer as ordinary
+text — is the whole attachment mechanism. No agent protocol is involved.
+```
+POST /image?pane=wN:p2
+Authorization: Bearer <bearer>
+Content-Type: application/octet-stream
+
+<raw image bytes>
+```
+Response `200`:
+```json
+{ "path": "/Users/dipesh/projects/gothalo/.gothalo/images/20260805-142530-9f86d081.png",
+  "relative_path": ".gothalo/images/20260805-142530-9f86d081.png",
+  "content_type": "image/png",
+  "bytes": 184320 }
+```
+The body is **raw bytes, not multipart** — deliberately, because a filename is
+the one thing this endpoint must never accept. Nothing about the written file is
+client-controlled: the pane picks the directory, the **sniffed** content type
+(`http.DetectContentType`, never the declared one) picks the extension, and the
+bridge picks the name. `?name=`, `?filename=` and `Content-Disposition` are not
+read at all.
+
+Accepts **png/jpeg/gif/webp** only, capped at **10 MiB** inclusive. Files land in
+`<agent cwd>/.gothalo/images/`, which is self-gitignored on first write and
+pruned on every write (7 days / 40 files). The app inserts `path` into the
+composer and **does not send** — the user writes the prompt around it.
+
+**Scoped to agent panes** (a plain shell pane has no `cwd` → `404`), and accepts
+the session-qualified `<session>/<pane>` id form, same as `/diff`.
+
+Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` no agent in
+that pane · `405` non-POST · `413` over the cap · `415` not an accepted image
+type · `500` the drop directory couldn't be written · `502` herdr command failed.
+Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
+## GET /timeline — recent agent activity
+The only read that describes the **past**. Every other endpoint says what is true
+now, which is why none of them can tell you whether an agent blocked fifty
+minutes ago or ten seconds ago — the status is the same either way.
+
+```
+GET /timeline?limit=100&pane=w4:p2
+```
+Both query params are optional: `limit` defaults to `100` and is capped at `500`;
+`pane` (session-qualified, matched whole) restricts the log to one agent.
+
+Response `200`, **newest first**:
+```json
+{ "entries": [
+  { "ts": 1785681000000, "pane": "w4:p2", "agent": "claude", "session": "default",
+    "workspace": "w4", "from": "working", "to": "blocked", "prev_ms": 742000 }
+], "limit": 100 }
+```
+- **`prev_ms`** — how long the agent spent in `from`. This is the whole point of
+  the endpoint and the one fact `/snapshot` cannot reconstruct (`state_change_seq`
+  is a counter, not a clock). **Absent ≠ `0`**: `0` is a real instantaneous flip,
+  absent means the bridge could not see where the span began. Render nothing, not
+  "0s".
+- **`from` absent** = a first sighting of that pane, not a transition out of an
+  unnamed state. **`to: "gone"`** = the pane closed or its process exited.
+- Answered from an in-memory ring — **no herdr call** — so it is cheap to poll
+  and still answers while herdr is down. The ring is bounded (1500 entries / 72h)
+  and persisted, so a bridge restart does not lose the recent past.
+
+Errors: `400` `limit` present but not a positive integer (malformed is rejected,
+never silently defaulted) · `401` bad bearer · `503` bridge running without a
+recorder (distinct from an empty `entries[]`, which just means nothing has
+happened yet). Timeline entries are deliberately **not** carried on `WS /events`
+— see [`CONTRACT-timeline.md`](CONTRACT-timeline.md) for why, and for the full
+schema and restart semantics.
+
 ## POST /agent-mode/cycle — change a Claude agent's permission mode
 The mobile remote for Claude's **Shift+Tab** key: it advances a Claude pane's
 permission mode by one step around its ring
@@ -233,13 +364,20 @@ just hide the mode control for those kinds (their `/agent-state` omits
 `permission_mode` too).
 
 ## WS /agent-transcript — streamed structured chat (agent panes)
-`GET /agent-transcript?pane=<pane_id>&token=<bearer>` upgraded to a **WebSocket**.
+`GET /agent-transcript?pane=<pane_id>&token=<bearer>[&subagent=<agent_id>]` upgraded
+to a **WebSocket**.
 This is the *chat view* data source: instead of scraping the terminal (like
 `/agent-state`) or streaming raw PTY bytes (like `/attach`), the bridge reads the
 agent's **own transcript file** (Claude Code writes JSONL at
 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) and streams it **normalized**
 into a kind-agnostic chat schema — messages, thinking, tool calls (command + diff),
 and tool results.
+
+`hello` also carries `subagents`: the session's flat roster of conversations
+delegated via the `Task` tool, joined to their spawning tool call by
+`tool_use_id`. Pass one back as `?subagent=<agent_id>` to stream that child
+conversation through identical framing. See
+[`CONTRACT-agent-transcript.md`](CONTRACT-agent-transcript.md#subagents).
 
 Frames are **text JSON**, one entry per frame (contrast `/attach`'s binary raw
 bytes). On connect it sends a `hello`, replays the **newest page** (`entry` frames,
@@ -259,11 +397,26 @@ The live tail keeps running while a page loads. Any other/garbage inbound frame
 closes the socket cleanly (`1000`). Every page is read with a bounded ring buffer —
 the whole file is never held in memory.
 
-The transcript file is resolved from the pane's `cwd` + `agent_session.value`
-(Claude's session id == the filename), with a newest-matching-`cwd` fallback. This
-is READ-ONLY — prompts/approvals still go through `POST /send` / `POST /approve`.
-`claude` is implemented; `codex`/`opencode` are recognized but not yet wired (→
-`404`). Errors before the upgrade: `400` missing `pane` · `401` bad token · `404`
+The transcript is resolved per agent kind from the pane's `cwd` +
+`agent_session.value`. **Where** it lives varies by agent and the wire protocol
+does not change with it: `claude` appends a JSONL file
+(`~/.claude/projects/<encoded-cwd>/<session>.jsonl`, session id == the filename);
+`hermes` keeps every session in a SQLite database (`~/.hermes/state.db`, resolved
+by session id alone — Hermes sessions are not keyed by cwd).
+
+For the file-backed kinds the newest-matching-`cwd` fallback applies **only when
+`agent_session.value` is absent** — a known session id with no file on disk yet
+returns `404` rather than falling back, since the fallback would return a
+neighbouring pane's transcript. Install the Herdr agent integration (see the
+README) so that id is always present; for `hermes` it is required, as there is no
+cwd fallback to resolve with.
+
+`opencode` likewise keeps sessions in SQLite (`~/.local/share/opencode/opencode.db`),
+with content split across `message` rows and their child `part` rows.
+
+This is READ-ONLY — prompts/approvals still go through `POST /send` /
+`POST /approve`. `claude`, `hermes` and `opencode` are implemented; `codex` is
+recognized but not yet wired (→ `404`). Errors before the upgrade: `400` missing `pane` · `401` bad token · `404`
 no agent / no transcript / unsupported kind · `500` read failed · `502` herdr
 failed. Close code `1000` on normal teardown.
 
@@ -319,6 +472,13 @@ action. Auth is via `?token=` (like `/attach`). The stream is **text JSON**:
    ```json
    { "source":"herdr"|"gothalo", "type":"<type>", "seq":<uint>, "ts":<ms>, "payload":{…} }
    ```
+3. Interleaved, a **heartbeat** every 20s — `{"type":"heartbeat","ts":<ms>}`.
+   It carries **no `seq`** on purpose: it means "still here", not "something
+   changed". **Skip it before your delta handling** — treating it as a change
+   signal would re-snapshot every 20 seconds for nothing. It exists so a client
+   can detect a half-open socket (one that died without either end noticing);
+   time out on silence and reconnect. The app uses 50s. Full rationale in
+   [`CONTRACT.md`](../CONTRACT.md) §2.
 
 `seq` is process-monotonic (shared across sources + the snapshot baseline); every
 delta is `> baseline`. Track the last `seq` — a gap (`seq > last+1`) means
@@ -349,6 +509,70 @@ resync/reconnect rules** live in [`CONTRACT.md`](../CONTRACT.md) at the repo roo
 `pane_agent_status_changed` payload is `{pane_id, workspace_id, agent,
 agent_status}`; it does **not** carry `state_change_seq` (Herdr's event omits
 it), so pair `pane_id` with the snapshot to get the seq for `/approve`.
+
+## Agent lifecycle — start / restart / stop
+Full contract, live captures and the reasoning behind each rule:
+[`docs/CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md). Summary:
+
+**`GET /agents/available`** — the kinds this host can run *right now*. Discovered
+on the bridge (Herdr's own `--kind` catalog ∩ what resolves on the daemon's PATH,
+since Herdr documents a kind as its canonical executable); nothing is hardcoded.
+```json
+{ "agents": [{ "kind": "claude", "path": "/opt/homebrew/bin/claude", "state_reporting": true }],
+  "known_kinds": ["pi","claude","codex","…"],
+  "discovery": "herdr agent kinds + PATH lookup" }
+```
+`state_reporting:false` means the kind will run but Herdr can't classify it — it
+stays `unknown` forever and never raises an approval or a push. **Only offer
+kinds from `agents[]`.**
+
+**`POST /agent/start`** — one of three targets, exactly one (naming none or
+several is a `400`):
+```
+{ "kind":"claude", "pane_id":"wN:p7" }                                    // reuse an idle shell pane
+{ "kind":"claude", "split_from":"wN:p1", "direction":"down", "cwd":"…" }  // split, agent in the new pane
+{ "kind":"claude", "workspace_id":"wN", "label":"review", "cwd":"…" }     // new tab, agent in its root pane
+```
+Optional: `cwd` (absolute, existing directory — **rejected with `pane_id`**),
+`prompt` (the agent's first message), `name` (`[a-z][a-z0-9_-]{0,31}`),
+`timeout_ms` (clamped 5 000–300 000, default 60 000). Response `200`:
+```json
+{ "pane_id":"wN:p7", "tab_id":"wN:t5", "workspace_id":"wN",
+  "kind":"claude", "name":"claude-wn-p7", "created_pane":true, "prompt_sent":true }
+```
+`pane_id` is session-qualified, so it feeds `/attach`, `/transcript` and `/send`
+directly. **This call blocks 5–30 s** — Herdr only returns once it has verified
+the agent is really up — so raise the client's receive timeout.
+
+`prompt_error` is present only when a `prompt` was asked for and did not land.
+The agent is running either way (hence still `200`), but the client must be able
+to tell an instructed agent from an empty one — show the reason rather than
+navigating to it as if the prompt arrived.
+
+`cwd` is validated server-side: absolute, canonical (every `..`/`.`/`//` form is
+rejected, not normalised), must exist, must be a directory.
+
+**`POST /agent/stop`** `{pane_id}` → `{stopped:true,pane_id,kind}`. Kills running
+work; the pane survives. Herdr has no stop method, so the bridge sends repeated
+`ctrl+c` and returns `200` **only** once it has observed the pane back at its
+shell prompt. A `409` means the agent ignored the interrupts and is **still
+running** — never treat it as a slow success.
+
+**`POST /agent/restart`** `{pane_id, prompt?}` →
+`{restarted:true,pane_id,kind,name,cwd,prompt_sent,history_kept:false}`. Stops the
+agent and starts the same kind in the same pane and directory. The pane, its id,
+its scrollback, its cwd and the agent's name survive. **The conversation does
+not** — the replacement is a new session with no memory of the old one, the
+in-flight turn is lost, and so is queued input and permission/plan mode. Confirm
+before calling.
+
+Status codes: `400` bad shape / bad `cwd` / unknown kind · `401` · `404` unknown
+pane or no agent in it · `405` wrong method · `409` pane busy, pane already hosts
+an agent, kind not installed, or the agent would not stop · `502` Herdr failed
+(a start that fails after creating a pane says so and names the pane).
+
+These publish `agent_started` / `agent_stopped` / `agent_restarted` on
+`WS /events`.
 
 ## POST /pane/new — create a terminal from mobile
 Creates a pane and returns its identity so the app can immediately `/attach` to
@@ -428,8 +652,13 @@ other Herdr error.
 `401` missing/invalid bearer · `403` invalid pairing code / method not allowlisted
 (`/herdr`) · `400` bad body ·
 `404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
-`/agent-mode/cycle`, `/agent-transcript`), or no transcript file / unsupported
-kind (`/agent-transcript`) · `405` wrong method (`/agent-mode/cycle` non-POST) ·
+`/agent-mode/cycle`, `/agent-transcript`, `/agent/stop`, `/agent/restart`), or no
+transcript file / unsupported kind (`/agent-transcript`) · `405` wrong method
+(`/agent-mode/cycle` non-POST, `/image` non-POST, `/agents/available`,
+`/agent/*` non-POST) ·
 `409` mode switching not supported for the agent kind (`/agent-mode/cycle` on a
-non-Claude pane) · `500` transcript read failed (`/agent-transcript`) · `502`
-herdr command failed.
+non-Claude pane), or pane busy / already hosts an agent / kind not installed /
+agent would not stop (`/agent/*`) · `413` upload over the 10 MiB cap (`/image`) ·
+`415` body is not an accepted image type (`/image`) · `500` transcript read
+failed (`/agent-transcript`), drop directory unwritable (`/image`) · `502` herdr
+command failed.

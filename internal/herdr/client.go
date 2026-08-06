@@ -5,12 +5,14 @@ package herdr
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ErrAgentNotFound is returned by Get/ReadText when the pane has no agent (or the
@@ -18,10 +20,33 @@ import (
 // on a zero exit code, so callers can map it to a 404 rather than a 502.
 var ErrAgentNotFound = errors.New("agent not found")
 
-// Client talks to the local herdr CLI, scoped to one Herdr session.
+// ErrAgentNotIdle is returned by ReadText when the requested source needs
+// scrollback (e.g. "recent-unwrapped") but the agent is mid-turn: Herdr can only
+// capture an alternate-screen pane's history by scrolling it while idle. Herdr's
+// own hint is to retry or fall back to --source visible, so callers get a
+// sentinel to branch on rather than an opaque error.
+var ErrAgentNotIdle = errors.New("agent not idle")
+
+// Client talks to the local Herdr server for one session.
+//
+// Control calls go over Herdr's Unix socket. The `herdr` binary is a thin
+// wrapper over that same socket — confirmed with lsof: each `herdr agent wait`
+// child held exactly one unix fd — so shelling out only ever bought us a process
+// per call. Responses are byte-identical either way (`session.snapshot` returns
+// exactly what `herdr api snapshot` prints), which is what makes the swap safe.
+//
+// The CLI is still used where a process is genuinely the point (`agent attach`),
+// and to bootstrap the socket path itself.
 type Client struct {
 	bin     string
 	session string // "" targets the default session (no --session flag)
+
+	// sockMu guards the memoised control-socket path. Resolving it costs a
+	// `herdr status server` exec, so caching is what makes socket calls actually
+	// cheaper rather than merely equivalent: without it every request would still
+	// spawn a process just to learn where to connect.
+	sockMu   sync.Mutex
+	sockPath string
 }
 
 // New returns a Client that invokes `herdr` from PATH against the default session.
@@ -55,19 +80,65 @@ func (c *Client) args(a ...string) []string {
 	return append([]string{"--session", c.session}, a...)
 }
 
+// cliTimeout bounds an ordinary herdr CLI call. Every one of these is a
+// request/response that should answer in milliseconds; 30s is "the CLI is not
+// coming back" rather than "the CLI is slow".
+//
+// The bound matters more than the number. Without one, a wedged herdr blocks the
+// caller forever, and several callers guard work with a flag they only clear on
+// return — the watcher marks a pane as watched and releases it when its goroutine
+// ends, so a permanently blocked `agent wait` silently retires that agent for the
+// life of the process. An unbounded exec turns a temporary hang into a permanent
+// one.
+const cliTimeout = 30 * time.Second
+
+// waitWindow is how long a single `agent.wait` parks before Herdr answers
+// "nothing happened". Wait loops on that, so it only bounds one iteration.
+const waitWindow = 10 * time.Minute
+
+// waitBound is the transport deadline on a wait. It sits just past waitWindow so
+// Herdr's own timeout always wins; this only fires when Herdr has stopped
+// honouring it, turning a wedged socket into an error rather than a goroutine
+// parked forever.
+//
+// The bound matters more than the number. Several callers guard work with a flag
+// they only clear on return — the watcher marks a pane as watched and releases it
+// when its goroutine ends — so an unbounded wait silently retires that agent for
+// the life of the process, turning a temporary hang into a permanent one.
+const waitBound = 11 * time.Minute
+
 func (c *Client) run(args ...string) ([]byte, error) {
+	return c.runFor(cliTimeout, args...)
+}
+
+// runFor executes the herdr CLI under a deadline. A timeout is reported as an
+// ordinary error, which every caller already handles: the watcher drops the pane
+// and rediscovers it within 10s, the ingester's liveness probe reports "can't
+// tell" rather than guessing, and the notification path degrades to the pane
+// title instead of the parsed prompt.
+func (c *Client) runFor(d time.Duration, args ...string) ([]byte, error) {
 	args = c.args(args...)
-	out, err := exec.Command(c.bin, args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, c.bin, args...).CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return out, fmt.Errorf("herdr %s: timed out after %s", strings.Join(args, " "), d)
+		}
 		return out, fmt.Errorf("herdr %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
 	}
 	return out, nil
 }
 
-// SnapshotRaw returns the raw `herdr api snapshot` JSON, for endpoints that
-// pass Herdr state straight through to the client.
+// SnapshotRaw returns this session's snapshot payload (`session.snapshot`) — the
+// `{type, snapshot}` result object, which is what `herdr api snapshot` prints
+// inside its `result` envelope.
+//
+// This is the hottest read the app drives: every event nudges a debounced
+// /snapshot refetch, so it ran once per change burst as a process spawn.
 func (c *Client) SnapshotRaw() ([]byte, error) {
-	return c.run("api", "snapshot")
+	return c.Request("session.snapshot", struct{}{})
 }
 
 // Agent is the subset of snapshot agent fields gothalo uses.
@@ -77,6 +148,11 @@ type Agent struct {
 	PaneID    string `json:"pane_id"`
 	Title     string `json:"terminal_title_stripped"`
 	Workspace string `json:"workspace_id"`
+	// Name is the agent's Herdr label, set at `agent.start` time and empty for an
+	// agent someone launched by hand. A restart reuses it so the operator's own
+	// name for a pane survives — Herdr releases the name when the agent exits, so
+	// the same one is free again by the time the replacement starts.
+	Name string `json:"name"`
 	// Cwd is the agent's working directory — the project root the transcript file
 	// is keyed under (see internal/transcript.Locate).
 	Cwd string `json:"cwd"`
@@ -103,25 +179,24 @@ type AgentSession struct {
 // pane has no resolved session.
 func (a Agent) SessionID() string { return a.AgentSession.Value }
 
-type snapshotEnvelope struct {
-	Result struct {
-		Snapshot struct {
-			Agents []Agent `json:"agents"`
-		} `json:"snapshot"`
-	} `json:"result"`
-}
-
-// Agents parses the snapshot into the agent list.
+// Agents returns every agent Herdr knows about (`agent.list`).
+//
+// This is the hottest read in the bridge — the watcher rediscovers agents on a
+// 10s loop and the ingester's liveness probe compares against it — so it asks
+// for the agent list directly rather than pulling a full snapshot and throwing
+// away the workspace/tab/pane trees.
 func (c *Client) Agents() ([]Agent, error) {
-	out, err := c.SnapshotRaw()
+	res, err := c.Request("agent.list", struct{}{})
 	if err != nil {
 		return nil, err
 	}
-	var env snapshotEnvelope
-	if err := json.Unmarshal(out, &env); err != nil {
-		return nil, fmt.Errorf("parse snapshot: %w", err)
+	var body struct {
+		Agents []Agent `json:"agents"`
 	}
-	return env.Result.Snapshot.Agents, nil
+	if err := json.Unmarshal(res, &body); err != nil {
+		return nil, fmt.Errorf("parse agent.list: %w", err)
+	}
+	return body.Agents, nil
 }
 
 // herdrError is the error object herdr prints (on a zero exit) when a command
@@ -134,64 +209,94 @@ type herdrError struct {
 }
 
 // asAgentError maps a herdr error payload to a Go error: ErrAgentNotFound for a
-// missing target, a generic error for anything else, or nil when there is no
-// error object. Herdr returns exit 0 even for these, so run() won't have caught
-// them — every command that can fail this way must check the body.
+// missing target, ErrAgentNotIdle for a scrollback read on a working pane, a
+// generic error for anything else, or nil when there is no error object. Herdr
+// returns exit 0 even for these, so run() won't have caught them — every command
+// that can fail this way must check the body.
 func asAgentError(out []byte) error {
 	var e herdrError
 	if json.Unmarshal(out, &e) == nil && e.Error != nil {
-		if e.Error.Code == "agent_not_found" {
+		switch e.Error.Code {
+		case "agent_not_found":
 			return ErrAgentNotFound
+		case "agent_not_idle":
+			return ErrAgentNotIdle
 		}
 		return fmt.Errorf("herdr: %s: %s", e.Error.Code, e.Error.Message)
 	}
 	return nil
 }
 
-type agentGetEnvelope struct {
-	Result struct {
+// Get returns a single agent by pane id (`agent.get`). It returns
+// ErrAgentNotFound when the pane has no agent, so the caller can 404.
+//
+// Status and state_change_seq come back in one response, which is what lets the
+// notification-clearer compare them without risking a torn pair.
+func (c *Client) Get(pane string) (Agent, error) {
+	res, err := c.Request("agent.get", targetParams{Target: pane})
+	if err != nil {
+		return Agent{}, asSocketAgentError(err)
+	}
+	var body struct {
 		Agent Agent `json:"agent"`
-	} `json:"result"`
+	}
+	if err := json.Unmarshal(res, &body); err != nil {
+		return Agent{}, fmt.Errorf("parse agent.get: %w", err)
+	}
+	return body.Agent, nil
 }
 
-// Get returns a single agent by pane id (`herdr agent get`). It returns
-// ErrAgentNotFound when the pane has no agent, so the caller can 404.
-func (c *Client) Get(pane string) (Agent, error) {
-	out, err := c.run("agent", "get", pane)
-	if aerr := asAgentError(out); aerr != nil {
-		return Agent{}, aerr
+// targetParams is the {"target": …} shape every pane-scoped Herdr method takes.
+type targetParams struct {
+	Target string `json:"target"`
+}
+
+// asSocketAgentError maps a structured socket error to the same sentinels the
+// CLI path produced, so callers keep their 404/502 branching. Over the socket
+// these arrive as a proper error object rather than a zero-exit JSON body, so
+// the code is read directly instead of sniffing stdout.
+func asSocketAgentError(err error) error {
+	var serr *SocketError
+	if errors.As(err, &serr) {
+		switch serr.Code {
+		case "agent_not_found", "pane_not_found":
+			return ErrAgentNotFound
+		case "agent_not_idle":
+			return ErrAgentNotIdle
+		}
 	}
-	if err != nil {
-		return Agent{}, err
-	}
-	var env agentGetEnvelope
-	if err := json.Unmarshal(out, &env); err != nil {
-		return Agent{}, fmt.Errorf("parse agent get: %w", err)
-	}
-	return env.Result.Agent, nil
+	return err
 }
 
 // ReadText returns the plain-text terminal snapshot for a pane from the given
 // source (`herdr agent read <pane> --source <source> --format text`). Sources of
 // interest: "detection" (the parsed current-state view) and "recent-unwrapped"
 // (recent transcript, unwrapped). lines caps the snapshot when > 0. Herdr strips
-// ANSI for --format text. Returns ErrAgentNotFound when the pane has no agent.
+// ANSI for --format text. Returns ErrAgentNotFound when the pane has no agent,
+// and ErrAgentNotIdle when a scrollback source is asked of a working pane.
 func (c *Client) ReadText(pane, source string, lines int) (string, error) {
-	args := []string{"agent", "read", pane, "--source", source, "--format", "text"}
+	params := struct {
+		Target string `json:"target"`
+		Source string `json:"source"`
+		Format string `json:"format"`
+		Lines  *int   `json:"lines,omitempty"`
+	}{Target: pane, Source: source, Format: "text"}
 	if lines > 0 {
-		args = append(args, "--lines", strconv.Itoa(lines))
+		params.Lines = &lines
 	}
-	out, err := c.run(args...)
-	// A text read still emits a JSON error object (exit 0) when the target is gone.
-	if bytes.HasPrefix(bytes.TrimSpace(out), []byte(`{"error"`)) {
-		if aerr := asAgentError(out); aerr != nil {
-			return "", aerr
-		}
-	}
+	res, err := c.Request("agent.read", params)
 	if err != nil {
-		return "", err
+		return "", asSocketAgentError(err)
 	}
-	return string(out), nil
+	var body struct {
+		Read struct {
+			Text string `json:"text"`
+		} `json:"read"`
+	}
+	if err := json.Unmarshal(res, &body); err != nil {
+		return "", fmt.Errorf("parse agent.read: %w", err)
+	}
+	return body.Read.Text, nil
 }
 
 // Send types text into a pane (`herdr pane send-text`).
@@ -364,43 +469,50 @@ type WaitResult struct {
 	StateChangeSeq int
 }
 
-type waitEnvelope struct {
-	Result struct {
-		Agent struct {
-			Status         string `json:"agent_status"`
-			PaneID         string `json:"pane_id"`
-			Title          string `json:"terminal_title_stripped"`
-			StateChangeSeq int    `json:"state_change_seq"`
-		} `json:"agent"`
-	} `json:"result"`
-}
-
 // Wait blocks until the agent in pane enters one of the given statuses, looping
 // past internal timeouts. Returns (result, true) on a transition, or
 // (zero, false) if the agent went away (a non-timeout error) — the caller's
 // signal to stop watching it.
 func (c *Client) Wait(pane string, until ...string) (WaitResult, bool) {
-	args := []string{"agent", "wait", pane}
-	for _, u := range until {
-		args = append(args, "--until", u)
-	}
-	args = append(args, "--timeout", "600000") // 10 min; loop on timeout
+	params := struct {
+		Target    string   `json:"target"`
+		Until     []string `json:"until"`
+		TimeoutMS int      `json:"timeout_ms"`
+	}{Target: pane, Until: until, TimeoutMS: int(waitWindow / time.Millisecond)}
 
 	for {
-		out, err := c.run(args...)
+		// One connection per wait, parked for the window. This used to be a child
+		// `herdr agent wait` process — which opened exactly this connection itself
+		// and then respawned every time the window elapsed. Same socket, same
+		// blocking, one fewer process per agent for the life of the bridge.
+		res, err := c.RequestFor(waitBound, "agent.wait", params)
 		if err == nil {
-			var w waitEnvelope
-			_ = json.Unmarshal(out, &w)
+			var body struct {
+				Agent Agent `json:"agent"`
+			}
+			if jerr := json.Unmarshal(res, &body); jerr != nil {
+				return WaitResult{}, false
+			}
 			return WaitResult{
-				Status:         w.Result.Agent.Status,
-				PaneID:         w.Result.Agent.PaneID,
-				Title:          w.Result.Agent.Title,
-				StateChangeSeq: w.Result.Agent.StateChangeSeq,
+				Status:         body.Agent.Status,
+				PaneID:         body.Agent.PaneID,
+				Title:          body.Agent.Title,
+				StateChangeSeq: body.Agent.StateChangeSeq,
 			}, true
 		}
-		if bytes.Contains(out, []byte(`"code":"timeout"`)) {
+		if isWaitTimeout(err) {
 			continue // no transition within the window; keep waiting
 		}
 		return WaitResult{}, false // agent gone / unrecoverable
 	}
+}
+
+// isWaitTimeout reports whether a failed wait was Herdr's own "nothing happened
+// in the window" answer rather than a real failure. Herdr replies with a
+// structured {"code":"timeout"} error; a transport-level deadline (waitBound
+// firing because Herdr stopped honouring its own timeout) is deliberately NOT
+// treated as one, so a wedged socket ends the wait instead of spinning on it.
+func isWaitTimeout(err error) bool {
+	var serr *SocketError
+	return errors.As(err, &serr) && serr.Code == "timeout"
 }

@@ -27,6 +27,209 @@ class NewPaneResult {
   final String workspaceId;
 }
 
+/// One agent kind this host can actually launch, from `GET /agents/available`.
+///
+/// The list is discovered on the bridge (Herdr's kind catalog ∩ what resolves on
+/// PATH), never assembled here — the app must not offer a kind that isn't
+/// installed, and it has no way to know what is.
+class AvailableAgent {
+  const AvailableAgent({
+    required this.kind,
+    required this.path,
+    required this.stateReporting,
+  });
+
+  /// Herdr's kind id — `claude`, `codex`, `opencode`… Also the executable name.
+  final String kind;
+
+  /// Where the executable was found on the host. Shown as the reassurance that
+  /// "installed" is a fact about that machine, not a guess.
+  final String path;
+
+  /// Whether Herdr can classify this kind's state. False means it will run but
+  /// never leave `unknown` — no idle/working/blocked, so no push, no approval
+  /// bar. Worth warning about before launch, not after.
+  final bool stateReporting;
+
+  factory AvailableAgent.fromJson(Map<String, dynamic> j) => AvailableAgent(
+        kind: (j['kind'] as String?) ?? '',
+        path: (j['path'] as String?) ?? '',
+        stateReporting: j['state_reporting'] == true,
+      );
+}
+
+/// The outcome of `POST /agent/start` — enough to navigate straight to the new
+/// agent without re-reading the snapshot first.
+class StartAgentResult {
+  const StartAgentResult({
+    required this.paneId,
+    required this.kind,
+    required this.name,
+    required this.promptSent,
+  });
+
+  /// Session-qualified, so it addresses `/transcript`, `/attach` and `/send`
+  /// directly.
+  final String paneId;
+  final String kind;
+
+  /// The agent's Herdr name, minted by the bridge when the caller gave none.
+  final String name;
+
+  /// False when no opening prompt was asked for — and also when one was asked
+  /// for but didn't land. The agent is up either way; the prompt is not.
+  final bool promptSent;
+
+  factory StartAgentResult.fromJson(Map<String, dynamic> j) => StartAgentResult(
+        paneId: (j['pane_id'] as String?) ?? '',
+        kind: (j['kind'] as String?) ?? '',
+        name: (j['name'] as String?) ?? '',
+        promptSent: j['prompt_sent'] == true,
+      );
+}
+
+/// One changed file from `GET /diff` — a unified diff for this file alone,
+/// plus enough metadata to render a file-list row without parsing the diff.
+class DiffFile {
+  const DiffFile({
+    required this.path,
+    required this.status,
+    required this.additions,
+    required this.deletions,
+    required this.diff,
+    this.oldPath,
+  });
+
+  final String path;
+
+  /// Set only for a rename/copy — the path it moved from.
+  final String? oldPath;
+
+  /// `"modified"` | `"added"` | `"deleted"` | `"renamed"` | `"untracked"`.
+  final String status;
+  final int additions;
+  final int deletions;
+
+  /// A unified diff for this file alone. For an untracked file this is a
+  /// synthetic "every line added" diff (see CONTRACT-diff.md) — the app
+  /// renders every entry the same way regardless of status.
+  final String diff;
+
+  factory DiffFile.fromJson(Map<String, dynamic> j) => DiffFile(
+        path: (j['path'] as String?) ?? '',
+        oldPath: j['old_path'] as String?,
+        status: (j['status'] as String?) ?? 'modified',
+        additions: (j['additions'] as num?)?.toInt() ?? 0,
+        deletions: (j['deletions'] as num?)?.toInt() ?? 0,
+        diff: (j['diff'] as String?) ?? '',
+      );
+}
+
+/// The full `GET /diff` payload — an agent pane's working-tree changes.
+class DiffResult {
+  const DiffResult({required this.branch, required this.files});
+
+  /// Best-effort; "" on a detached HEAD or if git couldn't resolve one.
+  final String branch;
+  final List<DiffFile> files;
+
+  factory DiffResult.fromJson(Map<String, dynamic> j) {
+    final files = j['files'];
+    return DiffResult(
+      branch: (j['branch'] as String?) ?? '',
+      files: files is List
+          ? files
+              .whereType<Map>()
+              .map((f) => DiffFile.fromJson(Map<String, dynamic>.from(f)))
+              .toList()
+          : const [],
+    );
+  }
+}
+
+/// One recorded agent status transition from `GET /timeline` — see
+/// `docs/CONTRACT-timeline.md`.
+///
+/// Every other bridge read describes the PRESENT. This is the only one that
+/// describes the past, and [previous] is the reason it exists: a status alone
+/// cannot distinguish an agent that blocked fifty minutes ago from one that
+/// blocked ten seconds ago, and that difference is the whole question you have
+/// when you pick the phone up.
+class TimelineEntry {
+  const TimelineEntry({
+    required this.at,
+    required this.pane,
+    required this.agent,
+    required this.to,
+    this.from,
+    this.session,
+    this.workspace,
+    this.previous,
+    this.title,
+  });
+
+  /// When the bridge observed the transition.
+  final DateTime at;
+
+  /// Session-qualified pane id — the same id `/attach`, `/send` and
+  /// `/transcript` take, so a row can open the agent it describes.
+  final String pane;
+
+  /// Agent kind (`claude`, `codex`, …). May be empty for a pane whose kind the
+  /// bridge never learned.
+  final String agent;
+
+  final String? session;
+  final String? workspace;
+
+  /// The pane's human name at the time of the transition ("Fix the failing
+  /// parser test").
+  ///
+  /// This, not [agent], is what identifies a row to a person: [agent] is a KIND,
+  /// so a host running a dozen Claudes yields a dozen rows that all read
+  /// "Claude". Null for a pane the bridge never learned a title for.
+  final String? title;
+
+  /// The status being left. **Null for a first sighting** — a newly detected
+  /// agent, not a transition out of an unnamed state.
+  final String? from;
+
+  /// The status entered: a Herdr agent status, or `"gone"` when the pane closed
+  /// or its process exited.
+  final String to;
+
+  /// How long the agent spent in [from].
+  ///
+  /// **Null means unknown, not zero.** The bridge omits it when it cannot see
+  /// where the span began (the first transition after a restart for a pane that
+  /// had moved on while the bridge was down). `Duration.zero` is a real value —
+  /// an instantaneous flip — so a renderer must not conflate the two.
+  final Duration? previous;
+
+  /// The pane stopped existing rather than changing status.
+  bool get isGone => to == 'gone';
+
+  factory TimelineEntry.fromJson(Map<String, dynamic> j) {
+    final prevMs = (j['prev_ms'] as num?)?.toInt();
+    String? nonEmpty(Object? v) {
+      final s = v as String?;
+      return (s == null || s.isEmpty) ? null : s;
+    }
+
+    return TimelineEntry(
+      at: DateTime.fromMillisecondsSinceEpoch((j['ts'] as num?)?.toInt() ?? 0),
+      pane: (j['pane'] as String?) ?? '',
+      agent: (j['agent'] as String?) ?? '',
+      session: nonEmpty(j['session']),
+      workspace: nonEmpty(j['workspace']),
+      title: nonEmpty(j['title']),
+      from: nonEmpty(j['from']),
+      to: (j['to'] as String?) ?? '',
+      previous: prevMs == null ? null : Duration(milliseconds: prevMs),
+    );
+  }
+}
+
 /// One selectable choice on a blocked agent's prompt (from `/agent-state`).
 class BlockedOption {
   const BlockedOption({
@@ -168,6 +371,32 @@ class AgentState {
   }
 }
 
+/// Where an uploaded image landed, from `POST /image`.
+///
+/// [path] is the whole point: an absolute path inside the agent's own working
+/// directory. Coding agents read an image when handed a path, so pasting this
+/// into the composer *is* the attachment — no agent protocol is involved. See
+/// docs/CONTRACT-image.md.
+class ImageDrop {
+  const ImageDrop({
+    required this.path,
+    required this.relativePath,
+    required this.contentType,
+    required this.bytes,
+  });
+
+  /// Absolute path to the written file — what goes into the composer.
+  final String path;
+
+  /// The same file relative to the agent's cwd (`.gothalo/images/…`). Display
+  /// only; the agent gets [path], since its cwd isn't necessarily the shell's.
+  final String relativePath;
+
+  /// What the bridge *sniffed* the bytes as, not what we claimed they were.
+  final String contentType;
+  final int bytes;
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
@@ -234,6 +463,30 @@ class BridgeClient {
         throw BridgeException('Unexpected snapshot shape');
       }
       return Snapshot.fromJson(Map<String, dynamic>.from(snapNode));
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /info` → this bridge's own identity: `server_id` and `server_name`.
+  ///
+  /// The app stores the id against the saved server so an incoming push, which
+  /// carries only `server_id`, can be traced back to the server it came from —
+  /// for attribution in the alerts log and for routing a notification tap. A
+  /// bridge older than this endpoint 404s; callers treat that as "unknown" and
+  /// carry on.
+  /// `version` is the bridge's capability level, hand-bumped on the bridge when
+  /// it gains something the app may branch on. Zero means a bridge old enough
+  /// not to report one.
+  Future<({String serverId, String serverName, int version})> info() async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>('/info');
+      final body = res.data ?? const <String, dynamic>{};
+      return (
+        serverId: (body['server_id'] as String?) ?? '',
+        serverName: (body['server_name'] as String?) ?? '',
+        version: (body['version'] as num?)?.toInt() ?? 0,
+      );
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
@@ -331,6 +584,13 @@ class BridgeClient {
   /// `GET /agent-state?pane=<id>` → the parsed agent card (status, headline, and
   /// when blocked the question + options). Agent panes only; a non-agent or
   /// unsupported pane throws.
+  ///
+  /// The card is built from the pane's current screen. The bridge can also read
+  /// the pane's SCROLLBACK for a richer detail/transcript (`?recent=1`), but
+  /// Herdr can only capture that by physically scrolling the pane — visible as a
+  /// jump to whoever is watching it on the desktop, once per call. Nothing in the
+  /// app needs it: the chat screen streams the real transcript, and the activity
+  /// line wants current state rather than history. So we never ask.
   Future<AgentState> getAgentState(String pane) async {
     try {
       final res = await _dio.get<Map<String, dynamic>>(
@@ -343,6 +603,186 @@ class BridgeClient {
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
+  }
+
+  /// `GET /diff?pane=<id>` → an agent pane's working-tree changes (branch +
+  /// one unified diff per changed file). Agent panes only — a non-agent pane
+  /// throws (404). See CONTRACT-diff.md.
+  Future<DiffResult> getDiff(String pane) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/diff',
+        queryParameters: {'pane': pane},
+      );
+      final body = res.data;
+      if (body == null) throw BridgeException('Empty diff response');
+      return DiffResult.fromJson(body);
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /timeline` → the recent agent-activity log, **newest first**: one
+  /// entry per status transition, each carrying how long the agent spent in the
+  /// status it just left. See CONTRACT-timeline.md.
+  ///
+  /// Purely a read of the bridge's in-memory ring — no Herdr call — so it is
+  /// cheap enough to poll and still answers while Herdr itself is down. [limit]
+  /// is clamped server-side; [pane] restricts the log to one agent.
+  ///
+  /// A bridge older than this endpoint 404s and a bridge with recording
+  /// disabled 503s; both surface as a [BridgeException] the caller renders as
+  /// "no history".
+  Future<List<TimelineEntry>> getTimeline({int? limit, String? pane}) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/timeline',
+        queryParameters: {
+          'limit': ?limit,
+          if (pane != null && pane.isNotEmpty) 'pane': pane,
+        },
+      );
+      final entries = (res.data ?? const {})['entries'];
+      if (entries is! List) return const [];
+      return entries
+          .whereType<Map>()
+          .map((e) => TimelineEntry.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /agents/available` → the agent kinds this host can actually launch.
+  ///
+  /// Empty is a meaningful answer and never an error: a bridge older than the
+  /// lifecycle endpoints 404s, and a host with no agents installed answers an
+  /// empty list. Both mean the same thing to the UI — don't offer to start one —
+  /// so both collapse to `[]` here rather than making every caller branch.
+  Future<List<AvailableAgent>> availableAgents() async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>('/agents/available');
+      final agents = (res.data ?? const {})['agents'];
+      if (agents is! List) return const [];
+      return agents
+          .whereType<Map>()
+          .map((a) => AvailableAgent.fromJson(Map<String, dynamic>.from(a)))
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return const [];
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /agent/start` → launch [kind] and return where it landed.
+  ///
+  /// Exactly one target: [paneId] reuses an existing idle shell pane,
+  /// [splitFrom] splits one, [workspaceId] opens a new tab. [cwd] must be an
+  /// absolute, existing directory (the bridge validates and rejects otherwise)
+  /// and is only accepted for the two creating forms — an existing pane keeps
+  /// its own directory. [prompt] is submitted as the agent's first message.
+  Future<StartAgentResult> startAgent({
+    required String kind,
+    String? paneId,
+    String? splitFrom,
+    String? workspaceId,
+    String? direction,
+    String? label,
+    String? cwd,
+    String? prompt,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/agent/start',
+        data: {
+          'kind': kind,
+          if (paneId != null && paneId.isNotEmpty) 'pane_id': paneId,
+          if (splitFrom != null && splitFrom.isNotEmpty) 'split_from': splitFrom,
+          if (workspaceId != null && workspaceId.isNotEmpty)
+            'workspace_id': workspaceId,
+          if (direction != null && direction.isNotEmpty) 'direction': direction,
+          if (label != null && label.isNotEmpty) 'label': label,
+          if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+          if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
+        },
+        options: _launchOptions,
+      );
+      final body = res.data ?? const <String, dynamic>{};
+      final result = StartAgentResult.fromJson(body);
+      if (result.paneId.isEmpty) {
+        throw BridgeException('Bridge did not return a pane for the new agent');
+      }
+      return result;
+    } on DioException catch (e) {
+      throw _asLaunchException(e);
+    }
+  }
+
+  /// `POST /agent/restart {pane_id}` → stop the agent in [paneId] and start the
+  /// same kind again in the same pane and directory.
+  ///
+  /// Destructive: the running turn is killed and the replacement starts with no
+  /// conversation history. Confirm before calling.
+  Future<void> restartAgent(String paneId, {String? prompt}) async {
+    try {
+      await _dio.post<dynamic>(
+        '/agent/restart',
+        data: {
+          'pane_id': paneId,
+          if (prompt != null && prompt.isNotEmpty) 'prompt': prompt,
+        },
+        options: _launchOptions,
+      );
+    } on DioException catch (e) {
+      throw _asLaunchException(e);
+    }
+  }
+
+  /// `POST /agent/stop {pane_id}` → quit the agent in [paneId], leaving the pane
+  /// open at a shell prompt.
+  ///
+  /// Destructive: whatever it was doing is interrupted. The bridge only answers
+  /// `200` once it has *observed* the pane back at its prompt — a `409` means the
+  /// agent ignored the interrupts and is still running, so treat it as "not
+  /// stopped", never as a slow success. Confirm before calling.
+  Future<void> stopAgent(String paneId) async {
+    try {
+      await _dio.post<dynamic>(
+        '/agent/stop',
+        data: {'pane_id': paneId},
+        options: _launchOptions,
+      );
+    } on DioException catch (e) {
+      throw _asLaunchException(e);
+    }
+  }
+
+  /// The lifecycle endpoints are the only ones that legitimately take tens of
+  /// seconds: Herdr blocks a start until it has *verified* the agent is up, and
+  /// blocks a stop until the pane is back at its shell. The default 8s receive
+  /// timeout would abort those mid-flight and report a failure for a launch that
+  /// then succeeds on the host — the worst possible outcome, since the app would
+  /// show an error next to a real running agent.
+  static final _launchOptions = Options(
+    receiveTimeout: const Duration(seconds: 120),
+    sendTimeout: const Duration(seconds: 30),
+  );
+
+  /// Lifecycle failures are explained in the bridge's plain-text body — "cwd
+  /// does not exist: /nope", "pane w1:p3 is busy running npm run dev", "the
+  /// claude agent did not exit within 12s and is still running". Those sentences
+  /// are the whole value of the response, and the generic mapper would throw
+  /// them away for "Bridge request failed", so this prefers the body and falls
+  /// back to the generic mapping when there isn't one.
+  BridgeException _asLaunchException(DioException e) {
+    final data = e.response?.data;
+    if (data is String) {
+      final message = data.trim();
+      if (message.isNotEmpty && message.length <= 400) {
+        return BridgeException(message, statusCode: e.response?.statusCode);
+      }
+    }
+    return _asBridgeException(e);
   }
 
   /// `POST /register-token {token}` → registers this device's FCM token so the
@@ -383,36 +823,13 @@ class BridgeClient {
     }
   }
 
-  /// The projection `source` we own on Herdr's agent-view primitive. All our
-  /// `agent.view.*` calls carry this so we never clobber another client's view.
-  static const agentViewSource = 'gothalo';
-
-  /// `agent.view.set` — install Herdr's own filter+sort projection over the
-  /// agent list so the inbox reflects Herdr's `attention` priority ordering
-  /// rather than sorting purely client-side. Best-effort: the projection is
-  /// owned by [agentViewSource]; pair with [clearAgentView] on teardown.
-  ///
-  /// Note: this is a forward-compatible handshake. The bridge's `/herdr` proxy
-  /// is stateless (a fresh Herdr socket per request), so the projection is not
-  /// yet reflected in `/snapshot` or `agent.list` reads — the inbox keeps its
-  /// client-side attention sort as the visible order until the bridge exposes a
-  /// projected read. Installing the view now means the app benefits the moment
-  /// it does.
-  Future<void> setAgentView({
-    List<Map<String, dynamic>> sort = const [
-      {'field': 'attention', 'order': 'desc'},
-    ],
-  }) async {
-    await herdrCommand('agent.view.set', {
-      'source': agentViewSource,
-      if (sort.isNotEmpty) 'sort': sort,
-    });
-  }
-
-  /// `agent.view.clear` — drop the projection we own. Best-effort teardown.
-  Future<void> clearAgentView() async {
-    await herdrCommand('agent.view.clear', {'source': agentViewSource});
-  }
+  // Herdr's `agent.view.*` projection is deliberately NOT used. Herdr accepts
+  // `agent.view.set` and reports the view active, but as of herdr 0.8.0
+  // (protocol 19) no read applies it — `agent.list` and `session.snapshot` both
+  // return the unprojected list, and there is no projected read method — so the
+  // handshake ordered nothing. Attention ordering is the bridge's job instead:
+  // it stamps `attention_rank` on every agent in `/snapshot` (see
+  // `Agent.attention`), which is authoritative and shared by every surface.
 
   /// `POST /agent-mode/cycle {pane}` → advance a Claude pane's permission mode
   /// by one Shift+Tab. Returns the new mode (best-effort read-back; null if it
@@ -427,6 +844,110 @@ class BridgeClient {
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
+  }
+
+  /// The largest upload `POST /image` accepts (10 MiB, inclusive) — mirrors
+  /// `imagedrop.MaxBytes` on the bridge. Checked client-side in [uploadImage]
+  /// so the common mistake ("I picked the 40 MP one") fails instantly instead
+  /// of after a slow tailnet upload that ends in a 413.
+  static const int maxImageBytes = 10 * 1024 * 1024;
+
+  /// `POST /image?pane=…` with the raw bytes → the absolute path the bridge
+  /// wrote inside that agent's working directory.
+  ///
+  /// The body is raw bytes, **not** multipart: a filename is the one thing the
+  /// endpoint refuses to accept, so we have nothing to name a part with. The
+  /// bridge sniffs the type from the bytes and derives both the extension and
+  /// the filename itself (CONTRACT-image.md).
+  ///
+  /// [onProgress] reports sent/total. A phone pushing a few megabytes over a
+  /// tailnet is slow enough that a silent upload reads as a hang, so the caller
+  /// is expected to show it. The timeouts are raised well past the client's
+  /// 8-second default for the same reason — that default is tuned for small
+  /// JSON calls and would abort a perfectly healthy photo upload.
+  ///
+  /// Throws [BridgeException]; a `404` here means the bridge predates the
+  /// endpoint rather than "no such agent", so it gets its own message.
+  Future<ImageDrop> uploadImage(
+    String pane,
+    List<int> bytes, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    if (bytes.isEmpty) {
+      throw BridgeException('That image is empty.');
+    }
+    if (bytes.length > maxImageBytes) {
+      final mb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
+      throw BridgeException(
+        'That image is ${mb}MB — the limit is '
+        '${maxImageBytes ~/ (1024 * 1024)}MB.',
+      );
+    }
+    try {
+      // Typed `dynamic`, not `Map`, on purpose: a 200 whose body isn't the JSON
+      // we expect (a captive portal, a proxy's HTML) would fail the cast
+      // *outside* the DioException catch below and surface as a raw TypeError.
+      // Shape-check it here instead so every failure is a BridgeException.
+      final res = await _dio.post<dynamic>(
+        '/image',
+        data: Stream.fromIterable([bytes]),
+        queryParameters: {'pane': pane},
+        onSendProgress: onProgress,
+        options: Options(
+          headers: {
+            Headers.contentTypeHeader: 'application/octet-stream',
+            // Dio won't length a raw stream by itself, and the bridge's
+            // over-cap fast path keys off Content-Length — without this an
+            // oversized body would be buffered before being refused.
+            Headers.contentLengthHeader: bytes.length,
+          },
+          sendTimeout: const Duration(seconds: 90),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
+      final data = res.data;
+      if (data is! Map) {
+        throw BridgeException('The bridge returned an unexpected response.');
+      }
+      final body = Map<String, dynamic>.from(data);
+      final path = body['path'] as String?;
+      if (path == null || path.isEmpty) {
+        throw BridgeException(
+          'The bridge stored the image but returned no path.',
+        );
+      }
+      return ImageDrop(
+        path: path,
+        relativePath: (body['relative_path'] as String?) ?? path,
+        contentType: (body['content_type'] as String?) ?? '',
+        bytes: (body['bytes'] as num?)?.toInt() ?? bytes.length,
+      );
+    } on DioException catch (e) {
+      throw _asImageException(e);
+    }
+  }
+
+  /// [uploadImage]'s error mapping. `/image` has failure modes the generic
+  /// mapper has no words for — and its `404` means something different here
+  /// (an old bridge, not a missing agent), which is exactly the case a user
+  /// would otherwise spend a while misreading.
+  BridgeException _asImageException(DioException e) {
+    final code = e.response?.statusCode;
+    final message = switch (code) {
+      404 =>
+        'This bridge is too old to accept images. Update it and try again.',
+      413 => 'That image is too large for the bridge (10MB limit).',
+      415 => 'That file isn\'t a PNG, JPEG, GIF or WebP.',
+      _ => null,
+    };
+    if (message != null) return BridgeException(message, statusCode: code);
+    if (e.type == DioExceptionType.sendTimeout) {
+      return BridgeException(
+        'Upload timed out. The tailnet may be slow — try again.',
+        statusCode: code,
+      );
+    }
+    return _asBridgeException(e);
   }
 
   BridgeException _asBridgeException(DioException e) {

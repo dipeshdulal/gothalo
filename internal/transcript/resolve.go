@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ErrNoTranscript means no transcript file could be resolved for the pane (the
@@ -59,10 +61,18 @@ func claudeProjectsRoot() (string, error) {
 //  2. Harden against encoding drift: if that misses but a sessionID is known, glob
 //     ~/.claude/projects/*/<sessionID>.jsonl (the session id is globally unique),
 //     which finds the file regardless of how the dir name was encoded.
-//  3. Fallback: if the session id is unknown or unmatched, pick the
+//  3. Fallback: ONLY when the session id is unknown, pick the
 //     most-recently-modified *.jsonl in the project dir whose own recorded cwd
-//     equals the pane's cwd — so a stale/rotated session id still resolves to the
-//     right conversation.
+//     equals the pane's cwd.
+//
+// A KNOWN session id that misses both lookups stops at ErrNoTranscript — it is
+// never handed to the fallback. Claude writes a session's .jsonl lazily, so a
+// pane whose agent has not spoken yet has a real session id and no file. The
+// fallback would then return the newest *other* transcript in the same project
+// dir — i.e. a different pane's conversation. Two agents in one directory is
+// ordinary, so that misfire is the common case, not a corner: it showed pane A's
+// chat under pane B in the mobile app. "Not written yet" must read as absent,
+// not as license to guess.
 //
 // codex/opencode return ErrUnsupportedKind (their layouts aren't wired up yet).
 func Locate(kind, cwd, sessionID string) (string, error) {
@@ -93,9 +103,13 @@ func locateClaude(cwd, sessionID string) (string, error) {
 		if matches, _ := filepath.Glob(filepath.Join(root, "*", sessionID+".jsonl")); len(matches) > 0 {
 			return matches[0], nil
 		}
+		// Both lookups missed for a session we can name: the file does not exist
+		// yet. Stop here rather than fall through — see the note on Locate.
+		return "", ErrNoTranscript
 	}
 
-	// 3. Fallback: newest *.jsonl in the project dir whose recorded cwd matches.
+	// 3. Fallback (session id unknown only): newest *.jsonl in the project dir
+	// whose recorded cwd matches.
 	if p := newestMatchingSession(dir, cwd); p != "" {
 		return p, nil
 	}
@@ -141,9 +155,12 @@ func newestMatchingSession(dir, cwd string) string {
 	return cands[0].path
 }
 
-// firstLineCwd reads a transcript's first line and returns its `cwd` field, or ""
-// if unreadable. Cheap: it reads only the first line, not the whole file.
+// firstLineCwd returns the transcript's first recorded `cwd`, or "" if none is
+// found early on. Newer Claude Code transcripts open with cwd-less metadata lines
+// (mode, permission-mode, file-history-snapshot), so scan a bounded number of
+// lines rather than just the first — still cheap, never the whole file.
 func firstLineCwd(path string) string {
+	const maxProbeLines = 10
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -151,7 +168,7 @@ func firstLineCwd(path string) string {
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
+	for n := 0; n < maxProbeLines && sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
@@ -162,7 +179,105 @@ func firstLineCwd(path string) string {
 		if json.Unmarshal([]byte(line), &probe) == nil && probe.Cwd != "" {
 			return probe.Cwd
 		}
-		return "" // first non-empty line had no cwd; don't scan the whole file
 	}
 	return ""
+}
+
+// LastActivity reports when this agent last wrote to its transcript, and whether
+// that could be determined at all.
+//
+// It answers the question every live-status read cannot: not WHAT an agent is
+// doing but HOW LONG it has been doing it. `/snapshot` says "blocked"; it cannot
+// say whether that started ten seconds or fifty minutes ago, and that difference
+// is the entire reason to look at a phone. state_change_seq is a counter, not a
+// clock.
+//
+// The transcript's modification time is the right source for it, and a better
+// one than anything the bridge can observe itself:
+//
+//   - It survives a bridge restart, a redeploy and a reboot, because it lives on
+//     disk rather than in a process's memory.
+//   - It knows spans that STARTED BEFORE the bridge ever ran. An observer can
+//     only measure what it witnessed; a file remembers regardless. An agent idle
+//     for fifty hours reports fifty hours to a bridge started a minute ago.
+//
+// The last ENTRY'S timestamp, not the file's mtime. mtime is tempting — an
+// append is a write — but it is not owned by the agent: anything that touches
+// the file moves it. Observed on a real machine, three unrelated agents reported
+// an identical age to the tenth of a minute (1343.8m) because something had
+// swept their files together, while their actual last entries were 1416m and
+// 3030m apart. An age that plausible and that wrong is worse than none.
+//
+// Only the tail is read, so cost does not grow with a long conversation.
+//
+// Only claude is answerable today. hermes and opencode keep every session in one
+// shared SQLite database, so its mtime describes the newest activity of ANY
+// agent, not this one — reporting that as this agent's age would be confidently
+// wrong, which is worse than reporting nothing. Hence the bool.
+func LastActivity(kind, cwd, sessionID string) (time.Time, bool) {
+	if strings.ToLower(strings.TrimSpace(kind)) != "claude" {
+		return time.Time{}, false
+	}
+	path, err := Locate(kind, cwd, sessionID)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return lastEntryTime(path)
+}
+
+// lastActivityTailBytes is how much of the end of a transcript is read looking
+// for the newest timestamp. Generously larger than any single entry, so the tail
+// always contains at least one complete line, and small enough that this stays
+// cheap on a hot read of a multi-megabyte conversation.
+const lastActivityTailBytes = 64 << 10
+
+// lastEntryTime returns the timestamp of the newest entry carrying one.
+//
+// It scans BACKWARDS through the tail and stops at the first timestamp it finds,
+// because entries are appended in order — so the last one is the newest, and
+// there is no reason to parse the rest. Lines are parsed loosely: a transcript
+// mixes shapes, and any line without a usable timestamp is simply skipped rather
+// than failing the read.
+func lastEntryTime(path string) (time.Time, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return time.Time{}, false
+	}
+	size := info.Size()
+	start := size - lastActivityTailBytes
+	if start < 0 {
+		start = 0
+	}
+	buf := make([]byte, size-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return time.Time{}, false
+	}
+
+	lines := strings.Split(string(buf), "\n")
+	// The first line is a fragment unless the read started at the file's head.
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:]
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var e struct {
+			Timestamp string `json:"timestamp"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Timestamp == "" {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339Nano, e.Timestamp); err == nil {
+			return at, true
+		}
+	}
+	return time.Time{}, false
 }

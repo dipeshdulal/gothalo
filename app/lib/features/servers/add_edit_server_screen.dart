@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/connection/connection_providers.dart';
+import '../../core/theme.dart';
 import '../../data/db/db_providers.dart';
 
 /// Add a new server or edit an existing one. The manual path into the
@@ -86,7 +87,9 @@ class _AddEditServerScreenState extends ConsumerState<AddEditServerScreen> {
     setState(() => _saving = false);
     if (result.existed && !widget.isEditing) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${result.saved.name} already exists — updated it')),
+        SnackBar(
+          content: Text('${result.saved.name} already exists — updated it'),
+        ),
       );
     }
     if (widget.isEditing) {
@@ -99,6 +102,7 @@ class _AddEditServerScreenState extends ConsumerState<AddEditServerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         title: Text(widget.isEditing ? 'Edit server' : 'Add server'),
       ),

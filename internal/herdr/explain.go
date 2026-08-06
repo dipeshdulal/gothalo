@@ -28,10 +28,19 @@ type Detection struct {
 // matched. Rules come back priority-ordered, so the first matched is the verdict.
 // Best-effort enrichment: callers should treat an error as "no category".
 func (c *Client) Explain(target string) (*Detection, error) {
-	out, err := c.run("agent", "explain", target, "--json")
+	// The socket wraps the body as {type, explain}; the CLI flattened it. Unwrap
+	// once here so the parse below stays the shape it always was.
+	res, err := c.Request("agent.explain", targetParams{Target: target})
 	if err != nil {
-		return nil, err
+		return nil, asSocketAgentError(err)
 	}
+	var envelope struct {
+		Explain json.RawMessage `json:"explain"`
+	}
+	if err := json.Unmarshal(res, &envelope); err != nil {
+		return nil, fmt.Errorf("parse agent.explain: %w", err)
+	}
+	out := []byte(envelope.Explain)
 	var body struct {
 		EvaluatedRules []struct {
 			ID       string `json:"id"`

@@ -137,9 +137,10 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
         final c = a.score.compareTo(b.score);
         if (c != 0) return c;
       }
-      // Attention-first (blocked → done → working → idle), then most-recent
-      // state change (an attention proxy), then title.
-      final r = a.agent.agentStatus.rank - b.agent.agentStatus.rank;
+      // Attention-first (blocked → done → working → idle) on the bridge's
+      // authoritative rank, then most-recent state change (an attention proxy),
+      // then title.
+      final r = a.agent.attention - b.agent.attention;
       if (r != 0) return r;
       final s =
           (b.agent.stateChangeSeq ?? 0).compareTo(a.agent.stateChangeSeq ?? 0);
@@ -441,7 +442,8 @@ class _JumpItem {
 
     final parts = <String>[];
     if (git.project.isNotEmpty) parts.add(git.project);
-    if (git.worktree != null) parts.add(git.worktree!);
+    final branch = a.branchName;
+    if (branch != null && branch.isNotEmpty) parts.add(branch);
     if (tabLabel.isNotEmpty) {
       parts.add(tabLabel);
     } else if (tab != null && tab.number > 0) {

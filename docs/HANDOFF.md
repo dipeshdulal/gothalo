@@ -5,11 +5,11 @@ that context so the agent working *here* can continue seamlessly. Read this, the
 `README.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md`, `docs/TESTING.md`.
 
 ## What gothalo is
-A self-hosted mobile remote for **Herdr** — a "mini Moshi that I own." It lets me
+A self-hosted mobile remote for **Herdr**, built on its open socket API. It lets me
 and a few teammates control coding agents (Claude Code, Codex, Gemini, …) from a
 phone: see blocked/working/done state, get pushed when an agent needs input,
 approve or type a reply, and open a full terminal — over my own Tailscale network,
-built on Herdr's free open socket API instead of paying for Moshi Pro.
+so nothing is exposed publicly.
 
 ## How we got here (the reasoning, condensed)
 - Herdr exposes a real JSON socket API: `herdr api snapshot` (full state),

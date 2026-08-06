@@ -19,14 +19,24 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-// The bridge sends DATA-ONLY messages, so this handler always fires in the
-// background and we render the notification ourselves — the reliable path for
-// a lock-screen banner on Android.
-messaging.onBackgroundMessage((payload) => {
+// Alerts carry a `notification` block, which the SDK may display on its own; a
+// dismiss is data-only and reaches us here. Either way we key notifications by
+// "<server_id>/<pane_id>" so a later message about the same agent REPLACES the
+// earlier one rather than stacking, and a dismiss can close exactly that one.
+const tagFor = (d) => `${d.server_id || ""}/${d.agent || ""}`;
+
+messaging.onBackgroundMessage(async (payload) => {
   const d = payload.data || {};
+
+  if (d.type === "dismiss") {
+    const open = await self.registration.getNotifications({ tag: tagFor(d) });
+    open.forEach((n) => n.close());
+    return;
+  }
+
   self.registration.showNotification(d.title || "gothalo", {
     body: d.body || "",
-    tag: "gothalo",
+    tag: tagFor(d),
     renotify: true,          // re-alert even if a prior gothalo notification exists
     requireInteraction: true, // stay until tapped, don't auto-dismiss
     data: d,

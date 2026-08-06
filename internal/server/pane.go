@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/charmbracelet/log"
@@ -18,6 +19,44 @@ func herdrStatus(err error) int {
 		return http.StatusNotFound
 	}
 	return http.StatusBadGateway
+}
+
+// agentGetter is the single herdr call paneCwd needs. *herdr.Client satisfies
+// it; tests substitute a fake (Server.agents) so the whole pane -> cwd path,
+// including the session-qualified "<session>/<pane>" form, is exercisable
+// without a live Herdr socket. Same seam shape as Server.requester for /herdr.
+type agentGetter interface {
+	Get(pane string) (herdr.Agent, error)
+}
+
+// paneCwd resolves a possibly session-qualified pane id ("acme/w1:p2") to the
+// working directory of the agent hosted in it, plus the status to report if it
+// cannot.
+//
+// This is deliberately ONE resolution shared by every endpoint that needs a
+// pane's tree — GET /diff and POST /image today. They must agree: an image
+// written somewhere /diff wouldn't look is an image the agent can't read, and
+// two copies of "which directory is this pane in?" is exactly the kind of drift
+// that produces that. Scoped to agent panes, since a plain shell pane has no
+// agent cwd to resolve -> 404.
+func (s *Server) paneCwd(id string) (string, int, error) {
+	session, bare := herdr.SplitTarget(id)
+	var g agentGetter = s.agents
+	if g == nil {
+		c, err := s.sessions.Client(session)
+		if err != nil {
+			return "", herdrStatus(err), err
+		}
+		g = c
+	}
+	agent, err := g.Get(bare)
+	if err != nil {
+		if errors.Is(err, herdr.ErrAgentNotFound) {
+			return "", http.StatusNotFound, errors.New("no such agent")
+		}
+		return "", http.StatusBadGateway, err
+	}
+	return agent.Cwd, http.StatusOK, nil
 }
 
 // POST /pane/new — create a terminal and return its identity so the app can

@@ -11,12 +11,14 @@ import 'package:xterm/xterm.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../transcript/quick_commands_providers.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
 /// [closed] is terminal: the pane no longer exists (closed on the host or the
@@ -176,7 +178,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     bool gone = false;
     try {
       final snap = await client.getSnapshot();
-      gone = !snap.panes.any((p) => p.paneId == widget.pane) &&
+      gone =
+          !snap.panes.any((p) => p.paneId == widget.pane) &&
           !snap.agents.any((a) => a.paneId == widget.pane);
     } catch (_) {
       // Couldn't reach the bridge to check → treat as a transient drop and
@@ -212,6 +215,35 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     channel.sink.add(Uint8List.fromList(utf8.encode(out)));
   }
 
+  /// Fire a [QuickCommand] into the raw PTY. A text command is typed and
+  /// submitted (a trailing CR — what a terminal Enter sends); a keyed command
+  /// (e.g. "esc" to interrupt) becomes its control byte. Unlike the transcript,
+  /// which routes these over the bridge's /send, here they're just raw bytes on
+  /// the same channel as the keyboard.
+  void _handleQuickCommand(QuickCommand cmd) {
+    if (cmd.key != null) {
+      _send(_keyBytes(cmd.key!));
+    } else {
+      _send('${cmd.text}\r');
+    }
+  }
+
+  /// Maps a quick command's key name to the bytes a terminal expects. Falls
+  /// back to sending the name literally so a typo just types instead of doing
+  /// nothing.
+  String _keyBytes(String key) => switch (key.toLowerCase().trim()) {
+    'esc' || 'escape' => '\x1b',
+    'enter' || 'return' => '\r',
+    'tab' => '\t',
+    'up' => '\x1b[A',
+    'down' => '\x1b[B',
+    'left' => '\x1b[D',
+    'right' => '\x1b[C',
+    'ctrl+c' || '^c' => '\x03',
+    'ctrl+d' || '^d' => '\x04',
+    _ => key,
+  };
+
   /// Sends the terminal geometry to the bridge as a **text** control frame
   /// (`{"type":"resize","cols":C,"rows":R}`) — distinct from the binary PTY
   /// byte stream. The bridge resizes the remote PTY so line-editing redraws
@@ -224,8 +256,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _pendingCols = cols;
     _pendingRows = rows;
     _resizeDebounce?.cancel();
-    _resizeDebounce =
-        Timer(const Duration(milliseconds: 150), _flushResize);
+    _resizeDebounce = Timer(const Duration(milliseconds: 150), _flushResize);
   }
 
   /// Sends the latest pending geometry as one resize control frame.
@@ -234,7 +265,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     if (channel == null || _conn != _Conn.connected) return;
     if (_pendingCols <= 0 || _pendingRows <= 0) return;
     channel.sink.add(
-      jsonEncode({'type': 'resize', 'cols': _pendingCols, 'rows': _pendingRows}),
+      jsonEncode({
+        'type': 'resize',
+        'cols': _pendingCols,
+        'rows': _pendingRows,
+      }),
     );
   }
 
@@ -254,9 +289,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
 
     // The agent behind this pane, for the app-bar approve affordance.
-    final agents =
-        ref.watch(snapshotControllerProvider).asData?.value.agents ??
-        const <Agent>[];
+    final snap = ref.watch(snapshotControllerProvider).asData?.value;
+    final agents = snap?.agents ?? const <Agent>[];
     Agent? agent;
     for (final a in agents) {
       if (a.paneId == widget.pane) {
@@ -264,15 +298,47 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         break;
       }
     }
+    // A non-agent pane (plain shell, dev server, log) isn't in [agents] at
+    // all — fall back to the flat pane list for its location, so the title
+    // subtitle still has something to show.
+    Pane? pane;
+    if (agent == null) {
+      for (final p in snap?.panes ?? const <Pane>[]) {
+        if (p.paneId == widget.pane) {
+          pane = p;
+          break;
+        }
+      }
+    }
     // Non-null (and final) only when this pane's agent is blocked — safe to
     // capture in the button's callback.
-    final approvable =
-        agent?.agentStatus == AgentStatus.blocked ? agent : null;
+    final approvable = agent?.agentStatus == AgentStatus.blocked ? agent : null;
 
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        title: Text(agent?.displayTitle ?? widget.pane),
+        title: PaneTitle(
+          title: agent?.displayTitle ?? widget.pane,
+          subtitle: agent != null
+              ? [
+                  agent.gitLabel,
+                  agent.agent,
+                ].where((s) => s.isNotEmpty).join(' · ')
+              : (pane?.locationLabel ?? ''),
+          connLabel: switch (_conn) {
+            _Conn.connected => 'Live',
+            _Conn.connecting => 'Connecting…',
+            _Conn.disconnected => 'Reconnecting…',
+            _Conn.closed => 'Closed',
+          },
+          connColor: switch (_conn) {
+            _Conn.connected => scheme.primary,
+            _Conn.connecting => scheme.onSurfaceVariant,
+            _Conn.disconnected => scheme.error,
+            _Conn.closed => scheme.onSurfaceVariant,
+          },
+        ),
         actions: [
           IconButton(
             tooltip: 'Jump to an agent',
@@ -300,29 +366,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             onPressed: () => context.push('/overview'),
             icon: const Icon(Icons.grid_view_outlined),
           ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12, left: 4),
-            child: Tooltip(
-              message: switch (_conn) {
-                _Conn.connected => 'Live',
-                _Conn.connecting => 'Connecting…',
-                _Conn.disconnected => 'Reconnecting…',
-                _Conn.closed => 'Closed',
-              },
-              child: Icon(
-                _conn == _Conn.connected
-                    ? Icons.circle
-                    : Icons.circle_outlined,
-                size: 12,
-                color: switch (_conn) {
-                  _Conn.connected => scheme.primary,
-                  _Conn.connecting => scheme.onSurfaceVariant,
-                  _Conn.disconnected => scheme.error,
-                  _Conn.closed => scheme.onSurfaceVariant,
-                },
-              ),
-            ),
-          ),
         ],
       ),
       body: Column(
@@ -334,8 +377,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                   child: TerminalView(
                     terminal,
                     theme: TerminalThemes.defaultTheme,
-                    textStyle:
-                        const TerminalStyle(fontFamily: AppTheme.monoFamily),
+                    textStyle: const TerminalStyle(
+                      fontFamily: AppTheme.monoFamily,
+                    ),
                     padding: const EdgeInsets.all(8),
                   ),
                 ),
@@ -354,12 +398,17 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             ),
           ),
           // No point typing into a pane that no longer exists.
-          if (_conn != _Conn.closed)
+          if (_conn != _Conn.closed) ...[
+            // Reusable snippets/keystrokes (Interrupt + your custom ones),
+            // the same shared list as the transcript composer — sent here as
+            // raw PTY bytes.
+            QuickCommandsBar(onCommand: _handleQuickCommand),
             _AccessoryKeyRow(
               stickyCtrl: _stickyCtrl,
               onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
               onKey: _send,
             ),
+          ],
         ],
       ),
     );
@@ -411,8 +460,8 @@ class _ClosedOverlay extends StatelessWidget {
                 'It was closed on the host or the agent finished. The last screen is shown above.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 16),
               Row(
@@ -465,11 +514,7 @@ class _AccessoryKeyRow extends StatelessWidget {
           child: Row(
             children: [
               _Key(label: 'Esc', onTap: () => onKey('\x1b')),
-              _Key(
-                label: 'Ctrl',
-                active: stickyCtrl,
-                onTap: onToggleCtrl,
-              ),
+              _Key(label: 'Ctrl', active: stickyCtrl, onTap: onToggleCtrl),
               _Key(label: 'Tab', onTap: () => onKey('\t')),
               _Key(label: '↑', onTap: () => onKey('\x1b[A')),
               _Key(label: '↓', onTap: () => onKey('\x1b[B')),

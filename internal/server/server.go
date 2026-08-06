@@ -6,10 +6,8 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +19,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/pairing"
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/store"
+	"github.com/dipeshdulal/gothalo/internal/timeline"
 )
 
 // herdrRequester is the one call the generic /herdr proxy needs: an
@@ -40,13 +39,21 @@ type Server struct {
 	pairing  *pairing.Manager
 	web      fs.FS       // static receiver page assets
 	bus      *events.Bus // unified event bus; may be nil (WS /events disabled)
+	// timeline is the recorded agent-activity ring behind GET /timeline. May be
+	// nil (recording disabled), in which case the endpoint reports 503 rather
+	// than an empty history — "no recorder running" and "nothing happened yet"
+	// are different answers and a client should be able to tell them apart.
+	timeline *timeline.Log
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
+	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
+	// production, where the agent is fetched from the pane's own session client.
+	agents agentGetter
 }
 
-// New constructs a Server. push and bus may be nil.
-func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus) *Server {
-	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus}
+// New constructs a Server. push, bus and tl may be nil.
+func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus, tl *timeline.Log) *Server {
+	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus, timeline: tl}
 }
 
 // target resolves a possibly session-qualified id ("acme/w1:p2") to its
@@ -74,14 +81,22 @@ func (s *Server) publish(typ string, payload any) {
 // before the catch-all static file server at "/".
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/info", s.handleInfo)
 	mux.HandleFunc("/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/send", s.handleSend)
 	mux.HandleFunc("/approve", s.handleApprove)
 	mux.HandleFunc("/agent-state", s.handleAgentState)
+	mux.HandleFunc("/diff", s.handleDiff)
+	mux.HandleFunc("/image", s.handleImage)
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
+	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
+	mux.HandleFunc("/agent/start", s.handleAgentStart)
+	mux.HandleFunc("/agent/restart", s.handleAgentRestart)
+	mux.HandleFunc("/agent/stop", s.handleAgentStop)
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/events", s.handleEvents)
+	mux.HandleFunc("/timeline", s.handleTimeline)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)
 	mux.HandleFunc("/herdr", s.handleHerdrProxy)
@@ -284,7 +299,54 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info("paired device", "name", d.Name, "id", d.ID)
 	s.publish(events.TypeDevicePaired, map[string]any{"id": d.ID, "name": d.Name})
-	writeJSON(w, map[string]string{"id": d.ID, "bearer": d.Bearer, "name": d.Name})
+	// The bridge identity goes back with the pairing result: it is what lets the
+	// phone attribute an incoming push to this server rather than one of the
+	// others it is paired with.
+	writeJSON(w, map[string]string{
+		"id": d.ID, "bearer": d.Bearer, "name": d.Name,
+		"server_id": s.cfg.ServerID, "server_name": s.cfg.ServerName,
+	})
+}
+
+// BridgeVersion is what this bridge can do, as one number the app can compare
+// against. Hand-maintained: bump it when the surface the app depends on gains
+// something the app would want to branch on, and leave it alone otherwise.
+//
+// Deliberately NOT derived from the build or from git. A version that changes
+// with every commit tells a client nothing about capability — it would have to
+// be mapped back to features somewhere, which is the job this number exists to
+// do directly.
+//
+// History:
+//
+//	1 — server identity (/info), notification rework, /events heartbeat.
+//	2 — POST /image: attach a screenshot to a prompt.
+//	3 — agent lifecycle: /agents/available, /agent/start, /agent/restart,
+//	    /agent/stop. The app still gates its launch UI on /agents/available
+//	    answering with kinds rather than on this number — a bridge can be v3 and
+//	    still have nothing installed to launch — so this records the capability
+//	    without being the thing that unlocks it.
+//	4 — GET /timeline (recorded agent-activity history).
+const BridgeVersion = 4
+
+// GET /info -> this bridge's identity and capability level.
+//
+// Small on purpose: every push carries a server_id, and the app needs a way to
+// learn which of its saved servers that id belongs to — including for servers
+// paired before identity existed, which is why this is a standalone endpoint and
+// not only part of the pairing response.
+//
+// Its absence is itself informative: a bridge that 404s here predates identity
+// entirely, and the app treats it as unidentified.
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuth(w, r); !ok {
+		return
+	}
+	writeJSON(w, map[string]any{
+		"server_id":   s.cfg.ServerID,
+		"server_name": s.cfg.ServerName,
+		"version":     BridgeVersion,
+	})
 }
 
 // POST /admin/pairing -> mint a one-time code + return the deep-link URL the QR
@@ -333,44 +395,6 @@ func (s *Server) handleAdminDevicesRevoke(w http.ResponseWriter, r *http.Request
 
 // Notify fans a transition out to every registered device. It is the callback
 // the watcher fires. Always logs; pushes only when FCM is configured.
-func (s *Server) Notify(paneID, status, title string, seq int) {
-	log.Info("notify", "agent", paneID, "status", status, "title", title, "seq", seq)
-	if s.push == nil {
-		return
-	}
-	tokens := s.store.FCMTokens()
-	if len(tokens) == 0 {
-		return
-	}
-	pushTitle := fmt.Sprintf("Herdr agent %s", status)
-	body := title
-	if body == "" {
-		body = paneID
-	}
-	// state_change_seq rides along so a lock-screen approve can echo it back to
-	// POST /approve, which no-ops if the agent has since moved past this seq (D8).
-	data := map[string]string{
-		"agent":            paneID,
-		"status":           status,
-		"state_change_seq": strconv.Itoa(seq),
-	}
-	sent := 0
-	for _, t := range tokens {
-		if err := s.push.Send(t, pushTitle, body, data); err != nil {
-			log.Error("push failed", "token", t[:min(8, len(t))]+"…", "err", err)
-			continue
-		}
-		sent++
-	}
-	log.Info("pushed", "sent", sent, "total", len(tokens), "agent", paneID, "status", status)
-	// The bus mirrors the FCM fan-out as a gothalo.push_sent system event. (Later,
-	// FCM can move to being a bus SUBSCRIBER instead of the watcher calling Notify
-	// directly; this event keeps app clients aware of what was pushed either way.)
-	s.publish(events.TypePushSent, map[string]any{
-		"agent": paneID, "status": status, "title": title, "seq": seq, "sent": sent, "total": len(tokens),
-	})
-}
-
 func principal(id string) string {
 	if id == "" {
 		return "admin/web"

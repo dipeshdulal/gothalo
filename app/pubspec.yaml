@@ -54,6 +54,7 @@ dependencies:
   json_annotation: ^4.12.0
   flutter_local_notifications: ^22.2.0
   flutter_markdown: ^0.7.7+1
+  image_picker: ^1.2.3 # camera roll / camera -> bytes for POST /image (needs the Info.plist + manifest usage strings)
 
 dev_dependencies:
   flutter_test:
@@ -77,10 +78,15 @@ dev_dependencies:
 # script in tooling; regenerate the densities with: dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
-  ios: false
+  ios: true
   image_path: "assets/icon/ic_legacy.png"
   adaptive_icon_background: "assets/icon/ic_bg.png"
   adaptive_icon_foreground: "assets/icon/ic_foreground.png"
+  # iOS requires a fully opaque square with no alpha (Xcode rejects a
+  # transparent AppIcon) — ic_legacy.png's rounded-corner mask leaves its
+  # corners transparent, so iOS gets its own flattened source: the same
+  # foreground composited over the full-bleed background, alpha dropped.
+  image_path_ios: "assets/icon/ic_ios.png"
   min_sdk_android: 21
 
 # For information on the generic Dart part of this file, see the
@@ -98,6 +104,7 @@ flutter:
     - assets/img/flock_bg.png
     - assets/img/servers_bg.png
     - assets/agents/
+    - assets/icon/ic_legacy.png
 
   fonts:
     # UI typeface — Inter (OFL). Bundled so it renders crisp offline, no flash.

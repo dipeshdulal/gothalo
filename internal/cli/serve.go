@@ -15,6 +15,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/server"
 	"github.com/dipeshdulal/gothalo/internal/store"
+	"github.com/dipeshdulal/gothalo/internal/timeline"
 	"github.com/dipeshdulal/gothalo/internal/transport"
 	"github.com/dipeshdulal/gothalo/internal/transport/direct"
 	"github.com/dipeshdulal/gothalo/internal/transport/relay"
@@ -52,6 +53,11 @@ func runServe(configPath string) error {
 		// Never log the token value; point the operator at the file.
 		log.Info("generated admin token", "config", cfg.ConfigPath())
 	}
+	if saved, err := cfg.EnsureServerID(); err != nil {
+		return err
+	} else if saved {
+		log.Info("generated server id", "id", cfg.ServerID, "name", cfg.ServerName)
+	}
 
 	st, err := store.Open(cfg.DevicesPath())
 	if err != nil {
@@ -60,11 +66,14 @@ func runServe(configPath string) error {
 	pm := pairing.NewManager()
 
 	var pc *push.Client
-	if p, err := push.LoadFile(cfg.Push.ServiceAccountPath); err != nil {
-		log.Warn("FCM disabled — notify will log only", "reason", err)
+	if p, err := push.Resolve(cfg.Push.ServiceAccountPath, cfg.Push.ProjectID); err != nil {
+		// A fresh install has no credentials and that is fine — the bridge runs
+		// fully without push. Point at the fix rather than just the failure.
+		log.Warn("FCM disabled — notify will log only",
+			"reason", err, "fix", "run `gothalo push login`, or `gothalo push status` to diagnose")
 	} else {
 		pc = p
-		log.Info("FCM enabled", "project", p.ProjectID())
+		log.Info("FCM enabled", "project", p.ProjectID(), "credentials", p.Source())
 	}
 
 	// The unified event bus. Every WS /events client is a bus subscriber; each
@@ -87,12 +96,28 @@ func runServe(configPath string) error {
 		return cancel
 	})
 
-	srv = server.New(cfg, mgr, pc, st, pm, web.FS(), bus)
+	// The recorded agent-activity ring. Loaded before the server so GET /timeline
+	// can answer from the persisted history immediately, without waiting for the
+	// recorder's first bus event.
+	tl := timeline.Open(cfg.TimelinePath())
+
+	srv = server.New(cfg, mgr, pc, st, pm, web.FS(), bus, tl)
 	go mgr.Run(context.Background())
 
 	// The notification-clearer is the process-wide bus consumer that dismisses a
 	// stale "blocked" push once the pane leaves blocked or closes (from anywhere).
-	go notify.NewClearer(bus, pc, st).Run(context.Background())
+	// It takes an authoritative reader rather than trusting the bus payload: the
+	// bus is a change signal, and its status can be stale or coarse depending on
+	// which Herdr subscription (if any) covers that pane.
+	go notify.NewClearer(bus, pc, st, cfg.ServerID, agentReader{mgr}).Run(context.Background())
+
+	// The timeline recorder is the second process-wide bus consumer: it turns the
+	// same agent transitions into a bounded, persistent history, so the app can
+	// answer "how long has this been blocked" — which no live-state read can. It
+	// takes the same authoritative reader, but only to rebuild the open spans it
+	// measures durations from (at startup, and whenever Herdr reconnects); the
+	// transitions themselves come from the bus.
+	go timeline.NewRecorder(tl, bus, agentReader{mgr}).Run(context.Background())
 
 	var tr transport.Transport
 	switch cfg.Transport.Mode {
@@ -108,4 +133,95 @@ func runServe(configPath string) error {
 		"addr", cfg.Transport.Addr,
 		"public_url", cfg.Transport.PublicURL)
 	return tr.Serve(srv.Handler())
+}
+
+// agentReader adapts the Herdr session manager to the narrow read the
+// notification-clearer needs. It resolves a session-qualified pane id the same
+// way every other bridge caller does, then makes ONE `agent get`, so the status
+// and the seq it returns always describe the same instant.
+type agentReader struct{ mgr *herdr.Manager }
+
+func (a agentReader) AgentState(pane string) (string, int, error) {
+	session, bare := herdr.SplitTarget(pane)
+	c, err := a.mgr.Client(session)
+	if err != nil {
+		return "", 0, err
+	}
+	agent, err := c.Get(bare)
+	if err != nil {
+		return "", 0, err
+	}
+	return agent.Status, agent.StateChangeSeq, nil
+}
+
+// Agents lists every agent pane across every Herdr session with its current
+// status, for the timeline recorder's post-restart span rebuild. Same walk as
+// Announcing, unfiltered: a span is open for every agent, not only the ones
+// worth notifying about.
+func (a agentReader) Agents() ([]timeline.PaneState, error) {
+	var out []timeline.PaneState
+	var lastErr error
+	for _, name := range a.mgr.Names() {
+		c, err := a.mgr.Client(name)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		agents, err := c.Agents()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, ag := range agents {
+			out = append(out, timeline.PaneState{
+				Pane:      herdr.Qualify(c.Session(), ag.PaneID),
+				Agent:     ag.Kind,
+				Session:   c.SessionLabel(),
+				Workspace: herdr.Qualify(c.Session(), ag.Workspace),
+				Status:    ag.Status,
+				Title:     ag.Title,
+			})
+		}
+	}
+	if out == nil && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, nil
+}
+
+// Announcing lists every agent, across every Herdr session, currently in a state
+// the bridge notifies about. Pane ids are session-qualified exactly as Notify
+// qualifies them, so the clearer's keys match the ones its pushes were tagged
+// with.
+func (a agentReader) Announcing() ([]notify.PaneState, error) {
+	var out []notify.PaneState
+	var lastErr error
+	for _, name := range a.mgr.Names() {
+		c, err := a.mgr.Client(name)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		agents, err := c.Agents()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, ag := range agents {
+			if ag.Status != "blocked" && ag.Status != "done" {
+				continue
+			}
+			out = append(out, notify.PaneState{
+				Pane:   herdr.Qualify(c.Session(), ag.PaneID),
+				Status: ag.Status,
+				Seq:    ag.StateChangeSeq,
+			})
+		}
+	}
+	// A partial answer is still worth arming: one unreachable session should not
+	// cost us the panes we did learn about.
+	if out == nil && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, nil
 }

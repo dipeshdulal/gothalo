@@ -71,6 +71,21 @@ sequence number it is consistent with:
 - `snapshot` is **byte-for-byte the same JSON** as `GET /snapshot`. Seed your
   store from `snapshot.result.snapshot` (agents, panes, tabs, workspaces, focus).
 - `seq` is the **baseline**: every delta that follows has `seq` strictly greater.
+- **`branch`** — gothalo adds this string to every agent in `agents[]` (herdr
+  does not provide it). It's the **authoritative** git branch, computed by
+  running git in the pane's live `foreground_cwd` (falling back to `cwd`), not
+  inferred from the path or read from the transcript. It is **`""`** when the
+  pane isn't inside a git work tree (e.g. a home dir) or on a detached HEAD, so
+  a client can render "no branch" rather than a misleading folder name.
+- **`attention_rank`** — gothalo also adds this integer to every agent in
+  `agents[]` (herdr does not provide it). It is the **authoritative** "needs a
+  human first" ordering, lowest first: `blocked` 0, `done` 1, `working` 2,
+  `idle` 3, `unknown` 4. An unrecognised or missing `agent_status` also ranks 4,
+  so a status herdr adds later sorts last instead of jumping to the top. It is
+  **always present**, so a client can sort on it unconditionally, and because
+  every surface sorts on the same field, list order and any counts derived from
+  it stay consistent. Herdr's own `agent.view` sort projection is **not** used —
+  see [`docs/CONTRACT-herdr-proxy.md`](docs/CONTRACT-herdr-proxy.md) for why.
 
 **Frames 2…N: deltas.** Each is one unified **envelope** (§3). Apply them to the
 store in order.
@@ -79,6 +94,39 @@ The bus subscription is registered **before** the snapshot is taken, so any
 event that occurs while the snapshot is being fetched is queued and delivered as
 a delta right after the snapshot frame (its `seq > baseline`) — nothing is lost
 in the gap.
+
+### Heartbeat frames
+
+Interleaved with the above, the bridge sends a heartbeat every **20 s**:
+
+```json
+{ "type": "heartbeat", "ts": 1785677608858 }
+```
+
+It carries **no `seq`**, deliberately. A seq-bearing frame means *something
+changed*; a heartbeat means *nothing changed, I am still here*. Treating it as a
+change signal would trigger a pointless full re-snapshot every 20 seconds.
+
+**Handle it before your delta path:**
+
+```dart
+if (frame['type'] == 'heartbeat') return;   // not a change; do not re-snapshot
+```
+
+It exists because a quiet tailnet can go many minutes with no events, and a
+connection can die in a way neither end observes — the bridge killed behind
+`tailscale serve`, a phone's radio sleeping, a NAT entry expiring. That leaves a
+**half-open socket**: the client's stream never ends, so it never reconnects and
+serves stale state forever.
+
+It is an application-level frame, not a WebSocket ping, and that distinction is
+the whole point: a protocol ping is answered by the client's networking stack and
+never surfaces to app code, so it cannot drive a client-side liveness check — and
+in a half-open socket the client is exactly the side that learns nothing.
+
+**Clients should time out on silence.** The app treats **50 s** with no frame of
+any kind as a dead socket and reconnects (`app/lib/features/inbox/inbox_providers.dart`).
+Any threshold comfortably above 20 s works.
 
 ---
 

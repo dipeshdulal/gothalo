@@ -4,9 +4,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_background.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../agents/start_agent_sheet.dart';
 import '../approvals/approve_action.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
@@ -56,7 +58,10 @@ class OverviewScreen extends ConsumerWidget {
       final panes =
           snap?.panes.where((p) => p.workspaceId == workspaceId).toList() ??
               const [];
-      spaceCwd = panes.isEmpty ? '' : panes.first.cwd;
+      spaceCwd = spaceCwdOf(
+        ws == null || ws.isEmpty ? null : ws.first,
+        panes,
+      );
       final git = gitContextForCwd(spaceCwd);
       branch = git.worktree;
       title = git.project.isNotEmpty
@@ -70,7 +75,16 @@ class OverviewScreen extends ConsumerWidget {
       asset: Backgrounds.flock,
       child: Scaffold(
         appBar: AppBar(
-          title: branch == null
+          title: workspaceId == null
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const AppMark(radius: 14),
+                    const SizedBox(width: 10),
+                    Text(title),
+                  ],
+                )
+              : (branch == null
               ? Text(title)
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -100,7 +114,7 @@ class OverviewScreen extends ConsumerWidget {
                       ],
                     ),
                   ],
-                ),
+                )),
           actions: [
             // A space owns a workspace, so we can open a fresh terminal in it.
             if (workspaceId != null)
@@ -115,6 +129,17 @@ class OverviewScreen extends ConsumerWidget {
                 icon: const Icon(Icons.more_vert),
                 onSelected: (v) {
                   switch (v) {
+                    case 'agent':
+                      showStartAgentSheet(
+                        context,
+                        ref,
+                        target: StartAgentTarget(
+                          placement: StartAgentPlacement.newTab,
+                          id: workspaceId!,
+                          where: 'A new tab in $title',
+                          defaultCwd: spaceCwd,
+                        ),
+                      );
                     case 'tab':
                       newTab(context, ref, workspaceId!);
                     case 'worktree':
@@ -126,6 +151,16 @@ class OverviewScreen extends ConsumerWidget {
                   }
                 },
                 itemBuilder: (ctx) => [
+                  // First, because dispatching work is the reason to open a
+                  // space from a phone — the plain tab below is the fallback.
+                  const PopupMenuItem(
+                    value: 'agent',
+                    child: ListTile(
+                      leading: Icon(Icons.rocket_launch_outlined),
+                      title: Text('Start agent'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                   const PopupMenuItem(
                     value: 'tab',
                     child: ListTile(
@@ -348,10 +383,21 @@ class _MultiplexerLayout extends StatelessWidget {
     }
     final agentByPane = {for (final a in snap.agents) a.paneId: a};
 
+    // Only the true "every space" view gets the summary — a scoped single
+    // space is already a small, already-legible list on its own.
+    final paneById = {for (final p in snap.panes) p.paneId: p};
+    final needsYou = only != null
+        ? const <Agent>[]
+        : (snap.agents.where((a) => a.agentStatus.needsAttention).toList()
+          ..sort((a, b) => a.attention.compareTo(b.attention)));
+
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 24),
       children: [
+        if (only == null) _StatusStrip(agents: snap.agents),
+        if (needsYou.isNotEmpty)
+          _NeedsYouSection(agents: needsYou, paneById: paneById),
         for (final ws in scoped)
           _WorkspaceBlock(
             workspace: ws,
@@ -361,6 +407,119 @@ class _MultiplexerLayout extends StatelessWidget {
             agentByPane: agentByPane,
             focusedPaneId: snap.focusedPaneId,
           ),
+      ],
+    );
+  }
+}
+
+/// A row of status counts across every agent — "does everything look okay?"
+/// at a glance, before scrolling into the per-workspace tree to find out.
+/// Purely informational for now (not yet tappable to filter/scroll).
+class _StatusStrip extends StatelessWidget {
+  const _StatusStrip({required this.agents});
+  final List<Agent> agents;
+
+  @override
+  Widget build(BuildContext context) {
+    if (agents.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    final counts = <AgentStatus, int>{};
+    for (final a in agents) {
+      counts[a.agentStatus] = (counts[a.agentStatus] ?? 0) + 1;
+    }
+    // Fixed, meaningful order regardless of iteration order above.
+    const order = [
+      AgentStatus.blocked,
+      AgentStatus.working,
+      AgentStatus.done,
+      AgentStatus.idle,
+      AgentStatus.unknown,
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final status in order)
+            if (counts[status] != null)
+              _StatusCount(status: status, count: counts[status]!, scheme: scheme),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusCount extends StatelessWidget {
+  const _StatusCount({
+    required this.status,
+    required this.count,
+    required this.scheme,
+  });
+
+  final AgentStatus status;
+  final int count;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = status.colors(scheme);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: c.bg, borderRadius: BorderRadius.circular(999)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(status.icon, size: 14, color: c.fg),
+          const SizedBox(width: 6),
+          Text(
+            '$count ${status.label}',
+            style: TextStyle(color: c.fg, fontWeight: FontWeight.w600, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The agents that need a human right now (blocked or done), flattened across
+/// every workspace and shown ahead of the per-space tree — so a blocked agent
+/// buried in workspace 7 isn't only discoverable by scrolling all the way
+/// there. Reuses [_PaneCard] for a consistent look with the tree below.
+class _NeedsYouSection extends StatelessWidget {
+  const _NeedsYouSection({required this.agents, required this.paneById});
+
+  final List<Agent> agents;
+  final Map<String, Pane> paneById;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Row(
+            children: [
+              Icon(Icons.pan_tool_outlined, size: 16, color: scheme.error),
+              const SizedBox(width: 8),
+              Text(
+                'Needs you',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ),
+        for (final a in agents)
+          if (paneById[a.paneId] case final pane?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: _PaneCard(pane: pane, agent: a, focused: false),
+            ),
       ],
     );
   }
@@ -581,7 +740,9 @@ class _PaneCard extends ConsumerWidget {
                         ),
                       ),
                     ],
-                    // Split / close this pane (Herdr parity via /herdr).
+                    // Split / close this pane (Herdr parity via /herdr), plus
+                    // the agent lifecycle: an idle shell can host a new agent,
+                    // and a pane already hosting one can restart or stop it.
                     PopupMenuButton<String>(
                       tooltip: 'Pane actions',
                       padding: EdgeInsets.zero,
@@ -590,6 +751,23 @@ class _PaneCard extends ConsumerWidget {
                           color: scheme.onSurfaceVariant),
                       onSelected: (v) {
                         switch (v) {
+                          case 'start-agent':
+                            showStartAgentSheet(
+                              context,
+                              ref,
+                              target: StartAgentTarget(
+                                placement: StartAgentPlacement.existingPane,
+                                id: pane.paneId,
+                                where: 'In this pane (${pane.paneId})',
+                                defaultCwd: pane.cwd,
+                              ),
+                            );
+                          case 'restart-agent':
+                            restartAgent(context, ref, pane.paneId,
+                                kind: agent!.agent);
+                          case 'stop-agent':
+                            stopAgent(context, ref, pane.paneId,
+                                kind: agent!.agent);
                           case 'split':
                             splitPane(context, ref, pane.paneId);
                           case 'close':
@@ -597,6 +775,39 @@ class _PaneCard extends ConsumerWidget {
                         }
                       },
                       itemBuilder: (ctx) => [
+                        // Offered only on a pane with no agent in it. A pane
+                        // running a dev server is rejected by the bridge, but
+                        // it's a shell either way — only an agent pane is a
+                        // definitively wrong target, and it gets restart/stop
+                        // instead.
+                        if (!isAgent)
+                          const PopupMenuItem(
+                            value: 'start-agent',
+                            child: ListTile(
+                              leading: Icon(Icons.rocket_launch_outlined),
+                              title: Text('Start agent here'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        if (isAgent) ...[
+                          const PopupMenuItem(
+                            value: 'restart-agent',
+                            child: ListTile(
+                              leading: Icon(Icons.restart_alt),
+                              title: Text('Restart agent'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'stop-agent',
+                            child: ListTile(
+                              leading: Icon(Icons.stop_circle_outlined,
+                                  color: Theme.of(ctx).colorScheme.error),
+                              title: const Text('Stop agent'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
                         const PopupMenuItem(
                           value: 'split',
                           child: ListTile(
@@ -767,4 +978,35 @@ String _tabLabel(String tabId) {
   final colon = tabId.indexOf(':');
   final t = colon >= 0 ? tabId.substring(colon + 1) : tabId;
   return t.isEmpty ? '—' : t;
+}
+
+/// Where a space lives — the directory a new agent started in it should default
+/// to.
+///
+/// The workspace's own checkout path is the only authoritative answer, and it is
+/// used whenever Herdr reports one. A pane's cwd is NOT a substitute: panes
+/// wander into subdirectories and linked worktrees, so a single space routinely
+/// spans several directories at once (a repo root, its `app/`, and three
+/// `worktrees/*` checkouts is an ordinary spread). Picking the first pane in
+/// snapshot order therefore defaults the start sheet to an arbitrary one of
+/// them — which is the bug this replaces.
+///
+/// Only when a space has no checkout at all (a plain `~` space) does this fall
+/// back to the panes, and then to the SHALLOWEST cwd they share rather than an
+/// incidental one: the common ancestor is the closest thing to "where this
+/// space lives" that the panes can tell us.
+String spaceCwdOf(WorkspaceInfo? workspace, List<Pane> panes) {
+  final checkout = workspace?.worktree?.checkoutPath ?? '';
+  if (checkout.isNotEmpty) return checkout;
+  if (panes.isEmpty) return '';
+
+  var shallowest = panes.first.cwd;
+  for (final p in panes) {
+    if (p.cwd.isEmpty) continue;
+    if (shallowest.isEmpty ||
+        '/'.allMatches(p.cwd).length < '/'.allMatches(shallowest).length) {
+      shallowest = p.cwd;
+    }
+  }
+  return shallowest;
 }

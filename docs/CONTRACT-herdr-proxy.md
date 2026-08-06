@@ -85,14 +85,23 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 | `pane.close` | `{ "pane_id": "wN:pM" }` | `ok` | **DESTRUCTIVE** — in-app confirm; closing a tab's last pane closes the tab |
 | `pane.focus` | `{ "pane_id": "wN:pM" }` | `ok` | |
 | `agent.focus` | `{ "target": "<pane id / agent>" }` | `ok` | focus an agent's pane |
-| `agent.view.set` | `{ "source": "gothalo", "label"?, "filter"?, "sort"?: [{ "field": "attention"\|"status"\|"state_change_seq"\|"seen"\|"*_order", "order"?: "asc"\|"desc" }] }` | `agent_view` | install a filter+sort projection over the agent list — Herdr's own mobile-agents-list primitive (sort by `attention` for a priority inbox). `source` owns the projection |
-| `agent.view.clear` | `{ "source": "gothalo" }` | `agent_view` | clear the projection owned by `source` |
+
+> **`agent.view.set` / `agent.view.clear` are deliberately not allowlisted.**
+> Herdr accepts the projection and reports it active, but as of herdr 0.8.0
+> (protocol 19) **no read applies it** — `agent.list` and `session.snapshot`
+> both return the unprojected list, and there is no projected read method — so
+> forwarding these only let a client mutate daemon state to no visible effect.
+> Attention ordering is served by **`attention_rank`** on every agent in
+> `GET /snapshot` instead (see [`API.md`](./API.md)), which the bridge computes
+> so every surface orders identically. Revisit if Herdr ever applies the view to
+> a read.
 
 `focus` defaults to **`false`** everywhere, so app-created panes/tabs do not steal
 the operator's foreground pane on the host. Pass `"focus": true` to override.
 
 > Confirmed **not** allowlisted (→ `403`): `server.stop`, `server.reload_config`,
-> `pane.send_text`, `pane.send_keys`, `agent.prompt`, `events.subscribe`, and
+> `pane.send_text`, `pane.send_keys`, `agent.prompt`, `events.subscribe`,
+> `agent.view.set`, `agent.view.clear`, and
 > every other method not in the table above. The app's existing typed endpoints
 > (`/send`, `/approve`, `/attach`, `/events`, …) remain the path for those.
 

@@ -93,8 +93,39 @@ type Input struct {
 	// current-state view (best for the live blocker form and current activity).
 	Detection string
 	// Recent is `herdr agent read --source recent-unwrapped` text: recent
-	// transcript, unwrapped (best for the last assistant message and history).
+	// transcript, unwrapped. It is the LEGACY history source — it comes from the
+	// pane's scrollback, which Herdr can only capture by physically scrolling the
+	// pane, so the endpoint no longer requests it by default. Prefer History.
 	Recent string
+	// History is the agent's recent conversation read from its OWN transcript
+	// store — Claude's JSONL, Hermes's and opencode's SQLite — oldest first.
+	//
+	// This is the structured alternative to scraping the terminal, and it is
+	// strictly better where available: it is already parsed, it cannot be
+	// confused by frame furniture, it is not truncated by the viewport, and
+	// reading it has no effect on the operator's screen. When it is non-empty
+	// Build uses it for Headline, Detail and Transcript, and the per-kind parser
+	// only supplies Blocked.
+	//
+	// It is empty for kinds with no transcript reader, and for a session whose
+	// transcript cannot be resolved — the parser's terminal-derived values then
+	// stand, which is why those code paths remain.
+	History []HistoryEntry
+}
+
+// HistoryEntry is one normalized transcript entry, flattened to what a card
+// needs. It deliberately mirrors a subset of transcript.Entry rather than
+// importing it: agentstate is about presenting a pane's CURRENT state, and
+// should not grow a dependency on the transcript package's schema.
+type HistoryEntry struct {
+	// Role is user | assistant | tool.
+	Role string
+	// Kind is message | thinking | tool_call | tool_result.
+	Kind string
+	// Text is the prose for message/thinking entries, empty otherwise.
+	Text string
+	// Tool is the tool name for a tool_call, empty otherwise.
+	Tool string
 }
 
 // Parser maps one agent kind's terminal output onto the common State.
@@ -135,6 +166,13 @@ func parserFor(kind string) Parser {
 // renderable State (Parsed=false).
 func Build(in Input) State {
 	st := parserFor(in.Kind).Parse(in)
+
+	// Structured history wins over anything scraped from the terminal. The parser
+	// still ran, because Blocked can ONLY come from the screen — a permission or
+	// question form is UI the agent is drawing right now, not conversation, so no
+	// transcript records it. Everything else is better read from the transcript.
+	applyHistory(&st, in.History)
+
 	st.PaneID = in.PaneID
 	st.AgentKind = in.Kind
 	st.AgentStatus = normalizeStatus(in.Status)
@@ -142,6 +180,52 @@ func Build(in Input) State {
 		st.Blocked = nil // a stray blocked payload can't ride on a non-blocked state
 	}
 	return st
+}
+
+// applyHistory overrides the terminal-derived presentation with the agent's own
+// transcript. A no-op when there is no history, so kinds without a transcript
+// reader keep the scraped values.
+func applyHistory(st *State, history []HistoryEntry) {
+	if len(history) == 0 {
+		return
+	}
+
+	// The last thing the agent SAID — not its thinking, and not a tool call.
+	// Scanning backwards is what makes this better than a screen scrape: the
+	// message is whole even when it scrolled off, or is buried under tool output.
+	for i := len(history) - 1; i >= 0; i-- {
+		e := history[i]
+		if e.Kind == "message" && e.Role == "assistant" && strings.TrimSpace(e.Text) != "" {
+			st.Detail = strings.TrimSpace(e.Text)
+			st.Headline = truncate(firstLine(st.Detail), 120)
+			break
+		}
+	}
+
+	if lines := historyLines(history); len(lines) > 0 {
+		st.Transcript = lastN(lines, 12)
+	}
+}
+
+// historyLines renders history as the flat, plain-text lines the Transcript
+// field carries. Thinking is dropped — it is the model's scratchpad, not the
+// conversation — and a tool call becomes a short marker so a card still shows
+// that work happened between two messages.
+func historyLines(history []HistoryEntry) []string {
+	var out []string
+	for _, e := range history {
+		switch e.Kind {
+		case "message":
+			if t := strings.TrimSpace(e.Text); t != "" {
+				out = append(out, t)
+			}
+		case "tool_call":
+			if e.Tool != "" {
+				out = append(out, "· "+e.Tool)
+			}
+		}
+	}
+	return out
 }
 
 // normalizeStatus clamps herdr's status to the contract's enum, mapping anything

@@ -251,3 +251,59 @@ func keys(m map[string]bool) []string {
 	}
 	return out
 }
+
+// TestClaudeQueuedMessage covers a message typed while Claude was mid-turn.
+//
+// Claude queues such a message instead of starting a turn, and journals it as
+// `queue-operation` lines rather than conversation. Dropping those lost the
+// message entirely: it reached the agent but never appeared in the chat, and the
+// app's optimistic bubble — which clears only when a matching user entry arrives
+// — was stranded forever.
+//
+// The verb decides. Measured over 222 queued messages in a live corpus:
+// enqueue+remove never produces a user entry (158/158), enqueue alone does
+// (58/61). So `remove` is the signal, and emitting on `enqueue` instead would
+// double-render about a quarter of them.
+func TestClaudeQueuedMessage(t *testing.T) {
+	r := claudeReader{}
+
+	// enqueue: stay silent — Claude will record this one as a real user entry.
+	if got := r.Normalize([]byte(
+		`{"type":"queue-operation","operation":"enqueue","content":"hello there","timestamp":"2026-08-04T02:04:52.980Z"}`,
+	)); len(got) != 0 {
+		t.Errorf("enqueue emitted %d entries, want 0 (the real user entry is still coming)", len(got))
+	}
+
+	// remove: emit — this message will never be recorded as conversation.
+	got := r.Normalize([]byte(
+		`{"type":"queue-operation","operation":"remove","content":"hello there","timestamp":"2026-08-04T02:04:55.694Z"}`,
+	))
+	if len(got) != 1 {
+		t.Fatalf("remove emitted %d entries, want 1", len(got))
+	}
+	if got[0].Role != RoleUser || got[0].Kind != KindMessage {
+		t.Errorf("got role=%q kind=%q, want user/message", got[0].Role, got[0].Kind)
+	}
+	if got[0].Text != "hello there" {
+		t.Errorf("Text = %q, want the queued text", got[0].Text)
+	}
+	if !got[0].Parsed {
+		t.Error("Parsed = false, want true")
+	}
+
+	// Bookkeeping verbs carry no message and must stay silent.
+	for _, op := range []string{"dequeue", "popAll"} {
+		if g := r.Normalize([]byte(
+			`{"type":"queue-operation","operation":"` + op + `"}`,
+		)); len(g) != 0 {
+			t.Errorf("%s emitted %d entries, want 0", op, len(g))
+		}
+	}
+
+	// A remove with no readable text is dropped rather than rendered blank.
+	if g := r.Normalize([]byte(
+		`{"type":"queue-operation","operation":"remove","content":"   "}`,
+	)); len(g) != 0 {
+		t.Errorf("empty remove emitted %d entries, want 0", len(g))
+	}
+}

@@ -1,0 +1,43 @@
+  ┃  Your branch is behind 'origin/main' by 2 commits, and can be fast-forwarded.
+  ┃    (use "git pull" to update your local branch)
+  ┃
+  ┃  nothing to commit, working tree clean
+  ┃
+
+     ✱ Glob "internal/transcript/*" (19 matches)
+
+     Now the edit — appending a blank line to README.md:
+
+  ┃
+  ┃  ← Edit README.md
+  ┃
+  ┃    189
+  ┃    190   WebSocket routes (`/attach`, `/events`) take the token as `?token=…` instead,
+  ┃    191   since WS clients can't always set headers. See `docs/API.md` for the full surface
+  ┃    192   and `CONTRACT.md` for the event stream.
+  ┃    193 +
+  ┃
+
+     + Thought: 434ms
+
+     Now #5, last — the question tool, left sitting blocked for your capture:
+
+     → Asked 1 question
+
+     ▣  Build · Big Pickle
+
+  ┃
+  ┃  What should we work on next in gothalo?
+  ┃
+  ┃  1. Explore the Go bridge
+  ┃     Deep-dive into internal/ packages (herdr client, events bus, watcher)
+  ┃  2. Work on the Flutter app
+  ┃     Build or improve a screen in app/ (inbox, terminal, transcript, diff)
+  ┃  3. Fix the README blank line
+  ┃     Revert the stray edit from this session
+  ┃  4. Plan a feature
+  ┃     Scope something new from ROADMAP or docs/ and outline the work
+  ┃  5. Type your own answer
+  ┃
+  ┃  ↑↓ select  enter submit  esc dismiss
+  ┃

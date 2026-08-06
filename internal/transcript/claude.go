@@ -2,7 +2,9 @@ package transcript
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,9 +19,50 @@ import (
 // never breaks. See CONTRACT.md for the wire shape and captured examples.
 type claudeReader struct{}
 
-func init() { Register(claudeReader{}) }
+func init() { Register(claudeReader{}); RegisterOpener(claudeOpener{}) }
 
 func (claudeReader) Kind() string { return "claude" }
+
+// claudeOpener resolves a Claude pane to its JSONL file (see Locate) and serves
+// it as a fileSource. The path math lives in resolve.go; this is only the
+// registry wiring.
+type claudeOpener struct{}
+
+func (claudeOpener) Kind() string { return "claude" }
+
+func (claudeOpener) Open(cwd, sessionID string) (Source, error) {
+	path, err := Locate("claude", cwd, sessionID)
+	if err == nil {
+		return newFileSource(path, claudeReader{}), nil
+	}
+	if !errors.Is(err, ErrNoTranscript) || sessionID == "" {
+		return nil, err
+	}
+
+	// A session we can NAME but whose file is not on disk yet is a real, healthy
+	// agent that simply has not spoken — Claude writes the .jsonl lazily, on the
+	// first message. Failing here would 404 a brand-new pane, which the app can
+	// only render as an error.
+	//
+	// Point a source at where the file WILL be instead. It reports an empty
+	// transcript now and streams entries the moment Claude creates it, so opening
+	// a fresh agent and typing to it just works, with no reconnect.
+	//
+	// The other ErrNoTranscript cases — unknown session id, unsupported layout —
+	// still fail, because for those there is no path worth waiting on.
+	return newFileSource(pendingClaudePath(cwd, sessionID), claudeReader{}), nil
+}
+
+// pendingClaudePath is where Claude will write this session once it has
+// something to record: the same encoded-cwd + session-id location Locate looks
+// for first.
+func pendingClaudePath(cwd, sessionID string) string {
+	root, err := claudeProjectsRoot()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, EncodeProjectDir(cwd), sessionID+".jsonl")
+}
 
 // claudeIgnored are entry types that are pure session metadata / plumbing — not
 // part of the conversation. They are dropped (Normalize returns no entries).
@@ -37,7 +80,6 @@ var claudeIgnored = map[string]bool{
 	"file-history-snapshot": true,
 	"file-history-delta":    true,
 	"last-prompt":           true,
-	"queue-operation":       true,
 	"pr-link":               true,
 	"attachment":            true,
 }
@@ -54,6 +96,10 @@ type claudeLine struct {
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	Subtype       string          `json:"subtype"` // system
 	Content       json.RawMessage `json:"content"` // system content (a string)
+	// Operation is a queue-operation line's verb: "enqueue" | "remove" |
+	// "dequeue" | "popAll". Its message text arrives in Content as a plain JSON
+	// string (Content is polymorphic across line types, hence RawMessage).
+	Operation string `json:"operation"`
 }
 
 type claudeMessage struct {
@@ -86,6 +132,8 @@ func (claudeReader) Normalize(line []byte) []Entry {
 	}
 
 	switch l.Type {
+	case "queue-operation":
+		return l.queuedEntries()
 	case "assistant":
 		return l.assistantEntries()
 	case "user":
@@ -129,6 +177,51 @@ func roleOf(l claudeLine) string {
 		}
 	}
 	return RoleSystem
+}
+
+// queuedEntries recovers a message the user sent while Claude was mid-turn.
+//
+// Typing to a busy Claude queues the text instead of starting a turn, and the
+// queue is journalled as `queue-operation` lines rather than as conversation:
+//
+//	{"type":"queue-operation","operation":"enqueue","content":"…"}
+//	{"type":"queue-operation","operation":"remove","content":"…"}
+//
+// Dropping those lines lost the message entirely — it reached the agent (you can
+// watch it land in the terminal) but never appeared in the chat, and the app's
+// optimistic bubble, which clears only when a matching user entry arrives, was
+// stranded forever. It only bit while the agent was working, because that is the
+// only time Claude queues.
+//
+// We emit on `remove`, not on `enqueue`. Measured across a live corpus of 222
+// queued messages:
+//
+//	enqueue + remove -> no user entry EVER follows   158/158
+//	enqueue alone    -> a user entry does follow      58/61
+//
+// So `remove` marks precisely the messages Claude will not record as
+// conversation, and emitting there restores them without duplicating the ones it
+// does record. Emitting on `enqueue` instead would double-render about a quarter
+// of them. This also keeps Normalize pure — the decision needs no memory of
+// earlier lines.
+//
+// The residual is the 3-in-222 that see neither a `remove` nor a user entry, plus
+// `popAll` (a queue flush, which carries no content and is dropped).
+func (l claudeLine) queuedEntries() []Entry {
+	if l.Operation != "remove" {
+		return nil
+	}
+	var content string
+	if json.Unmarshal(l.Content, &content) != nil {
+		return nil // a remove without readable text (e.g. popAll) has nothing to show
+	}
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return nil
+	}
+	e := l.base(0, RoleUser, KindMessage, true)
+	e.Text, _ = truncateRunes(text, maxInlineTextRunes)
+	return []Entry{e}
 }
 
 func (l claudeLine) assistantEntries() []Entry {

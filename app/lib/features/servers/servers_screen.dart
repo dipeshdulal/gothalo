@@ -5,9 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/models/snapshot.dart';
-import '../alerts/alerts_providers.dart';
 import '../inbox/widgets/agent_avatar.dart';
+import '../../core/widgets/agent_age.dart';
 import '../inbox/widgets/status_badge.dart';
 import '../priority/priority_providers.dart';
 
@@ -33,7 +34,10 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
 
   Future<void> _openServer(ServerSummary server) async {
     await ref.read(activeServerIdProvider.notifier).set(server.id);
-    if (mounted) context.go('/inbox');
+    // push, not go: `go` replaces the whole stack, so Flock had no back entry
+    // and the hardware back button exited the app. Pushing keeps Servers
+    // underneath, so back returns here.
+    if (mounted) context.push('/inbox');
   }
 
   Future<void> _openAgent(ServerSummary server, Agent agent) async {
@@ -54,11 +58,13 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Remove')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -71,29 +77,31 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Widget build(BuildContext context) {
     final servers = ref.watch(serversProvider);
     final hits = ref.watch(priorityHitsProvider);
-    final unread = ref.watch(unreadAlertsProvider).asData?.value ?? 0;
-    // Live per-server agent stats, keyed by server id.
+    // Live per-server agent stats, keyed by server id — each server watched
+    // independently so a reachable one renders immediately instead of waiting
+    // on a sleeping one.
+    //
+    // `.value`, NOT `.asData?.value`: during each provider's own refetch the
+    // state is AsyncLoading, which still carries the previous value but is not
+    // AsyncData. Reading `asData` blanked the row back to "checking…" on every
+    // tick, which defeats the point of refreshing at all.
     final byServer = {
-      for (final sa in ref.watch(allServersAgentsProvider).asData?.value ??
-          const <ServerAgents>[])
-        sa.server.id: sa,
+      for (final sa in watchAllServerAgents(ref)) sa.server.id: sa,
     };
 
     return AppBackground(
       asset: Backgrounds.servers,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('gothalo'),
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              AppMark(radius: 14),
+              SizedBox(width: 10),
+              Text('gothalo'),
+            ],
+          ),
           actions: [
-            IconButton(
-              tooltip: 'Alerts',
-              onPressed: () => context.push('/alerts'),
-              icon: Badge(
-                isLabelVisible: unread > 0,
-                label: Text('$unread'),
-                child: const Icon(Icons.notifications_none),
-              ),
-            ),
             IconButton(
               tooltip: 'Pair via QR',
               onPressed: () => context.push('/pair'),
@@ -112,7 +120,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
           data: (list) {
             if (list.isEmpty) return const _EmptyServers();
             return RefreshIndicator(
-              onRefresh: () async => ref.invalidate(allServersAgentsProvider),
+              onRefresh: () async => ref.invalidate(serverAgentsProvider),
               child: ListView(
                 padding: const EdgeInsets.only(bottom: 96),
                 children: [
@@ -136,7 +144,10 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                   const Divider(height: 1),
 
                   // --- Servers ---
-                  const _SectionHeader(icon: Icons.dns_outlined, label: 'Servers'),
+                  const _SectionHeader(
+                    icon: Icons.dns_outlined,
+                    label: 'Servers',
+                  ),
                   for (final s in list)
                     _ServerTile(
                       server: s,
@@ -179,9 +190,9 @@ class _SectionHeader extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             label,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
           ),
           const Spacer(),
           if (onAction != null && actionLabel != null)
@@ -202,6 +213,12 @@ class _PriorityTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       onTap: onTap,
+      // ListTile reserves a fixed 40dp leading slot and then adds a separate
+      // 16dp horizontalTitleGap, so shrinking the avatar only grows the empty
+      // space inside the slot — the text never moves closer. Both have to come
+      // down together, and identically on every tile in this list.
+      minLeadingWidth: 36,
+      horizontalTitleGap: 10,
       leading: AgentAvatar(agent: hit.agent.agent, radius: 18),
       title: Text(
         hit.agent.displayTitle,
@@ -223,6 +240,14 @@ class _PriorityTile extends StatelessWidget {
               padding: EdgeInsets.only(right: 6),
               child: Icon(Icons.star, size: 15, color: Color(0xFFF5C043)),
             ),
+          // How long it has been like this. "Done" is a state; "Done · 4m" is a
+          // decision. This is the first screen you see, so the number belongs
+          // here more than anywhere.
+          AgentAge(
+            hit.agent.sinceLastActivity,
+            emphasize: hit.agent.agentStatus == AgentStatus.blocked,
+          ),
+          const SizedBox(width: 8),
           StatusBadge(hit.agent.agentStatus),
         ],
       ),
@@ -270,17 +295,26 @@ class _ServerTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     // "need you" == blocked (waiting for input); done is finished, not waiting.
     final attention =
-        summary?.agents.where((a) => a.agentStatus == AgentStatus.blocked).length ??
-            0;
+        summary?.agents
+            .where((a) => a.agentStatus == AgentStatus.blocked)
+            .length ??
+        0;
 
     return ListTile(
       onTap: onTap,
+      // Radius 18 to match AgentAvatar in the Priority rows above; the leading
+      // slot and title gap match for the same reason — the two sections read as
+      // one list, so they share a grid.
+      minLeadingWidth: 36,
+      horizontalTitleGap: 10,
       leading: CircleAvatar(
+        radius: 18,
         backgroundColor: server.isActive
             ? scheme.primary
             : scheme.surfaceContainerHighest,
         child: Icon(
           Icons.dns_outlined,
+          size: 20,
           color: server.isActive ? scheme.onPrimary : scheme.onSurfaceVariant,
         ),
       ),
@@ -314,7 +348,11 @@ class _ServerTile extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          _StatsLine(summary: summary, attention: attention),
+          _StatsLine(
+            summary: summary,
+            attention: attention,
+            needsUpgrade: server.needsUpgrade,
+          ),
         ],
       ),
       isThreeLine: true,
@@ -330,9 +368,16 @@ class _ServerTile extends StatelessWidget {
 }
 
 class _StatsLine extends StatelessWidget {
-  const _StatsLine({required this.summary, required this.attention});
+  const _StatsLine({
+    required this.summary,
+    required this.attention,
+    required this.needsUpgrade,
+  });
   final ServerAgents? summary;
   final int attention;
+
+  /// This bridge has never reported a version — see [ServerSummary.needsUpgrade].
+  final bool needsUpgrade;
 
   @override
   Widget build(BuildContext context) {
@@ -356,12 +401,45 @@ class _StatsLine extends StatelessWidget {
           '$count agent${count == 1 ? '' : 's'}',
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         ),
+        // A bridge that has never identified itself can't have its notifications
+        // attributed or routed. Worth showing — the alternative is discovering
+        // it only when a notification tap declines to open anything — but it is
+        // a nudge, not an alarm: everything else about the server works, so it
+        // sits quietly next to the agent count rather than beside the name.
+        if (needsUpgrade) ...[
+          const SizedBox(width: 6),
+          const Tooltip(
+            message:
+                'Update gothalo on this machine to route its notifications',
+            child: Icon(
+              Icons.warning_amber_rounded,
+              size: 15,
+              color: _warnColor,
+            ),
+          ),
+          const SizedBox(width: 4),
+          // Labelled, not icon-only: a tooltip needs a long-press on a phone, so
+          // a bare glyph says "something is wrong" without saying what — which
+          // is worse than saying nothing. Mirrors the "N need you" idiom used
+          // for attention on this same line.
+          const Text(
+            'update bridge',
+            style: TextStyle(
+              color: _warnColor,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
         if (attention > 0) ...[
           const SizedBox(width: 8),
           Container(
             width: 7,
             height: 7,
-            decoration: BoxDecoration(color: scheme.error, shape: BoxShape.circle),
+            decoration: BoxDecoration(
+              color: scheme.error,
+              shape: BoxShape.circle,
+            ),
           ),
           const SizedBox(width: 5),
           Text(
@@ -377,6 +455,11 @@ class _StatsLine extends StatelessWidget {
     );
   }
 }
+
+/// Amber for "works, but needs attention" — distinct from the error red used
+/// for an unreachable server, because this one is reachable and fine apart from
+/// notification routing.
+const _warnColor = Color(0xFFFFB300);
 
 /// host[:port] for the tile subtitle — keeps the port (e.g. :5338) visible.
 String _hostLabel(String baseUrl) {
@@ -423,16 +506,18 @@ class _EmptyServers extends StatelessWidget {
           children: [
             Icon(Icons.dns_outlined, size: 56, color: scheme.onSurfaceVariant),
             const SizedBox(height: 16),
-            Text('No servers yet',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'No servers yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 6),
             Text(
               'Add a gothalo bridge to see your agents. Enter its URL and token, '
               'or pair by scanning a QR.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 20),
             FilledButton.icon(

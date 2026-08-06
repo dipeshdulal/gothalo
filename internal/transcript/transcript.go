@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Role is the speaker of an entry, clamped to a small agent-agnostic set.
@@ -236,6 +237,16 @@ func base(p string) string {
 		return ""
 	}
 	return filepath.Base(p)
+}
+
+// unixMillisToRFC3339 formats a millisecond epoch as the Entry.TS wire format,
+// returning "" for a zero/absent timestamp so the field is simply omitted.
+// Database-backed agents store epochs rather than the ISO strings Claude writes.
+func unixMillisToRFC3339(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 }
 
 // compactJSON marshals v to a compact one-line string for an input summary,

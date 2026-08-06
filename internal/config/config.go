@@ -23,6 +23,16 @@ type Config struct {
 	// if empty.
 	AdminToken string `json:"admin_token"`
 
+	// ServerID is this bridge's stable identity. A phone pairs with several
+	// bridges and registers the SAME FCM token with each, so every push has to
+	// say which machine it came from — otherwise an alert is unattributable and
+	// its deep-link can't know which server to open. Generated on first serve.
+	ServerID string `json:"server_id"`
+
+	// ServerName is the human label for this machine ("Mac Studio"), shown as the
+	// notification title and in the app's server list. Defaults to the hostname.
+	ServerName string `json:"server_name"`
+
 	Transport Transport `json:"transport"`
 	Push      Push      `json:"push"`
 }
@@ -40,11 +50,27 @@ type Transport struct {
 
 // Push holds Firebase Cloud Messaging settings.
 type Push struct {
+	// ServiceAccountPath is tried first when resolving credentials. It is only
+	// the FIRST candidate, not the only one: if the file is absent the push
+	// package falls through to Google's Application Default Credentials search
+	// order, which is what lets a teammate authenticate with
+	// `gothalo push login` instead of being handed a copy of someone's key.
 	ServiceAccountPath string `json:"service_account_path"`
+
+	// ProjectID is the Firebase project to send to. A service-account file names
+	// its own project, so this is optional there. User credentials identify a
+	// PERSON and name no project, so on that path this is required — it is what
+	// `gothalo push login` writes into the config.
+	ProjectID string `json:"project_id"`
 }
 
 // DevicesPath is where the paired-device registry lives.
 func (c *Config) DevicesPath() string { return filepath.Join(c.DataDir, "devices.json") }
+
+// TimelinePath is where the recorded agent-activity ring is persisted. It lives
+// in DataDir with the rest of the per-install state so a restart — the moment
+// the recent past matters most — does not start from an empty history.
+func (c *Config) TimelinePath() string { return filepath.Join(c.DataDir, "timeline.json") }
 
 // Load resolves configuration. If path is empty it looks for
 // <DataDir>/config.json. Missing config file is fine (defaults apply).
@@ -91,11 +117,24 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("GOTHALO_SERVICE_ACCOUNT"); v != "" {
 		cfg.Push.ServiceAccountPath = v
 	}
+	if v := os.Getenv("GOTHALO_FCM_PROJECT"); v != "" {
+		cfg.Push.ProjectID = v
+	}
 	if v := os.Getenv("GOTHALO_ADMIN_TOKEN"); v != "" {
 		cfg.AdminToken = v
 	}
 	if v := os.Getenv("GOTHALO_PUBLIC_URL"); v != "" {
 		cfg.Transport.PublicURL = v
+	}
+	if v := os.Getenv("GOTHALO_SERVER_NAME"); v != "" {
+		cfg.ServerName = v
+	}
+	if cfg.ServerName == "" {
+		if h, err := os.Hostname(); err == nil {
+			cfg.ServerName = h
+		} else {
+			cfg.ServerName = "gothalo"
+		}
 	}
 
 	return cfg, nil
@@ -120,6 +159,25 @@ func (c *Config) EnsureAdminToken() (bool, error) {
 		return false, err
 	}
 	c.AdminToken = hex.EncodeToString(b)
+	if err := c.Save(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// EnsureServerID generates and persists a stable server id if none is set, so
+// this bridge identifies itself the same way across restarts (a phone keys its
+// paired servers, alerts and notification deep-links by it). Returns whether it
+// saved.
+func (c *Config) EnsureServerID() (bool, error) {
+	if c.ServerID != "" {
+		return false, nil
+	}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return false, err
+	}
+	c.ServerID = hex.EncodeToString(b)
 	if err := c.Save(); err != nil {
 		return false, err
 	}

@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../features/alerts/alerts_screen.dart';
+import '../features/diff/diff_screen.dart';
 import '../features/inbox/inbox_screen.dart';
 import '../features/overview/overview_screen.dart';
 import '../features/pairing/pairing_screen.dart';
@@ -9,6 +9,7 @@ import '../features/priority/priority_screen.dart';
 import '../features/servers/add_edit_server_screen.dart';
 import '../features/servers/servers_screen.dart';
 import '../features/terminal/terminal_screen.dart';
+import '../features/timeline/timeline_screen.dart';
 import '../features/transcript/transcript_screen.dart';
 
 /// App routes.
@@ -42,16 +43,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const InboxScreen(),
       ),
       GoRoute(
-        path: '/alerts',
-        builder: (context, state) => const AlertsScreen(),
-      ),
-      GoRoute(
         path: '/priority',
         builder: (context, state) => const PriorityScreen(),
       ),
       GoRoute(
         path: '/overview',
         builder: (context, state) => const OverviewScreen(),
+      ),
+      GoRoute(
+        path: '/timeline',
+        builder: (context, state) => const TimelineScreen(),
       ),
       GoRoute(
         path: '/overview/:workspace',
@@ -68,6 +69,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/transcript/:pane',
         builder: (context, state) => TranscriptScreen(
+          pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
+        ),
+      ),
+      GoRoute(
+        path: '/diff/:pane',
+        builder: (context, state) => DiffScreen(
           pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
         ),
       ),

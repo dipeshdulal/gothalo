@@ -1,0 +1,373 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../core/theme.dart';
+import '../../data/bridge/bridge_client.dart';
+import '../../data/bridge/bridge_providers.dart';
+import '../inbox/widgets/agent_avatar.dart';
+import 'agent_lifecycle_providers.dart';
+
+/// Where a new agent should be put. The bridge accepts three targeting forms
+/// and this is the app's name for them, so the sheet renders the right fields
+/// (an existing pane keeps its own directory and must not be offered one).
+enum StartAgentPlacement {
+  /// A new tab in a workspace — the "start a task in this project" case.
+  newTab,
+
+  /// A new pane split off an existing one, staying in the same tab.
+  splitPane,
+
+  /// An existing idle shell pane, reused in place.
+  existingPane,
+}
+
+/// The launch site handed to [showStartAgentSheet].
+class StartAgentTarget {
+  const StartAgentTarget({
+    required this.placement,
+    required this.id,
+    required this.where,
+    this.defaultCwd = '',
+  });
+
+  final StartAgentPlacement placement;
+
+  /// The workspace id for [StartAgentPlacement.newTab], the pane id otherwise.
+  final String id;
+
+  /// Human "where this lands", shown so a launch is never a blind action.
+  final String where;
+
+  /// Pre-filled working directory. Ignored for [StartAgentPlacement.existingPane],
+  /// which inherits its pane's shell directory.
+  final String defaultCwd;
+
+  bool get takesCwd => placement != StartAgentPlacement.existingPane;
+}
+
+/// Ask for an agent kind, a working directory and an optional opening prompt,
+/// then start it and navigate to the new agent's chat.
+///
+/// The kind list is fetched from the bridge, never assembled here — a kind that
+/// isn't installed on that host cannot be offered, because picking it would
+/// produce a 30-second startup timeout and an empty pane. A host with nothing
+/// installed gets an explanation rather than an empty picker.
+Future<void> showStartAgentSheet(
+  BuildContext context,
+  WidgetRef ref, {
+  required StartAgentTarget target,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (ctx) => Padding(
+      // Lift the sheet clear of the keyboard: both text fields are near the
+      // bottom and the prompt field is multi-line.
+      padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+      child: _StartAgentSheet(target: target),
+    ),
+  );
+}
+
+class _StartAgentSheet extends ConsumerStatefulWidget {
+  const _StartAgentSheet({required this.target});
+
+  final StartAgentTarget target;
+
+  @override
+  ConsumerState<_StartAgentSheet> createState() => _StartAgentSheetState();
+}
+
+class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
+  late final TextEditingController _cwd =
+      TextEditingController(text: widget.target.defaultCwd);
+  late final TextEditingController _prompt = TextEditingController();
+
+  String? _kind;
+  bool _starting = false;
+
+  @override
+  void dispose() {
+    _cwd.dispose();
+    _prompt.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final agents = ref.watch(availableAgentsProvider);
+
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.rocket_launch_outlined, color: scheme.primary),
+                const SizedBox(width: 10),
+                Text('Start an agent',
+                    style: Theme.of(context).textTheme.titleMedium),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.target.where,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 18),
+
+            Text('Agent', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            agents.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: LinearProgressIndicator(),
+              ),
+              error: (err, _) => _Notice(
+                icon: Icons.error_outline,
+                text: err is BridgeException
+                    ? err.message
+                    : 'Could not ask the server which agents it has.',
+              ),
+              data: (list) => list.isEmpty
+                  ? const _Notice(
+                      icon: Icons.info_outline,
+                      text: 'This server reports no installed agents. Install '
+                          'one on the host (or make sure it is on the bridge '
+                          "daemon's PATH) and pull to refresh.",
+                    )
+                  : _KindPicker(
+                      agents: list,
+                      selected: _kind,
+                      onSelect: (k) => setState(() => _kind = k),
+                    ),
+            ),
+            const SizedBox(height: 18),
+
+            if (widget.target.takesCwd) ...[
+              TextField(
+                controller: _cwd,
+                enabled: !_starting,
+                decoration: const InputDecoration(
+                  labelText: 'Working directory',
+                  hintText: '/Users/you/projects/app',
+                  helperText: 'Absolute path on the server. Checked before '
+                      'anything is started.',
+                  helperMaxLines: 2,
+                ),
+                style: const TextStyle(
+                    fontFamily: AppTheme.monoFamily, fontSize: 13),
+              ),
+            ] else
+              _Notice(
+                icon: Icons.folder_outlined,
+                text: widget.target.defaultCwd.isEmpty
+                    ? "Runs in the pane's current directory."
+                    : 'Runs in ${widget.target.defaultCwd} — the pane is '
+                        'already there.',
+              ),
+            const SizedBox(height: 16),
+
+            TextField(
+              controller: _prompt,
+              enabled: !_starting,
+              minLines: 2,
+              maxLines: 5,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'First message (optional)',
+                hintText: 'What should it work on?',
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            Row(
+              children: [
+                TextButton(
+                  onPressed:
+                      _starting ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: _kind == null || _starting ? null : _start,
+                  icon: _starting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.play_arrow_rounded),
+                  label: Text(_starting ? 'Starting…' : 'Start'),
+                ),
+              ],
+            ),
+            if (_starting) ...[
+              const SizedBox(height: 10),
+              Text(
+                'The server waits until the agent is really up — this can take '
+                'a few seconds.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _start() async {
+    final client = ref.read(bridgeClientProvider);
+    final messenger = ScaffoldMessenger.of(context);
+    // Captured before the await: on success the sheet is popped first, and
+    // navigating from an already-defunct sheet context would throw.
+    final router = GoRouter.of(context);
+    final navigator = Navigator.of(context);
+    if (client == null) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('No bridge connection.')));
+      return;
+    }
+    final cwd = _cwd.text.trim();
+    // A cheap client-side check on the one field the operator types freehand.
+    // The bridge is still the authority (it also checks the path exists and is
+    // a directory); this only saves an obviously-doomed round trip.
+    if (widget.target.takesCwd && cwd.isNotEmpty && !cwd.startsWith('/')) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Working directory must be an absolute path.')));
+      return;
+    }
+
+    setState(() => _starting = true);
+    try {
+      final result = await client.startAgent(
+        kind: _kind!,
+        paneId: widget.target.placement == StartAgentPlacement.existingPane
+            ? widget.target.id
+            : null,
+        splitFrom: widget.target.placement == StartAgentPlacement.splitPane
+            ? widget.target.id
+            : null,
+        workspaceId: widget.target.placement == StartAgentPlacement.newTab
+            ? widget.target.id
+            : null,
+        cwd: widget.target.takesCwd ? cwd : null,
+        prompt: _prompt.text.trim(),
+      );
+      if (!mounted) return;
+      navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(result.promptSent
+              ? '${result.kind} started and sent your message'
+              : '${result.kind} started'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      // Straight to the new agent's chat — the pane id came back
+      // session-qualified precisely so no lookup is needed in between.
+      router.push('/transcript/${Uri.encodeComponent(result.paneId)}');
+    } on BridgeException catch (e) {
+      if (!mounted) return;
+      // The sheet deliberately stays open: the common failures (bad path, busy
+      // pane) are ones the operator fixes in the field they are already looking
+      // at.
+      setState(() => _starting = false);
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+}
+
+/// The installed agents as selectable chips, in the order the bridge reported
+/// them (Herdr's own order), so the picker doesn't reshuffle between opens.
+class _KindPicker extends StatelessWidget {
+  const _KindPicker({
+    required this.agents,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  final List<AvailableAgent> agents;
+  final String? selected;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final chosen = agents.where((a) => a.kind == selected).firstOrNull;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final a in agents)
+              ChoiceChip(
+                selected: a.kind == selected,
+                onSelected: (_) => onSelect(a.kind),
+                avatar: AgentAvatar(agent: a.kind, radius: 11),
+                label: Text(a.kind),
+              ),
+          ],
+        ),
+        // Only surfaced once a kind is chosen, and only when it matters: an
+        // agent Herdr has no detection manifest for will run but can never be
+        // reported idle/working/blocked, so it will sit at "unknown" forever and
+        // never raise an approval push. Better said before the launch.
+        if (chosen != null && !chosen.stateReporting) ...[
+          const SizedBox(height: 10),
+          _Notice(
+            icon: Icons.warning_amber_rounded,
+            color: scheme.error,
+            text: '${chosen.kind} runs, but this server cannot read its '
+                'status — it will show as unknown and will not notify you when '
+                'it needs input.',
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// A muted icon+text line for the sheet's inline explanations.
+class _Notice extends StatelessWidget {
+  const _Notice({required this.icon, required this.text, this.color});
+
+  final IconData icon;
+  final String text;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.onSurfaceVariant;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: tint),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: tint, height: 1.35),
+          ),
+        ),
+      ],
+    );
+  }
+}

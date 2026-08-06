@@ -1,6 +1,7 @@
 package herdr
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func TestForwardsGlobalEventSessionTagged(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane_focused", samplerPaneFocused))
+	ing.handle(context.Background(), msg("pane_focused", samplerPaneFocused))
 
 	e := collect(t, sub, 1)[0]
 	if e.Source != events.SourceHerdr || e.Type != events.TypePaneFocused {
@@ -77,7 +78,7 @@ func TestForwardsGlobalEventQualifiedForNamedSession(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(NewForSession("acme"), bus)
 
-	ing.handle(msg("pane_focused", samplerPaneFocused))
+	ing.handle(context.Background(), msg("pane_focused", samplerPaneFocused))
 
 	e := collect(t, sub, 1)[0]
 	var p struct {
@@ -98,7 +99,7 @@ func TestPaneUpdatedForwardsAndDerivesStatus(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane_updated", samplerPaneUpdatedAgent))
+	ing.handle(context.Background(), msg("pane_updated", samplerPaneUpdatedAgent))
 
 	got := collect(t, sub, 2)
 	if got[0].Type != events.TypePaneUpdated || got[0].Source != events.SourceHerdr {
@@ -126,7 +127,7 @@ func TestDottedAgentStatusSynthesizedNotForwarded(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane.agent_status_changed", samplerDottedAgentStatus))
+	ing.handle(context.Background(), msg("pane.agent_status_changed", samplerDottedAgentStatus))
 
 	e := collect(t, sub, 1)[0]
 	if e.Type != events.TypePaneAgentStatusChanged || e.Source != events.SourceHerdr {
@@ -149,9 +150,9 @@ func TestAgentStatusDedup(t *testing.T) {
 	ing := NewIngester(New(), bus)
 
 	// Same status arriving from two different signals collapses to one emit.
-	ing.emitAgentStatus("wN:pB", "wN", "claude", "working")
-	ing.emitAgentStatus("wN:pB", "wN", "claude", "working")
-	ing.emitAgentStatus("wN:pB", "wN", "claude", "blocked") // real change
+	ing.emitAgentStatus("wN:pB", "wN", "claude", "working", "Fix the parser")
+	ing.emitAgentStatus("wN:pB", "wN", "claude", "working", "Fix the parser")
+	ing.emitAgentStatus("wN:pB", "wN", "claude", "blocked", "Fix the parser") // real change
 
 	got := collect(t, sub, 2)
 	if got[0].Type != events.TypePaneAgentStatusChanged || got[1].Type != events.TypePaneAgentStatusChanged {
@@ -173,7 +174,7 @@ func TestPaneAgentDetectedDerivesStatus(t *testing.T) {
 	defer sub.Close()
 	ing := NewIngester(New(), bus)
 
-	ing.handle(msg("pane_agent_detected", samplerPaneAgentDetected))
+	ing.handle(context.Background(), msg("pane_agent_detected", samplerPaneAgentDetected))
 
 	got := collect(t, sub, 2) // verbatim + derived
 	if got[0].Type != events.TypePaneAgentDetected {
@@ -181,5 +182,135 @@ func TestPaneAgentDetectedDerivesStatus(t *testing.T) {
 	}
 	if got[1].Type != events.TypePaneAgentStatusChanged {
 		t.Errorf("second = %s, want pane_agent_status_changed", got[1].Type)
+	}
+}
+
+// ingesterWith builds an Ingester whose published-status baseline is `seen`.
+func ingesterWith(seen map[string]string) *Ingester {
+	i := NewIngester(nil, events.New())
+	for pane, status := range seen {
+		i.lastStatus[pane] = status
+	}
+	return i
+}
+
+// TestLivenessProbeAgreementIsNotStale: while what we published matches Herdr,
+// the subscription is delivering and must be left alone. Silence on its own is
+// NOT evidence of trouble — an idle Herdr is legitimately quiet for long
+// stretches, and reconnecting on quiet would churn the socket on any machine
+// nobody is using.
+func TestLivenessProbeAgreementIsNotStale(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle", "wN:p2": "working"})
+
+	agents := []Agent{
+		{PaneID: "wN:p1", Status: "idle"},
+		{PaneID: "wN:p2", Status: "working"},
+	}
+	if i.staleAgainst(agents) {
+		t.Error("agreement reported as stale; a quiet subscription would be reconnected in a loop")
+	}
+	// No agents at all is agreement too, not a reason to reconnect.
+	if i.staleAgainst(nil) {
+		t.Error("an empty agent list reported as stale")
+	}
+}
+
+// TestLivenessProbeDetectsMissedTransition is the failure this exists for: the
+// subscription reported success and then delivered nothing, so Herdr moved on
+// while our published view stayed frozen.
+func TestLivenessProbeDetectsMissedTransition(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	agents := []Agent{{PaneID: "wN:p1", Status: "blocked"}}
+	if !i.staleAgainst(agents) {
+		t.Error("a status Herdr changed without telling us was not detected")
+	}
+}
+
+// TestLivenessProbeDetectsUnseenPane: a pane Herdr knows about that we never
+// published means its pane_created/agent_detected never arrived.
+func TestLivenessProbeDetectsUnseenPane(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	agents := []Agent{
+		{PaneID: "wN:p1", Status: "idle"},
+		{PaneID: "wN:p9", Status: "idle"}, // never seen
+	}
+	if !i.staleAgainst(agents) {
+		t.Error("an agent pane we never published was not detected")
+	}
+}
+
+// TestLivenessProbeIgnoresClosedPanes: our baseline may still hold panes Herdr
+// has dropped. That is not evidence of a dead subscription — the close event may
+// simply be what we are about to receive — and must not force a reconnect.
+func TestLivenessProbeIgnoresClosedPanes(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle", "wN:pGone": "working"})
+
+	agents := []Agent{{PaneID: "wN:p1", Status: "idle"}}
+	if i.staleAgainst(agents) {
+		t.Error("a pane missing from Herdr's list reported as stale")
+	}
+}
+
+// TestLivenessProbeIgnoresDriftWhileEventsFlow is the regression test for a
+// false positive that resubscribed the socket every 60 seconds in production.
+//
+// The snapshot and the event stream are sampled at different instants, so an
+// agent that is actively working differs between them almost constantly.
+// Treating that as proof of a dead subscription made a BUSY machine — the exact
+// case the ingester exists for — tear its socket down in a loop. Disagreement
+// only counts once the socket has also gone quiet.
+func TestLivenessProbeIgnoresDriftWhileEventsFlow(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+	i.sawEvent() // something arrived just now
+
+	// Herdr has moved on, and we disagree — but events are still flowing.
+	if i.silentFor(probeSilence) {
+		t.Fatal("a socket that just delivered is reported as silent")
+	}
+	if i.stale() {
+		t.Error("drift treated as a dead subscription while events are arriving")
+	}
+}
+
+// TestLivenessProbeNeedsSilence: the silence gate is what makes drift meaningful.
+func TestLivenessProbeNeedsSilence(t *testing.T) {
+	i := ingesterWith(map[string]string{"wN:p1": "idle"})
+
+	i.sawEvent()
+	if i.silentFor(time.Millisecond * 50) {
+		t.Error("reported silent immediately after an event")
+	}
+
+	i.mu.Lock()
+	i.lastEventAt = time.Now().Add(-2 * probeSilence)
+	i.mu.Unlock()
+	if !i.silentFor(probeSilence) {
+		t.Error("a socket quiet for twice the window is not reported silent")
+	}
+}
+
+// TestAgentStatusCarriesTitle: a status envelope has to name the pane a person
+// would recognise. "claude" is a KIND — a host running a dozen Claudes produces
+// a dozen rows that all read the same, which is exactly when a log or an inbox
+// stops being usable. Herdr sends the title on the event; it just was not read.
+func TestAgentStatusCarriesTitle(t *testing.T) {
+	bus := events.New()
+	sub := bus.Subscribe(4)
+	defer sub.Close()
+	ing := NewIngester(New(), bus)
+
+	ing.emitAgentStatus("wN:pC", "wN", "claude", "blocked", "Evaluate MLX model speedup")
+
+	got := collect(t, sub, 1)
+	var p struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(got[0].Payload, &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if p.Title != "Evaluate MLX model speedup" {
+		t.Errorf("title = %q, want the pane's human name", p.Title)
 	}
 }

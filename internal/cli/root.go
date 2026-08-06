@@ -1,10 +1,10 @@
-// Package cli wires the gothalo cobra command tree (serve / pair / devices).
+// Package cli wires the gothalo cobra command tree (serve / pair / devices /
+// push).
 package cli
 
 import (
 	"fmt"
 	"os"
-	"runtime"
 
 	"github.com/spf13/cobra"
 )
@@ -26,21 +26,10 @@ func newRootCmd(b BuildInfo) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.SetVersionTemplate("gothalo {{.Version}}\n")
-	root.AddCommand(newServeCmd(), newPairCmd(), newDevicesCmd(), newVersionCmd(b))
+	root.AddCommand(
+		newServeCmd(), newPairCmd(), newDevicesCmd(), newPushCmd(), newVersionCmd(b),
+	)
 	return root
-}
-
-func newVersionCmd(b BuildInfo) *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version, commit, and build date",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("gothalo %s\n", b.Version)
-			fmt.Printf("  commit: %s\n", b.Commit)
-			fmt.Printf("  built:  %s\n", b.Date)
-			fmt.Printf("  go:     %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
-		},
-	}
 }
 
 // Execute runs the root command and exits non-zero on error.

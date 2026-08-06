@@ -1,24 +1,35 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/agent_age.dart';
+import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import 'quick_commands_providers.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
 enum _Conn { connecting, connected, disconnected, closed, failed }
+
+/// The destructive per-agent actions in the chat's overflow menu.
+enum _AgentLifecycleAction { restart, stop }
 
 /// The chat view for an agent pane — a phone-native rendering of the agent's
 /// conversation over `WS /agent-transcript`.
@@ -44,12 +55,18 @@ class TranscriptScreen extends ConsumerStatefulWidget {
 class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
+  final ImagePicker _picker = ImagePicker();
 
   BridgeClient? _client;
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _reconnectTimer;
   int _attempts = 0;
+
+  /// How many failed handshakes to sit behind the spinner before saying so.
+  /// Reconnect backoff is 1s, 2s, 3s…, so this surfaces after ~15s of silence
+  /// rather than spinning indefinitely on an error we cannot classify.
+  static const _maxSilentAttempts = 5;
   bool _disposed = false;
   _Conn _conn = _Conn.connecting;
 
@@ -104,10 +121,40 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// invisible; each is dropped when its matching user message arrives.
   final List<String> _pending = [];
 
+  /// Image-attach state. [_uploadSent]/[_uploadTotal] drive a determinate bar:
+  /// a phone pushing megabytes over a tailnet is slow enough that a spinner
+  /// with no numbers is indistinguishable from a hang, which is the one thing
+  /// this must not look like. [_uploadError] latches a failure in place until
+  /// the user dismisses or retries — a snackbar disappears while they're still
+  /// deciding whether the upload is worth another try.
+  bool _uploading = false;
+  int _uploadSent = 0;
+  int _uploadTotal = 0;
+  String? _uploadError;
+
+  /// Whether the agent is still blocked, as a listenable the options sheet can
+  /// follow.
+  ///
+  /// The sheet is a separate Navigator route, so it does not rebuild when this
+  /// screen does. Without this it kept offering choices for a block that had
+  /// already been answered elsewhere — from the desktop, the tray, or another
+  /// device — because the only thing that ever removed it was the user tapping
+  /// something. The card behind it vanished on the very same state change; the
+  /// sheet in front of it did not.
+  final ValueNotifier<bool> _blocked = ValueNotifier(false);
+
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+  }
+
+  /// Publish the live blocked-ness to anything following it. Called from every
+  /// path that assigns [_agentState], so a resolution reaches the sheet no
+  /// matter which one observed it.
+  void _publishBlocked() {
+    final s = _agentState;
+    _blocked.value = s != null && s.isBlocked;
   }
 
   @override
@@ -119,6 +166,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _agentStateTimer?.cancel();
     _scroll.dispose();
     _composer.dispose();
+    _blocked.dispose();
     super.dispose();
   }
 
@@ -170,11 +218,21 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     final client = _client;
     if (client == null || _disposed) return;
     try {
+      // All this screen needs from the card is the live status and the blocked
+      // prompt, both of which come from the pane's current screen. The agent's
+      // actual history arrives over /agent-transcript, so the card never asks
+      // for scrollback (see BridgeClient.getAgentState).
       final s = await client.getAgentState(widget.pane);
-      if (mounted) setState(() => _agentState = s);
+      if (mounted) {
+        setState(() => _agentState = s);
+        _publishBlocked();
+      }
     } catch (_) {
       // Non-agent / gone / transient — no bar.
-      if (mounted && _agentState != null) setState(() => _agentState = null);
+      if (mounted && _agentState != null) {
+        setState(() => _agentState = null);
+        _publishBlocked();
+      }
     }
   }
 
@@ -188,21 +246,21 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       await _pollAgentState();
     } on BridgeException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
   /// A short, readable label for a permission mode; unknown values pass through.
   String _modeLabel(String m) => switch (m) {
-        'default' => 'manual',
-        'acceptEdits' => 'accept edits',
-        'plan' => 'plan',
-        'auto' => 'auto',
-        'bypassPermissions' => 'bypass',
-        _ => m,
-      };
+    'default' => 'manual',
+    'acceptEdits' => 'accept edits',
+    'plan' => 'plan',
+    'auto' => 'auto',
+    'bypassPermissions' => 'bypass',
+    _ => m,
+  };
 
   /// Approve the highlighted default via idempotent `POST /approve {agent, seq}`
   /// (the bridge picks the confirm key and no-ops a stale seq). The seq comes
@@ -213,7 +271,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (client == null) return;
     final agents =
         ref.read(snapshotControllerProvider).asData?.value.agents ??
-            const <Agent>[];
+        const <Agent>[];
     var seq = 0;
     for (final a in agents) {
       if (a.paneId == widget.pane) {
@@ -222,12 +280,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
     setState(() => _agentState = null);
+    _publishBlocked();
     try {
       final res = await client.approve(widget.pane, seq);
       if (!res.applied && res.reason != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res.reason!)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(res.reason!)));
       }
     } catch (e) {
       if (!mounted) return;
@@ -248,6 +307,160 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _client?.sendText(widget.pane, '${opt.index}\n');
     }
     setState(() => _agentState = null);
+    _publishBlocked();
+  }
+
+  /// Send a free-form answer typed in the options sheet. Same wire path as the
+  /// composer (trailing `\r` so the bridge submits it as a real Enter) and the
+  /// same optimistic echo, so a typed answer appears immediately whichever
+  /// surface it came from. Clears the card like picking an option does.
+  void _sendAnswer(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    setState(() {
+      _pending.add(trimmed);
+      _pinnedToBottom = true;
+      _agentState = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    _client?.sendText(widget.pane, '$trimmed\r').catchError((Object e) {
+      if (!mounted) return;
+      setState(() => _pending.remove(trimmed));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is BridgeException ? e.message : '$e')),
+      );
+    });
+  }
+
+  /// Fire a quick command: a keyed one sends its raw keystroke (e.g. Esc to
+  /// interrupt); a text one submits like a composer message (a trailing `\n`
+  /// so the bridge turns it into a real Enter, same as the composer itself).
+  void _handleQuickCommand(QuickCommand cmd) {
+    if (cmd.key != null) {
+      _client?.sendKey(widget.pane, cmd.key!);
+    } else {
+      _client?.sendText(widget.pane, '${cmd.text}\n');
+    }
+  }
+
+  /// Attach a screenshot or photo to the prompt: pick it, upload it to the
+  /// bridge, and drop the path the bridge wrote into the composer.
+  ///
+  /// The path IS the attachment. Coding agents read an image when handed a file
+  /// path, so once the bytes are inside the agent's own working directory (the
+  /// bridge's `POST /image` puts them there — see docs/CONTRACT-image.md) there
+  /// is nothing further to negotiate: the agent just needs to be told where.
+  ///
+  /// **It deliberately does not send.** The whole point is a prompt with words
+  /// around the image — "why is this button misaligned?" — so the path lands in
+  /// the composer, the keyboard comes up, and the user writes the rest.
+  Future<void> _attachImage(ImageSource source) async {
+    final client = _client;
+    if (client == null || _uploading) return;
+
+    final XFile? picked;
+    try {
+      picked = await _picker.pickImage(source: source);
+    } on PlatformException catch (e) {
+      // Denied permission, or no camera. The plugin's own message names which.
+      if (mounted) setState(() => _uploadError = e.message ?? 'Could not open the picker.');
+      return;
+    }
+    if (picked == null || !mounted) return; // cancelled
+
+    final bytes = await picked.readAsBytes();
+    if (!mounted) return;
+    setState(() {
+      _uploading = true;
+      _uploadSent = 0;
+      _uploadTotal = bytes.length;
+      _uploadError = null;
+    });
+
+    try {
+      final drop = await client.uploadImage(
+        widget.pane,
+        bytes,
+        onProgress: (sent, total) {
+          if (!mounted) return;
+          setState(() {
+            _uploadSent = sent;
+            // A chunked send reports total as -1; keep the byte count we
+            // measured rather than letting the bar go indeterminate mid-upload.
+            if (total > 0) _uploadTotal = total;
+          });
+        },
+      );
+      if (!mounted) return;
+      setState(() => _uploading = false);
+      _insertIntoComposer(drop.path);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _uploading = false;
+        _uploadError = e is BridgeException ? e.message : '$e';
+      });
+    }
+  }
+
+  /// Ask where the image comes from. Two sources, because the two real uses are
+  /// different: a screenshot already in the camera roll ("this screen is
+  /// wrong"), and something in front of you right now (a whiteboard, a monitor,
+  /// a device showing the bug).
+  Future<void> _pickImageSource() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Photo library'),
+              subtitle: const Text('A screenshot you already took'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Camera'),
+              subtitle: const Text('Shoot a screen or whiteboard'),
+              onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source != null) await _attachImage(source);
+  }
+
+  /// Insert [text] at the composer's cursor, leaving the caret after it so the
+  /// user can keep typing.
+  ///
+  /// Spacing is fixed up rather than assumed: appended straight onto an existing
+  /// word the path would fuse into it and the agent would be handed a filename
+  /// that doesn't exist. A path containing whitespace is quoted for the same
+  /// reason — an agent reading a bare path stops at the first space.
+  void _insertIntoComposer(String text) {
+    final quoted = text.contains(RegExp(r'\s')) ? '"$text"' : text;
+    final value = _composer.value;
+    final base = value.text;
+    // A field that has never been focused reports an invalid (-1) selection;
+    // that means "no cursor yet", so append.
+    final sel = value.selection;
+    final start = sel.isValid ? sel.start : base.length;
+    final end = sel.isValid ? sel.end : base.length;
+
+    final prefix = base.substring(0, start);
+    final suffix = base.substring(end);
+    final lead = prefix.isEmpty || prefix.endsWith(' ') || prefix.endsWith('\n')
+        ? ''
+        : ' ';
+    final insert = '$lead$quoted ';
+
+    _composer.value = TextEditingValue(
+      text: '$prefix$insert$suffix',
+      selection: TextSelection.collapsed(offset: prefix.length + insert.length),
+    );
   }
 
   /// The command / file context being approved — pulled from the most recent
@@ -257,7 +470,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     for (final e in _ordered.reversed) {
       if (e.kind != EntryKind.toolCall || e.tool == null) continue;
       final t = e.tool!;
-      if (_resultsByForId[t.id] != null) break; // resolved → not the pending one
+      if (_resultsByForId[t.id] != null) {
+        break; // resolved → not the pending one
+      }
       final ctx = _firstText([t.command, t.file, t.inputSummary, t.title]);
       if (ctx != null) return ctx;
       break;
@@ -281,9 +496,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         return _ApprovalCard(
           state: s,
           options: opts,
+          blocked: _blocked,
           contextLine: _approvalContext(),
           onApprove: _approveDefault,
           onOption: _handleOption,
+          onFreeText: _sendAnswer,
         );
       }
     }
@@ -303,6 +520,46 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       path: '/agent-transcript',
       queryParameters: {'pane': widget.pane, 'token': c.bearer},
     );
+  }
+
+  /// Ask the bridge, over plain HTTP, why the WebSocket handshake keeps being
+  /// rejected — and return its own explanation.
+  ///
+  /// Dart's WebSocket client reports a rejected upgrade as a bare "not upgraded
+  /// to websocket" with no status and no body, so the reason the bridge sent is
+  /// unreachable from the handshake (see [_permanentFailureMessage]). The same
+  /// URL fetched without an Upgrade header answers with the real status and a
+  /// sentence saying what is wrong, because the endpoint deliberately fails
+  /// BEFORE upgrading.
+  ///
+  /// Worth the extra round trip only once retries are exhausted. Guessing
+  /// instead — the previous behaviour — told operators their agent kind "may not
+  /// support a chat view" when the truth was that the agent was sitting on a
+  /// trust prompt and had not reported its session id yet, which sends them to
+  /// debug entirely the wrong thing.
+  Future<String?> _serverFailureReason(Connection c) async {
+    try {
+      final ws = _transcriptUri(c);
+      final probe = ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http');
+      final res = await Dio().getUri<String>(
+        probe,
+        options: Options(
+          responseType: ResponseType.plain,
+          receiveTimeout: const Duration(seconds: 5),
+          // The interesting answers ARE the error statuses, so don't throw on
+          // them.
+          validateStatus: (_) => true,
+        ),
+      );
+      final body = (res.data ?? '').trim();
+      if (body.isEmpty || body.length > 300) return null;
+      // Go's default mux 404 explains nothing; only pass on a message the
+      // endpoint actually wrote.
+      if (body.toLowerCase() == '404 page not found') return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _connect() async {
@@ -448,7 +705,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     bool gone = false;
     try {
       final snap = await client.getSnapshot();
-      gone = !snap.panes.any((p) => p.paneId == widget.pane) &&
+      gone =
+          !snap.panes.any((p) => p.paneId == widget.pane) &&
           !snap.agents.any((a) => a.paneId == widget.pane);
     } catch (_) {
       gone = false; // couldn't check → treat as transient, keep retrying
@@ -459,6 +717,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       _reconnectTimer?.cancel();
       if (mounted) setState(() => _conn = _Conn.closed);
       return;
+    }
+
+    // Retries are exhausted and the pane still exists, so the bridge is
+    // refusing this transcript for a reason it can state. Ask it rather than
+    // guess — see _serverFailureReason.
+    if (_attempts >= _maxSilentAttempts && _failure == null) {
+      final reason = await _serverFailureReason(client.connection);
+      if (_disposed) return;
+      if (reason != null) {
+        _reconnectTimer?.cancel();
+        if (mounted) setState(() => _failure = reason);
+        return;
+      }
     }
 
     final delay = Duration(seconds: _attempts.clamp(1, 8));
@@ -507,21 +778,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       return;
     }
     _loadingOlder = true;
-    channel.sink.add(jsonEncode({
-      'type': 'load_older',
-      'before_seq': _oldestSeq,
-      'limit': 150,
-    }));
+    channel.sink.add(
+      jsonEncode({
+        'type': 'load_older',
+        'before_seq': _oldestSeq,
+        'limit': 150,
+      }),
+    );
     if (mounted) setState(() {}); // show the top loader
   }
 
   /// Keep the view pinned to the newest entry unless the user scrolled up.
   void _maybeAutoScroll() {
-    if (!_pinnedToBottom) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
-    });
+    if (!_pinnedToBottom || _settling) return;
+    // Delegate to the same settler the initial backlog uses instead of a single
+    // blind jump: on this lazily-built, center-anchored list maxScrollExtent is
+    // only an estimate until off-screen rows lay out, so one jump undershoots
+    // and the next frame jumps again — which, on a fast-streaming agent, reads
+    // as the view "blinking"/jittering. The settler only jumps when actually
+    // off the bottom and re-checks across a few frames until it settles; the
+    // _settling guard coalesces bursts of frames into one settle sequence.
+    _settleToBottom(tries: 3);
   }
 
   /// Reliably land on the newest entry after the initial backlog. The list is
@@ -565,6 +842,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   @override
   Widget build(BuildContext context) {
     // Connect once a bridge client resolves, and re-target if it changes.
+    // bridgeClientProvider yields null while the active connection is being
+    // resolved, so this never adopts a client for the wrong server.
     final client = ref.watch(bridgeClientProvider);
     if (client != null && !identical(client, _client)) {
       _client = client;
@@ -590,11 +869,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        titleSpacing: 12,
-        title: _TranscriptTitle(
+        title: PaneTitle(
           title: agent?.displayTitle ?? widget.pane,
           subtitle: [
+            // Age FIRST: the subtitle ellipsises, and this is the part that
+            // decides whether you act. Trailing it behind the branch and kind
+            // meant it was the first thing cut off on a long branch name.
+            //
+            // Reading a slow conversation without it, there is no way to tell a
+            // turn that just started from one that stalled twenty minutes ago.
+            if (agent?.sinceLastActivity case final age?)
+              '${agent!.agentStatus.name} ${formatAgentAge(age)}',
             if (agent != null) agent.gitLabel,
             if (agent != null) agent.agent,
           ].where((s) => s.isNotEmpty).join(' · '),
@@ -618,6 +905,47 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             tooltip: 'Jump to an agent',
             onPressed: () => showJumpSheet(context, currentPane: widget.pane),
             icon: const Icon(Icons.bolt),
+          ),
+          IconButton(
+            tooltip: 'Changes',
+            onPressed: () =>
+                context.push('/diff/${Uri.encodeComponent(widget.pane)}'),
+            icon: const Icon(Icons.difference_outlined),
+          ),
+          // Lifecycle lives in an overflow, not as bar buttons: these two kill
+          // running work, and a one-tap target next to "Changes" is exactly the
+          // wrong affordance for that. Both confirm before acting.
+          PopupMenuButton<_AgentLifecycleAction>(
+            tooltip: 'Agent actions',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) {
+              final kind = agent?.agent ?? 'agent';
+              switch (action) {
+                case _AgentLifecycleAction.restart:
+                  restartAgent(context, ref, widget.pane, kind: kind);
+                case _AgentLifecycleAction.stop:
+                  stopAgent(context, ref, widget.pane, kind: kind);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: _AgentLifecycleAction.restart,
+                child: ListTile(
+                  leading: Icon(Icons.restart_alt),
+                  title: Text('Restart agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _AgentLifecycleAction.stop,
+                child: ListTile(
+                  leading: Icon(Icons.stop_circle_outlined,
+                      color: Theme.of(ctx).colorScheme.error),
+                  title: const Text('Stop agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -644,18 +972,35 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Real approval → an actionable card; just-waiting → a soft cue;
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
-            // The permission-mode switcher and raw-terminal jump live down here
-            // with the composer, not the app bar — they're actions about *how
-            // you're about to talk to the agent*, so grouping them with the input
-            // reads better than a cluttered header.
-            _ComposerToolbar(
+            // Directly above the toolbar that started the upload, so progress
+            // and the button that caused it read as one thing.
+            if (_uploading || _uploadError != null)
+              _UploadStatus(
+                uploading: _uploading,
+                sent: _uploadSent,
+                total: _uploadTotal,
+                error: _uploadError,
+                onDismiss: () => setState(() => _uploadError = null),
+              ),
+            // Everything about *how* you're talking to the agent (attach an
+            // image, mode, quick commands, raw terminal) lives down here with
+            // the composer as ONE scrollable chip row, not the app bar — a
+            // cluttered header, and a fragmented "chip pinned left / icon
+            // pinned right / second row below" layout, both read worse than
+            // one consistent strip.
+            _ComposerActionsRow(
               modeLabel: _agentState?.permissionMode != null
                   ? _modeLabel(_agentState!.permissionMode!)
                   : null,
               onCycleMode: _cycleMode,
-              onOpenTerminal: () => context.push(
-                '/terminal/${Uri.encodeComponent(widget.pane)}',
-              ),
+              onOpenTerminal: () =>
+                  context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
+              onQuickCommand: _handleQuickCommand,
+              onAttachImage: _uploading ? null : _pickImageSource,
+              enabled:
+                  _conn != _Conn.closed &&
+                  _conn != _Conn.failed &&
+                  _failure == null,
             ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
@@ -665,7 +1010,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               hintText: _agentState?.isBlocked == true
                   ? 'Type a number, or your own reply…'
                   : null,
-              enabled: _conn != _Conn.closed &&
+              enabled:
+                  _conn != _Conn.closed &&
                   _conn != _Conn.failed &&
                   _failure == null,
             ),
@@ -697,13 +1043,33 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       );
     }
     if (!_backlogComplete) {
+      // Give up spinning after a few failed handshakes. Dart's WebSocket client
+      // reports a rejected upgrade as a bare "not upgraded to websocket" with no
+      // HTTP status, so _permanentFailureMessage cannot recognise a 404 and the
+      // reconnect loop would otherwise sit behind this spinner forever.
+      if (_attempts >= _maxSilentAttempts) {
+        return _CenteredNotice(
+          icon: Icons.chat_bubble_outline,
+          title: 'Transcript unavailable',
+          message:
+              'Could not open a transcript for this pane after several tries. '
+              'This agent kind may not support a chat view yet — open the raw '
+              'terminal instead.',
+          onTerminal: () =>
+              context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
     if (_ordered.isEmpty) {
+      // A connected socket with an empty backlog means the agent is live but
+      // hasn't spoken — a brand-new pane, before its first message. The tail is
+      // running, so anything typed below appears here without reconnecting.
       return const _CenteredNotice(
         icon: Icons.chat_bubble_outline,
-        title: 'Nothing here yet',
-        message: 'No conversation entries for this pane.',
+        title: 'No messages yet',
+        message: 'This agent hasn\'t said anything so far. '
+            'Send it a prompt below to get started.',
       );
     }
 
@@ -786,7 +1152,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
 
+    DateTime? prevAt;
+    var prevWasTool = false;
     for (final e in entries) {
+      // A pause before an ASSISTANT entry is the agent working — the thing you
+      // want to see when a turn felt slow. A pause before a USER entry is you
+      // being away from your phone, which is not news and would otherwise
+      // litter the transcript with hours-long "gaps" every night.
+      final at = e.at;
+      if (at != null && prevAt != null && e.role == EntryRole.assistant) {
+        final gap = at.difference(prevAt);
+        if (gap >= _minShownGap) {
+          flush();
+          // A gap that follows a tool call is mostly the TOOL running, not the
+          // model thinking. Calling that "thought" overstates it, so the label
+          // only claims thinking when the pause really was the agent's own.
+          blocks.add(_GapBlock(gap, afterTool: prevWasTool));
+        }
+      }
+      if (at != null) prevAt = at;
+      prevWasTool = e.kind == EntryKind.toolCall || e.kind == EntryKind.toolResult;
+
       if (e.kind == EntryKind.toolCall) {
         (run ??= <TranscriptEntry>[]).add(e);
       } else {
@@ -799,12 +1185,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   }
 
   Widget _blockWidget(_Block block) => switch (block) {
-        _EntryBlock(:final entry) => _EntryTile(entry: entry),
-        _ToolGroupBlock(:final calls) => _ToolLedger(
-            calls: calls,
-            resultFor: (id) => _resultsByForId[id],
-          ),
-      };
+    _EntryBlock(:final entry) => _EntryTile(entry: entry),
+    _GapBlock(:final gap, :final afterTool) => _GapLine(
+      gap: gap,
+      afterTool: afterTool,
+    ),
+    _ToolGroupBlock(:final calls) => _ToolLedger(
+      calls: calls,
+      resultFor: (id) => _resultsByForId[id],
+    ),
+  };
 }
 
 /// A unit of the rendered transcript: either a standalone entry or a grouped
@@ -821,6 +1211,67 @@ class _EntryBlock extends _Block {
 class _ToolGroupBlock extends _Block {
   const _ToolGroupBlock(this.calls);
   final List<TranscriptEntry> calls;
+}
+
+/// A pause the AGENT spent working, rendered between the entries it separates.
+class _GapBlock extends _Block {
+  const _GapBlock(this.gap, {this.afterTool = false});
+  final Duration gap;
+
+  /// The pause followed a tool call, so most of it was the tool running.
+  final bool afterTool;
+}
+
+/// The shortest pause worth drawing.
+///
+/// A minute, not a few seconds. The first attempt used 10s and marked almost
+/// every tool call — "took 14s", "took 17s", "took 37s" down the whole
+/// transcript. All true, none of it useful: nothing you would do differently,
+/// and enough of it to bury the one pause that mattered.
+///
+/// The bar is whether you would have NOTICED the wait. Under a minute you would
+/// not, so the marker earns nothing and costs a row.
+const _minShownGap = Duration(minutes: 1);
+
+/// The time between two entries, drawn as a quiet timeline marker.
+///
+/// It answers a question the transcript otherwise hides: a long turn looks
+/// identical to a fast one once it is on screen, so there is no way to tell
+/// where the time went when a session felt slow.
+///
+/// Deliberately centred and low-contrast rather than left-aligned with an icon.
+/// The first attempt sat at the left margin with a "⋯" glyph, which read as a
+/// typing indicator or a failed message — it competed with the conversation
+/// instead of annotating it. Metadata should recede; centring it also matches
+/// the day separators, so it is legible as "a marker, not a message".
+class _GapLine extends StatelessWidget {
+  const _GapLine({required this.gap, this.afterTool = false});
+
+  final Duration gap;
+
+  /// The pause followed a tool call, so most of it was the tool running.
+  final bool afterTool;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Center(
+        child: Text(
+          afterTool
+              ? 'took ${formatAgentAge(gap)}'
+              : 'thought ${formatAgentAge(gap)}',
+          style: TextStyle(
+            fontSize: 10.5,
+            letterSpacing: 0.3,
+            fontWeight: FontWeight.w500,
+            color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// First non-blank string in [xs] (trimmed), or null.
@@ -842,13 +1293,24 @@ class _ApprovalCard extends StatelessWidget {
   const _ApprovalCard({
     required this.state,
     required this.options,
+    required this.onFreeText,
     required this.contextLine,
     required this.onApprove,
     required this.onOption,
+    required this.blocked,
   });
 
   final AgentState state;
   final List<BlockedOption> options;
+
+  /// Live blocked-ness, handed to the options sheet so it can close itself when
+  /// the block is answered somewhere else.
+  final ValueListenable<bool> blocked;
+
+  /// Sends a free-form answer typed in the options sheet. Needed because a menu
+  /// can itself offer "Other (type your answer)" — Hermes's clarify panel does —
+  /// so the sheet must reach the keyboard without the composer underneath it.
+  final void Function(String) onFreeText;
   final String? contextLine;
   final VoidCallback onApprove;
   final void Function(BlockedOption) onOption;
@@ -859,26 +1321,25 @@ class _ApprovalCard extends StatelessWidget {
     final severity = state.blockSeverity;
     final (Color bg, Color accent, IconData icon) = switch (severity) {
       BlockSeverity.danger => (
-          scheme.errorContainer.withValues(alpha: 0.55),
-          scheme.error,
-          Icons.lock_outline,
-        ),
+        scheme.errorContainer.withValues(alpha: 0.55),
+        scheme.error,
+        Icons.lock_outline,
+      ),
       BlockSeverity.permission => (
-          scheme.errorContainer.withValues(alpha: 0.3),
-          scheme.error,
-          Icons.lock_outline,
-        ),
+        scheme.errorContainer.withValues(alpha: 0.3),
+        scheme.error,
+        Icons.lock_outline,
+      ),
       BlockSeverity.question => (
-          scheme.surfaceContainerHighest.withValues(alpha: 0.7),
-          scheme.primary,
-          Icons.forum_outlined,
-        ),
+        scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        scheme.primary,
+        Icons.forum_outlined,
+      ),
     };
     final categoryLabel = state.blockedCategoryLabel;
     final question = (state.blockedQuestion?.trim().isNotEmpty ?? false)
         ? state.blockedQuestion!.trim()
         : (state.headline.isNotEmpty ? state.headline : 'Approve?');
-    final hasSelected = options.any((o) => o.selected);
 
     return Container(
       width: double.infinity,
@@ -942,22 +1403,26 @@ class _ApprovalCard extends StatelessWidget {
           ],
           if (options.isNotEmpty) ...[
             const SizedBox(height: 10),
-            for (var i = 0; i < options.length; i++) ...[
-              if (i > 0) const SizedBox(height: 6),
-              _OptionRow(
-                option: options[i],
-                primary: options[i].selected || (!hasSelected && i == 0),
+            // The choices live in a sheet rather than inline. Inline, this card
+            // was unbounded in the body Column alongside the composer, so a
+            // prompt with several options plus an open keyboard overflowed the
+            // viewport (Hermes's clarify panel offers five). The sheet sizes and
+            // scrolls itself, so the card's height no longer depends on how many
+            // choices an agent happens to offer.
+            _OpenOptionsButton(
+              count: options.length,
+              danger: severity == BlockSeverity.danger,
+              onTap: () => showBlockedOptionsSheet(
+                context,
+                question: question,
+                options: options,
+                blocked: blocked,
                 danger: severity == BlockSeverity.danger,
-                onTap: () {
-                  final o = options[i];
-                  if (o.selected) {
-                    onApprove();
-                  } else {
-                    onOption(o);
-                  }
-                },
+                onApprove: onApprove,
+                onOption: onOption,
+                onFreeText: onFreeText,
               ),
-            ],
+            ),
           ] else ...[
             const SizedBox(height: 6),
             Text(
@@ -977,6 +1442,273 @@ class _ApprovalCard extends StatelessWidget {
 /// instead of crowding into a chip cloud of mismatched widths. The default
 /// (`primary`) is filled and accent-coloured with a check; every other choice
 /// is a plain outlined row, each fronted by a small badge — the number to
+/// The approval card's single action when the agent offered a menu: a full-width
+/// button that opens the choices in a sheet. It replaces the inline list so the
+/// card's height is fixed no matter how many options there are.
+class _OpenOptionsButton extends StatelessWidget {
+  const _OpenOptionsButton({
+    required this.count,
+    required this.danger,
+    required this.onTap,
+  });
+
+  final int count;
+  final bool danger;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = danger ? scheme.error : scheme.primary;
+    return Material(
+      color: accent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                count == 1 ? 'Choose 1 option' : 'Choose one of $count options',
+                style: TextStyle(
+                  color: danger ? scheme.onError : scheme.onPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.keyboard_arrow_up,
+                size: 18,
+                color: danger ? scheme.onError : scheme.onPrimary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Show a blocked agent's choices in a bottom sheet.
+///
+/// The sheet carries a text field as well as the option list. That is not a
+/// convenience: a menu can offer "Other (type your answer)" (Hermes's clarify
+/// panel does), and while the sheet is up it covers the screen's composer — so
+/// without its own input there would be no way to answer such a prompt at all.
+///
+/// It is `isScrollControlled` and padded by the keyboard inset, so opening the
+/// keyboard lifts the sheet instead of overflowing it; the option list scrolls
+/// within whatever height is left.
+Future<void> showBlockedOptionsSheet(
+  BuildContext context, {
+  required String question,
+  required List<BlockedOption> options,
+  required bool danger,
+  required ValueListenable<bool> blocked,
+  required VoidCallback onApprove,
+  required void Function(BlockedOption) onOption,
+  required void Function(String) onFreeText,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) => _BlockedOptionsSheet(
+      question: question,
+      options: options,
+      danger: danger,
+      blocked: blocked,
+      onApprove: onApprove,
+      onOption: onOption,
+      onFreeText: onFreeText,
+    ),
+  );
+}
+
+class _BlockedOptionsSheet extends StatefulWidget {
+  const _BlockedOptionsSheet({
+    required this.question,
+    required this.options,
+    required this.danger,
+    required this.blocked,
+    required this.onApprove,
+    required this.onOption,
+    required this.onFreeText,
+  });
+
+  final String question;
+  final List<BlockedOption> options;
+  final bool danger;
+
+  /// Live blocked-ness of the agent this sheet is answering for.
+  final ValueListenable<bool> blocked;
+  final VoidCallback onApprove;
+  final void Function(BlockedOption) onOption;
+  final void Function(String) onFreeText;
+
+  @override
+  State<_BlockedOptionsSheet> createState() => _BlockedOptionsSheetState();
+}
+
+class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
+  final _answer = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.blocked.addListener(_onBlockedChanged);
+  }
+
+  /// Close when the agent is no longer blocked.
+  ///
+  /// The block can be answered anywhere — the desktop Herdr UI, the tray's
+  /// Approve, another paired device — and none of those touch this sheet. Left
+  /// open it offers choices for a question that no longer exists; picking one
+  /// is a no-op (`/approve` is guarded by `state_change_seq`) but the UI has
+  /// already lied about the current state by then.
+  ///
+  /// The pop is deferred to the next frame: this fires from a ValueNotifier
+  /// during the parent's state update, and popping a route mid-build is not
+  /// allowed.
+  ///
+  /// Both guards below are load-bearing. Answering here *also* unblocks the
+  /// agent, so this listener fires on the user's own tap — and `mounted` alone
+  /// does not save us, because during the pop animation the state is still
+  /// mounted. The second pop then lands on the transcript screen underneath and
+  /// closes it too.
+  void _onBlockedChanged() {
+    if (widget.blocked.value || _closing) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _closing) return;
+      // Only dismiss while this sheet is genuinely the top route: if anything
+      // else has been pushed over it, or it is already on its way out, a pop
+      // here would close somebody else's screen.
+      final route = ModalRoute.of(context);
+      if (route == null || !route.isCurrent) return;
+      _closing = true;
+      Navigator.of(context).pop();
+    });
+  }
+
+  /// Set the moment we start closing ourselves, so the blocked-listener can tell
+  /// "the user answered here" from "it was answered elsewhere".
+  bool _closing = false;
+
+  void _close() {
+    if (_closing) return;
+    _closing = true;
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void dispose() {
+    widget.blocked.removeListener(_onBlockedChanged);
+    _answer.dispose();
+    super.dispose();
+  }
+
+  void _pick(BlockedOption o) {
+    _close();
+    if (o.selected) {
+      widget.onApprove();
+    } else {
+      widget.onOption(o);
+    }
+  }
+
+  void _submitTyped() {
+    final text = _answer.text.trim();
+    if (text.isEmpty) return;
+    _close();
+    widget.onFreeText(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasSelected = widget.options.any((o) => o.selected);
+    // Leave room for the drag handle and the sheet's own chrome; the list
+    // scrolls inside whatever remains once the keyboard has taken its share.
+    final maxListHeight = MediaQuery.sizeOf(context).height * 0.45;
+
+    return Padding(
+      // Lift the whole sheet above the keyboard rather than letting it overflow.
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.question,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxListHeight),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: widget.options.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) => _OptionRow(
+                    option: widget.options[i],
+                    primary:
+                        widget.options[i].selected || (!hasSelected && i == 0),
+                    danger: widget.danger,
+                    onTap: () => _pick(widget.options[i]),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // The free-text path — for "Other (type your answer)" and for any
+              // prompt where none of the offered choices is what you want.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _answer,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _submitTyped(),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: 'Or type your answer…',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    onPressed: _submitTyped,
+                    icon: const Icon(Icons.send),
+                    tooltip: 'Send answer',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// type, or the raw key name (e.g. "ESC") for a [BlockedOption.isKeyed] choice
 /// that has no menu number at all.
 class _OptionRow extends StatelessWidget {
@@ -997,8 +1729,12 @@ class _OptionRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final accent = danger ? scheme.error : scheme.primary;
     final bg = primary ? accent : scheme.surface.withValues(alpha: 0.6);
-    final fg = primary ? (danger ? scheme.onError : scheme.onPrimary) : scheme.onSurface;
-    final badgeText = option.isKeyed ? option.key!.toUpperCase() : '${option.index}';
+    final fg = primary
+        ? (danger ? scheme.onError : scheme.onPrimary)
+        : scheme.onSurface;
+    final badgeText = option.isKeyed
+        ? option.key!.toUpperCase()
+        : '${option.index}';
 
     return Material(
       color: bg,
@@ -1080,16 +1816,18 @@ class _CategoryPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: strong ? accent : accent.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(6),
-        border: strong ? null : Border.all(color: accent.withValues(alpha: 0.6)),
+        border: strong
+            ? null
+            : Border.all(color: accent.withValues(alpha: 0.6)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon,
-              size: 12,
-              color: strong
-                  ? Theme.of(context).colorScheme.onError
-                  : accent),
+          Icon(
+            icon,
+            size: 12,
+            color: strong ? Theme.of(context).colorScheme.onError : accent,
+          ),
           const SizedBox(width: 4),
           Text(
             label.toUpperCase(),
@@ -1097,62 +1835,11 @@ class _CategoryPill extends StatelessWidget {
               fontSize: 10.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.4,
-              color:
-                  strong ? Theme.of(context).colorScheme.onError : accent,
+              color: strong ? Theme.of(context).colorScheme.onError : accent,
             ),
           ),
         ],
       ),
-    );
-  }
-}
-
-/// The app bar's title: the agent's headline title, plus a small muted
-/// subtitle line (git context + agent kind) and a live-connection dot+label —
-/// context that used to need a tooltip hover to discover, now just readable
-/// at a glance in the freed-up header space.
-class _TranscriptTitle extends StatelessWidget {
-  const _TranscriptTitle({
-    required this.title,
-    required this.subtitle,
-    required this.connLabel,
-    required this.connColor,
-  });
-
-  final String title;
-  final String subtitle;
-  final String connLabel;
-  final Color connColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.circle, size: 8, color: connColor),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                subtitle.isEmpty ? connLabel : '$subtitle · $connLabel',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 }
@@ -1232,26 +1919,40 @@ class _ThinkingIndicatorState extends State<_ThinkingIndicator>
   }
 }
 
-/// A slim strip above the composer for actions about *how* you're talking to
-/// the agent, rather than the chat itself: the Claude permission-mode switcher
-/// (tap to cycle Shift+Tab) and a jump to the raw terminal. Kept out of the
-/// app bar so the header stays just identity + navigation; these live with
-/// the input they modify. [modeLabel] is null (and the chip hidden) for a
-/// kind/pane with no permission mode to show.
-class _ComposerToolbar extends StatelessWidget {
-  const _ComposerToolbar({
+/// A single horizontally scrollable chip row above the composer for
+/// everything that's an action about *how* you're talking to the agent
+/// rather than the chat itself: the Claude permission-mode switcher, quick-
+/// command snippets (see docs/RESEARCH-feature-ideas.md, #7), a jump to the
+/// raw terminal, and "+" to add a custom quick command. One row, one layout
+/// rule (left-to-right, scrollable, every item chip-styled) — deliberately
+/// not split into a "chip pinned left / icon pinned right" strip plus a
+/// second scrollable strip below it, which read as two different, unrelated
+/// layouts for what's conceptually one toolbar.
+class _ComposerActionsRow extends ConsumerWidget {
+  const _ComposerActionsRow({
     required this.modeLabel,
     required this.onCycleMode,
     required this.onOpenTerminal,
+    required this.onQuickCommand,
+    required this.onAttachImage,
+    required this.enabled,
   });
 
   final String? modeLabel;
   final VoidCallback onCycleMode;
   final VoidCallback onOpenTerminal;
+  final void Function(QuickCommand) onQuickCommand;
+
+  /// Null while an upload is already in flight — one at a time, so the progress
+  /// bar always describes the upload the user is actually watching.
+  final Future<void> Function()? onAttachImage;
+  final bool enabled;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final commands = ref.watch(quickCommandsProvider).asData?.value ?? const [];
+
     return Container(
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
@@ -1259,24 +1960,155 @@ class _ComposerToolbar extends StatelessWidget {
           top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(10, 6, 6, 0),
-      child: Row(
-        children: [
-          if (modeLabel != null)
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      child: SizedBox(
+        height: 34,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            // First in the row: it acts on the message being written, so it
+            // sits closest to the composer's own affordances.
             ActionChip(
-              avatar: const Icon(Icons.tune, size: 15),
-              label: Text(modeLabel!),
+              avatar: const Icon(Icons.image_outlined, size: 15),
+              label: const Text('Image'),
               labelStyle: const TextStyle(fontSize: 12),
               visualDensity: VisualDensity.compact,
-              onPressed: onCycleMode,
+              onPressed: enabled ? onAttachImage : null,
             ),
-          const Spacer(),
-          IconButton(
-            tooltip: 'Raw terminal',
-            onPressed: onOpenTerminal,
-            icon: const Icon(Icons.terminal, size: 20),
-            visualDensity: VisualDensity.compact,
+            const SizedBox(width: 6),
+            if (modeLabel != null) ...[
+              ActionChip(
+                avatar: const Icon(Icons.tune, size: 15),
+                label: Text(modeLabel!),
+                labelStyle: const TextStyle(fontSize: 12),
+                visualDensity: VisualDensity.compact,
+                onPressed: onCycleMode,
+              ),
+              const SizedBox(width: 6),
+            ],
+            for (var i = 0; i < commands.length; i++) ...[
+              QuickCommandChip(
+                command: commands[i],
+                enabled: enabled,
+                onTap: () => onQuickCommand(commands[i]),
+                onRemove: () =>
+                    ref.read(quickCommandsProvider.notifier).removeAt(i),
+              ),
+              const SizedBox(width: 6),
+            ],
+            ActionChip(
+              avatar: const Icon(Icons.add, size: 16),
+              label: const Text('Add'),
+              visualDensity: VisualDensity.compact,
+              onPressed: () => showAddQuickCommand(context, ref),
+            ),
+            const SizedBox(width: 6),
+            ActionChip(
+              avatar: const Icon(Icons.terminal, size: 15),
+              label: const Text('Terminal'),
+              labelStyle: const TextStyle(fontSize: 12),
+              visualDensity: VisualDensity.compact,
+              onPressed: onOpenTerminal,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+}
+
+/// The image-upload strip above the composer toolbar: a determinate progress
+/// bar while bytes are going out, or a failure that stays put until dismissed.
+///
+/// Determinate on purpose. The upload crosses a tailnet from a phone, which can
+/// genuinely take tens of seconds for a few megabytes; against a bare spinner
+/// that is indistinguishable from a hung request, and the user's next move
+/// (wait, or give up and retry) depends entirely on telling those two apart.
+///
+/// The failure does not use a snackbar for the mirror-image reason: it vanishes
+/// on a timer, and "is the tailnet down or was that image just too big?" is a
+/// question people re-read.
+class _UploadStatus extends StatelessWidget {
+  const _UploadStatus({
+    required this.uploading,
+    required this.sent,
+    required this.total,
+    required this.error,
+    required this.onDismiss,
+  });
+
+  final bool uploading;
+  final int sent;
+  final int total;
+  final String? error;
+  final VoidCallback onDismiss;
+
+  static String _mb(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final failed = !uploading && error != null;
+
+    return Container(
+      width: double.infinity,
+      color: failed
+          ? scheme.errorContainer
+          : scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      child: Row(
+        children: [
+          Icon(
+            failed ? Icons.error_outline : Icons.upload_outlined,
+            size: 16,
+            color: failed ? scheme.onErrorContainer : scheme.onSurfaceVariant,
           ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: failed
+                ? Text(
+                    error!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onErrorContainer,
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        total > 0
+                            ? 'Uploading image… ${_mb(sent)} of ${_mb(total)}'
+                            : 'Uploading image…',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          minHeight: 3,
+                          // Null (indeterminate) only before the first progress
+                          // callback, so the bar never sits frozen at zero.
+                          value: total > 0 && sent > 0 ? sent / total : null,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          if (failed)
+            IconButton(
+              tooltip: 'Dismiss',
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              onPressed: onDismiss,
+              icon: Icon(Icons.close, color: scheme.onErrorContainer),
+            ),
         ],
       ),
     );
@@ -1420,8 +2252,9 @@ class _SendButton extends StatelessWidget {
     final Color bg = !enabled
         ? scheme.surfaceContainerHighest
         : (active ? _green : _green.withValues(alpha: 0.65));
-    final Color fg =
-        enabled ? Colors.white : scheme.onSurfaceVariant.withValues(alpha: 0.6);
+    final Color fg = enabled
+        ? Colors.white
+        : scheme.onSurfaceVariant.withValues(alpha: 0.6);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 150),
       width: 48,
@@ -1433,9 +2266,7 @@ class _SendButton extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap == null ? null : () => onTap!(),
-          child: Center(
-            child: Icon(Icons.send_rounded, size: 22, color: fg),
-          ),
+          child: Center(child: Icon(Icons.send_rounded, size: 22, color: fg)),
         ),
       ),
     );
@@ -1573,11 +2404,17 @@ class _PendingBubble extends StatelessWidget {
             children: [
               Text(
                 text,
-                style: TextStyle(color: scheme.onPrimaryContainer, height: 1.35),
+                style: TextStyle(
+                  color: scheme.onPrimaryContainer,
+                  height: 1.35,
+                ),
               ),
               const SizedBox(height: 3),
-              Icon(Icons.schedule,
-                  size: 12, color: scheme.onPrimaryContainer.withValues(alpha: 0.7)),
+              Icon(
+                Icons.schedule,
+                size: 12,
+                color: scheme.onPrimaryContainer.withValues(alpha: 0.7),
+              ),
             ],
           ),
         ),
@@ -1764,14 +2601,14 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
 enum _ToolClass { bash, edit, read, search, web, task, other }
 
 _ToolClass _classifyTool(String name) => switch (name.toLowerCase()) {
-      'bash' => _ToolClass.bash,
-      'edit' || 'write' || 'multiedit' || 'notebookedit' => _ToolClass.edit,
-      'read' => _ToolClass.read,
-      'grep' || 'glob' => _ToolClass.search,
-      'webfetch' || 'websearch' => _ToolClass.web,
-      'task' => _ToolClass.task,
-      _ => _ToolClass.other,
-    };
+  'bash' => _ToolClass.bash,
+  'edit' || 'write' || 'multiedit' || 'notebookedit' => _ToolClass.edit,
+  'read' => _ToolClass.read,
+  'grep' || 'glob' => _ToolClass.search,
+  'webfetch' || 'websearch' => _ToolClass.web,
+  'task' => _ToolClass.task,
+  _ => _ToolClass.other,
+};
 
 /// The one-line primary content for a tool row: an icon, the text, and whether
 /// to render the text monospaced.
@@ -1788,39 +2625,57 @@ class _Primary {
 _Primary _primaryFor(_ToolClass cls, ToolCall tool) {
   switch (cls) {
     case _ToolClass.bash:
-      final cmd = _firstNonEmpty(
-              [tool.command, tool.inputSummary, tool.subtitle, tool.title]) ??
+      final cmd =
+          _firstNonEmpty([
+            tool.command,
+            tool.inputSummary,
+            tool.subtitle,
+            tool.title,
+          ]) ??
           tool.name;
       return _Primary(Icons.terminal, '\$ $cmd', mono: true);
     case _ToolClass.edit:
-      final file = _firstNonEmpty(
-              [tool.file, _basename(tool.inputSummary), tool.title]) ??
+      final file =
+          _firstNonEmpty([
+            tool.file,
+            _basename(tool.inputSummary),
+            tool.title,
+          ]) ??
           tool.name;
       return _Primary(Icons.edit_outlined, file, mono: true);
     case _ToolClass.read:
-      final file = _firstNonEmpty(
-              [tool.file, _basename(tool.inputSummary), tool.subtitle]) ??
+      final file =
+          _firstNonEmpty([
+            tool.file,
+            _basename(tool.inputSummary),
+            tool.subtitle,
+          ]) ??
           tool.name;
       return _Primary(Icons.description_outlined, file, mono: true);
     case _ToolClass.search:
-      final pattern = _firstNonEmpty(
-              [tool.command, tool.subtitle, tool.inputSummary, tool.title]) ??
+      final pattern =
+          _firstNonEmpty([
+            tool.command,
+            tool.subtitle,
+            tool.inputSummary,
+            tool.title,
+          ]) ??
           tool.name;
       return _Primary(Icons.search, pattern, mono: true);
     case _ToolClass.web:
       final u =
           _firstNonEmpty([tool.subtitle, tool.inputSummary, tool.title]) ??
-              tool.name;
+          tool.name;
       return _Primary(Icons.public, u);
     case _ToolClass.task:
       final t =
           _firstNonEmpty([tool.title, tool.subtitle, tool.inputSummary]) ??
-              tool.name;
+          tool.name;
       return _Primary(Icons.smart_toy_outlined, t);
     case _ToolClass.other:
       final t =
           _firstNonEmpty([tool.inputSummary, tool.subtitle, tool.title]) ??
-              tool.name;
+          tool.name;
       return _Primary(Icons.build_outlined, t);
   }
 }
@@ -1926,8 +2781,7 @@ class _ToolRowState extends State<_ToolRow> {
     final failed = result != null && !result.ok;
 
     // The applied diff (on the result) is authoritative over the preview.
-    final diff =
-        (result?.diff?.isNotEmpty ?? false) ? result!.diff : tool.diff;
+    final diff = (result?.diff?.isNotEmpty ?? false) ? result!.diff : tool.diff;
     final output = result?.outputSummary;
     final hasDiff = diff != null && diff.isNotEmpty;
     // Errors surface their output inline; success hides trivial/empty output so
@@ -2118,8 +2972,7 @@ class _MiniDiff extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final line in lines)
-              _diffLine(line, scheme, addBg, delBg),
+            for (final line in lines) _diffLine(line, scheme, addBg, delBg),
           ],
         ),
       ),
@@ -2237,9 +3090,10 @@ class _RawEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final head = [entry.roleRaw, entry.kindRaw]
-        .where((s) => s.isNotEmpty)
-        .join(' · ');
+    final head = [
+      entry.roleRaw,
+      entry.kindRaw,
+    ].where((s) => s.isNotEmpty).join(' · ');
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.all(10),
@@ -2303,9 +3157,9 @@ class _CenteredNotice extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             if (onTerminal != null) ...[
               const SizedBox(height: 16),
