@@ -432,6 +432,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         );
       }
       return;
+    } catch (e) {
+      // Anything else — a missing platform implementation, an interop
+      // failure — must surface too: swallowed, the button just silently
+      // does nothing, which is exactly how a build problem hid here once.
+      if (mounted) setState(() => _uploadError = 'Picker failed: $e');
+      return;
     }
     if (picked == null || !mounted) return; // cancelled
 
