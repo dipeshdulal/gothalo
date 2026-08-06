@@ -68,7 +68,14 @@ const (
 	//
 	// Generous on purpose: the alternative to waiting is dropping the operator's
 	// first instruction, which is worse than a slow start.
-	PromptReadyBudget = 10 * time.Second
+	//
+	// Raised from 10s after a live start exhausted it — the response came back
+	// carrying prompt_error "agent_not_ready", on a host busy enough that the
+	// agent then sat 100s before its first working state. 10s was sized against a
+	// quiet machine; the whole point of retrying is to cover the loaded one. The
+	// start call already blocks up to startTimeoutDefault (60s), so this stays
+	// well inside what the caller is prepared to wait.
+	PromptReadyBudget = 30 * time.Second
 
 	// SessionSettleWait bounds the wait for a started agent to report its own
 	// session id, which is what a transcript is resolved by. See
