@@ -660,6 +660,117 @@ class ImageDrop {
   final int bytes;
 }
 
+/// One directory the phone is allowed to browse from, per `GET /browse`. Roots
+/// are derived on the host — the operator's home directory and the parents of
+/// spaces Herdr already has open — never configured or guessed here.
+class BrowseRoot {
+  const BrowseRoot({required this.path, required this.label, required this.kind});
+
+  final String path;
+  final String label;
+
+  /// `home` or `project`. Only used to pick the icon; an unknown value renders
+  /// as a plain folder rather than breaking the picker.
+  final String kind;
+
+  factory BrowseRoot.fromJson(Map<String, dynamic> j) => BrowseRoot(
+        path: (j['path'] as String?) ?? '',
+        label: (j['label'] as String?) ?? '',
+        kind: (j['kind'] as String?) ?? '',
+      );
+}
+
+/// One directory inside a [BrowseListing]. There is no entry type for a file:
+/// `/browse` is directories-only and never returns one.
+class BrowseEntry {
+  const BrowseEntry({
+    required this.name,
+    required this.path,
+    required this.isRepo,
+    required this.isSymlink,
+    required this.openWorkspaceId,
+  });
+
+  final String name;
+  final String path;
+
+  /// Whether the directory holds a `.git`. It decides which Herdr method opens
+  /// it — `worktree.open` for a checkout, `workspace.create` otherwise — so it
+  /// is behaviour, not just a badge.
+  final bool isRepo;
+  final bool isSymlink;
+
+  /// The workspace already open at this directory, or empty. Session-qualified.
+  final String openWorkspaceId;
+
+  bool get isOpen => openWorkspaceId.isNotEmpty;
+
+  factory BrowseEntry.fromJson(Map<String, dynamic> j) => BrowseEntry(
+        name: (j['name'] as String?) ?? '',
+        path: (j['path'] as String?) ?? '',
+        isRepo: j['is_repo'] == true,
+        isSymlink: j['is_symlink'] == true,
+        openWorkspaceId: (j['open_workspace_id'] as String?) ?? '',
+      );
+}
+
+/// One directory's browsable children plus the navigation context, from
+/// `GET /browse`. See `docs/CONTRACT-browse.md`.
+class BrowseListing {
+  const BrowseListing({
+    required this.path,
+    required this.parent,
+    required this.isRepo,
+    required this.openWorkspaceId,
+    required this.roots,
+    required this.entries,
+    required this.truncated,
+    required this.limit,
+  });
+
+  final String path;
+
+  /// The directory above [path], or empty when [path] is a root — which is how
+  /// the picker knows to stop offering "up" rather than tracking roots itself.
+  final String parent;
+
+  /// Whether [path] itself is a git checkout, on the same terms as
+  /// [BrowseEntry.isRepo]. It is what lets "open the directory I'm standing in"
+  /// pick the same Herdr method as "open that one in the list".
+  final bool isRepo;
+
+  /// The workspace already open at [path] itself, or empty.
+  final String openWorkspaceId;
+  final List<BrowseRoot> roots;
+  final List<BrowseEntry> entries;
+
+  /// True when the host had more children than it would return. Surfaced, never
+  /// silently swallowed: a truncated listing that looks complete is how you
+  /// conclude a project isn't there.
+  final bool truncated;
+  final int limit;
+
+  bool get canGoUp => parent.isNotEmpty;
+  bool get isOpen => openWorkspaceId.isNotEmpty;
+
+  factory BrowseListing.fromJson(Map<String, dynamic> j) => BrowseListing(
+        path: (j['path'] as String?) ?? '',
+        parent: (j['parent'] as String?) ?? '',
+        isRepo: j['is_repo'] == true,
+        openWorkspaceId: (j['open_workspace_id'] as String?) ?? '',
+        roots: (j['roots'] as List? ?? const [])
+            .whereType<Map>()
+            .map((r) => BrowseRoot.fromJson(Map<String, dynamic>.from(r)))
+            .toList(),
+        entries: (j['entries'] as List? ?? const [])
+            .whereType<Map>()
+            .map((e) => BrowseEntry.fromJson(Map<String, dynamic>.from(e)))
+            .toList(),
+        truncated: j['truncated'] == true,
+        limit: (j['limit'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
@@ -1117,19 +1228,51 @@ class BridgeClient {
     }
   }
 
-  /// `POST /herdr {method, params}` — the allowlisted generic proxy onto Herdr's
-  /// command surface (worktree/tab/pane create+close, plus reads). Returns the
-  /// `result` object verbatim. A disallowed method (`403`), unknown target
-  /// (`404`), or Herdr error (`502`) throws a [BridgeException] carrying the
-  /// proxy's `{error}` message.
+  /// `GET /browse?path=&hidden=` → the host's directory tree, read-only and
+  /// directories-only, so a project can be picked from the phone.
+  ///
+  /// [path] absent means "start at the first root" (the operator's home
+  /// directory). A bridge older than the endpoint 404s — callers treat that as
+  /// "this server can't browse" and hide the picker, the same gating every
+  /// other added endpoint uses.
+  Future<BrowseListing> browse({String? path, bool showHidden = false}) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/browse',
+        queryParameters: {
+          if (path != null && path.isNotEmpty) 'path': path,
+          if (showHidden) 'hidden': '1',
+        },
+      );
+      return BrowseListing.fromJson(res.data ?? const <String, dynamic>{});
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `POST /herdr {method, params, session}` — the allowlisted generic proxy
+  /// onto Herdr's command surface (worktree/tab/pane create+close, plus reads).
+  /// Returns the `result` object verbatim. A disallowed method (`403`), unknown
+  /// target (`404`), or Herdr error (`502`) throws a [BridgeException] carrying
+  /// the proxy's `{error}` message.
+  ///
+  /// [session] names which Herdr session to run against. It only matters for
+  /// methods whose params carry no id to infer it from — `workspace.create`
+  /// takes a bare `cwd`, so without this the space always lands in the default
+  /// session. Ids in the result come back session-qualified either way.
   Future<Map<String, dynamic>> herdrCommand(
     String method, [
     Map<String, dynamic> params = const {},
+    String? session,
   ]) async {
     try {
       final res = await _dio.post<Map<String, dynamic>>(
         '/herdr',
-        data: {'method': method, 'params': params},
+        data: {
+          'method': method,
+          'params': params,
+          if (session != null && session.isNotEmpty) 'session': session,
+        },
       );
       final result = (res.data ?? const {})['result'];
       return result is Map ? Map<String, dynamic>.from(result) : {};

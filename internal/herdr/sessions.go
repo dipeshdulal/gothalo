@@ -233,14 +233,12 @@ func (m *Manager) stopAll() {
 	}
 }
 
-// MergedSnapshotRaw fetches every session's snapshot in parallel and merges
-// them into one envelope: array fields (agents, panes, tabs, workspaces,
-// layouts) are concatenated with non-default ids qualified and each element
-// tagged with its "session"; scalar fields (focused_*) come from the default
-// session; a "sessions" list names what was merged. A session whose snapshot
-// fails is skipped — the merge fails only when every session does.
-func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
+// orderedClients snapshots the client set as a slice, default session first
+// then the rest by name — the order every cross-session fan-out uses, so the
+// default session's answer is always index 0.
+func (m *Manager) orderedClients() []*Client {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	clients := make([]*Client, 0, len(m.clients))
 	if c, ok := m.clients[""]; ok {
 		clients = append(clients, c)
@@ -255,7 +253,17 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 	for _, n := range names {
 		clients = append(clients, m.clients[n])
 	}
-	m.mu.Unlock()
+	return clients
+}
+
+// MergedSnapshotRaw fetches every session's snapshot in parallel and merges
+// them into one envelope: array fields (agents, panes, tabs, workspaces,
+// layouts) are concatenated with non-default ids qualified and each element
+// tagged with its "session"; scalar fields (focused_*) come from the default
+// session; a "sessions" list names what was merged. A session whose snapshot
+// fails is skipped — the merge fails only when every session does.
+func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
+	clients := m.orderedClients()
 
 	type result struct {
 		node map[string]any
@@ -340,6 +348,102 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 		"id":     "gothalo:snapshot",
 		"result": map[string]any{"snapshot": merged},
 	})
+}
+
+// OpenSpace is where one open Herdr workspace lives on disk. It is what the
+// directory browser derives its allowed roots from: the bridge can name the
+// operator's project directories without being configured with any, because
+// Herdr already has them open.
+type OpenSpace struct {
+	// WorkspaceID is session-qualified ("acme/w3"), like every id the bridge
+	// hands out, so a caller can address the space back directly.
+	WorkspaceID string
+	// Dir is the space's own directory.
+	Dir string
+	// RepoRoot is the git repository the space belongs to, or "" when it is not
+	// a checkout. For a linked worktree this is the MAIN checkout, which is a
+	// different place from Dir and worth having: its parent is where the
+	// operator's other repositories live.
+	RepoRoot string
+}
+
+// OpenSpaces returns one entry per open workspace across every running session.
+//
+// A space's directory is its worktree `checkout_path` when Herdr reports one —
+// the authoritative answer, since individual panes wander into subdirectories
+// and linked worktrees — and otherwise the cwd of its first pane, the same
+// fallback the app's Spaces list uses.
+//
+// A session whose snapshot fails is skipped rather than failing the call. This
+// is advisory data (it widens a browsing allowlist, it does not answer a
+// question), and losing one session's projects is a better outcome than losing
+// the browser.
+func (m *Manager) OpenSpaces() []OpenSpace {
+	clients := m.orderedClients()
+
+	type snapshotShape struct {
+		Snapshot struct {
+			Workspaces []struct {
+				WorkspaceID string `json:"workspace_id"`
+				Worktree    *struct {
+					CheckoutPath string `json:"checkout_path"`
+					RepoRoot     string `json:"repo_root"`
+				} `json:"worktree"`
+			} `json:"workspaces"`
+			Panes []struct {
+				WorkspaceID string `json:"workspace_id"`
+				Cwd         string `json:"cwd"`
+			} `json:"panes"`
+		} `json:"snapshot"`
+	}
+
+	parsed := make([]snapshotShape, len(clients))
+	var wg sync.WaitGroup
+	for i, c := range clients {
+		wg.Add(1)
+		go func(i int, c *Client) {
+			defer wg.Done()
+			raw, err := c.SnapshotRaw()
+			if err != nil {
+				log.Warn("open spaces: snapshot failed for session; skipping",
+					"session", c.SessionLabel(), "err", err)
+				return
+			}
+			if err := json.Unmarshal(raw, &parsed[i]); err != nil {
+				log.Warn("open spaces: parse snapshot failed", "session", c.SessionLabel(), "err", err)
+			}
+		}(i, c)
+	}
+	wg.Wait()
+
+	var out []OpenSpace
+	for i, c := range clients {
+		snap := parsed[i].Snapshot
+		firstPaneCwd := map[string]string{}
+		for _, p := range snap.Panes {
+			if p.Cwd == "" {
+				continue
+			}
+			if _, seen := firstPaneCwd[p.WorkspaceID]; !seen {
+				firstPaneCwd[p.WorkspaceID] = p.Cwd
+			}
+		}
+		for _, ws := range snap.Workspaces {
+			sp := OpenSpace{WorkspaceID: Qualify(c.Session(), ws.WorkspaceID)}
+			if ws.Worktree != nil {
+				sp.Dir = ws.Worktree.CheckoutPath
+				sp.RepoRoot = ws.Worktree.RepoRoot
+			}
+			if sp.Dir == "" {
+				sp.Dir = firstPaneCwd[ws.WorkspaceID]
+			}
+			if sp.Dir == "" {
+				continue // a space with nowhere on disk tells the browser nothing
+			}
+			out = append(out, sp)
+		}
+	}
+	return out
 }
 
 // enrichAgentBranches fills a `branch` field on every agent in the snapshot,

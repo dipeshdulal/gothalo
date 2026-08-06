@@ -436,6 +436,44 @@ the payload and the UI states it. Pushing a branch deletion from a phone affects
 everyone and reaches outside the host; nothing else on this bridge does that, and
 this does not either.
 
+## D27 — Opening a space from the phone needs a filesystem read, kept as narrow as it can be
+Every creating endpoint the app had needed something already open to hang off:
+`pane.split` needs a pane, `tab.create` needs a workspace, `/agent/start` needs
+one of those. On a Herdr session with **no workspaces** there was nothing to hang
+off, so the phone had nothing useful to offer at all — the only way back in was
+walking to the desktop. Fixing that means the app must be able to *name* a
+directory, and it has no way to know what is on the host. Hence `GET /browse`.
+
+The endpoint is deliberately the narrowest thing that can do that job:
+directories only (never a file name, never contents), confined to an allowlist of
+roots, and with symlinks and `..` **resolved and then re-checked** rather than
+filtered lexically — a `Clean()`-based check resolves `..` against a symlink's
+own path instead of its target, which is a hole, and there is a test for exactly
+that. A path that fails to resolve is reported as missing only when it is
+nominally inside a root, so the endpoint cannot be used to probe for what exists
+elsewhere on the machine.
+
+Roots are **derived, not configured**: the operator's home directory, plus the
+*parent* of every directory Herdr already has a space open at (the point of the
+flow is to open a sibling of something already open), minus anything that is an
+ancestor of home — a space sitting in `~` would otherwise contribute `/Users`,
+i.e. every account on the box.
+
+What this is not: a defence against a compromised phone. A paired device can
+already type into a shell through `/send`. What it avoids is a **standing
+disclosure of the host's filesystem layout** through a plain read endpoint — one
+that needs no agent pane, is trivially harvested, and outlives revoking the
+device. For the same reason `POST /herdr` does *not* clamp `workspace.create`'s
+`cwd` to the roots: a device that can `cd` is not stopped by that, and it would
+break opening a hand-typed path.
+
+Two Herdr methods, not one, and picked by the bridge's `is_repo` flag:
+`worktree.open` for a git checkout (it attaches the repo metadata the app groups
+projects by, and is idempotent — `already_open` instead of a duplicate space),
+`workspace.create` for anything else (it takes any directory; `worktree.open`
+refuses a non-repo). Verified on herdr 0.8.0: `worktree.open` needs `cwd` *and*
+`path` — with `path` alone it answers `not_git_worktree` for a valid checkout.
+
 ## D28 — The diff viewer derives everything it can from the payload; only the lines git never sent are an endpoint
 The Changes screen shows a directory tree, per-line numbering, word-level
 intra-line highlighting, and collapsed unchanged regions. Exactly one of those

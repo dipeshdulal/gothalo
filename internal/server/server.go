@@ -52,6 +52,9 @@ type Server struct {
 	// panes backs paneDropCwd's agentless fallback in tests; nil in production,
 	// where the pane is fetched from its own session client.
 	panes paneGetter
+	// spaces backs GET /browse's root derivation in tests; nil in production,
+	// where the open spaces come from the session Manager.
+	spaces spaceLister
 }
 
 // New constructs a Server. push, bus and tl may be nil.
@@ -102,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/timeline", s.handleTimeline)
+	mux.HandleFunc("/browse", s.handleBrowse)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)
 	mux.HandleFunc("/herdr", s.handleHerdrProxy)
@@ -349,7 +353,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	    offers the expand row on its own and an older bridge simply 404s the tap,
 //	    which degrades to a diff with three lines of context, exactly what it
 //	    showed before.
-const BridgeVersion = 9
+//	10 — GET /browse: pick a directory on the host, so a space can be opened
+//	    from the phone on a session with nothing open at all. Same gating rule
+//	    as 5 — an older bridge 404s and the app hides the picker.
+const BridgeVersion = 10
 
 // GET /info -> this bridge's identity and capability level.
 //

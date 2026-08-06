@@ -11,6 +11,7 @@ import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
 import '../jump/jump_sheet.dart';
 import '../push/enable_push_banner.dart';
+import '../spaces/open_space_sheet.dart';
 import 'inbox_providers.dart';
 import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
@@ -67,6 +68,7 @@ class InboxScreen extends ConsumerWidget {
                 tooltip: 'More',
                 icon: const Icon(Icons.more_vert),
                 onSelected: (action) => switch (action) {
+                  _FlockMenuAction.openSpace => showOpenSpaceSheet(context),
                   _FlockMenuAction.overview => context.push('/overview'),
                   _FlockMenuAction.timeline => context.push('/timeline'),
                   _FlockMenuAction.editServer => connection == null
@@ -74,6 +76,16 @@ class InboxScreen extends ConsumerWidget {
                       : context.push('/servers/${connection.id}/edit'),
                 },
                 itemBuilder: (context) => [
+                  // Also reachable from the empty state, which is where it
+                  // matters most; here so it does not disappear the moment the
+                  // server has one space open.
+                  const PopupMenuItem(
+                    value: _FlockMenuAction.openSpace,
+                    child: _MenuRow(
+                      icon: Icons.create_new_folder_outlined,
+                      label: 'Open a project',
+                    ),
+                  ),
                   const PopupMenuItem(
                     value: _FlockMenuAction.overview,
                     child: _MenuRow(
@@ -147,7 +159,7 @@ class InboxScreen extends ConsumerWidget {
 }
 
 /// The choices in the Flock header's overflow menu.
-enum _FlockMenuAction { overview, timeline, editServer }
+enum _FlockMenuAction { openSpace, overview, timeline, editServer }
 
 /// One row in the overflow menu: icon + label, laid out tighter than the
 /// default [ListTile] so a two-item menu doesn't feel oversized.
@@ -190,7 +202,9 @@ class _AgentsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (snap.agents.isEmpty) return const _EmptyState();
+    if (snap.agents.isEmpty) {
+      return _EmptyState(spacesOpen: snap.workspaces.isNotEmpty);
+    }
     final agents = snap.agentsSorted;
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -211,7 +225,7 @@ class _SpacesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (snap.workspaces.isEmpty) return const _EmptyState();
+    if (snap.workspaces.isEmpty) return const _EmptyState(spacesOpen: false);
     // Representative cwd per workspace (from its first pane) → git context, so
     // worktrees sort right under their parent project.
     final cwdByWs = <String, String>{};
@@ -511,8 +525,19 @@ class _GitLine extends StatelessWidget {
   }
 }
 
+/// The nothing-here state, in its two meaningfully different flavours.
+///
+/// With spaces open, "no agents" is a normal lull — the operator starts one and
+/// pulls to refresh. With **nothing** open the phone previously had nothing to
+/// offer at all: no space means no pane to split and no directory to inherit, so
+/// the only route back in was walking to the desktop. That is the case that
+/// gets the call to action.
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({required this.spacesOpen});
+
+  /// Whether the server has any workspace at all. False is the empty-session
+  /// case the "Open a project" flow exists for.
+  final bool spacesOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -520,24 +545,46 @@ class _EmptyState extends StatelessWidget {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
-        SizedBox(height: MediaQuery.of(context).size.height * 0.28),
-        Icon(Icons.inbox_outlined, size: 56, color: scheme.onSurfaceVariant),
+        SizedBox(height: MediaQuery.of(context).size.height * 0.22),
+        Icon(
+          spacesOpen ? Icons.inbox_outlined : Icons.folder_off_outlined,
+          size: 56,
+          color: scheme.onSurfaceVariant,
+        ),
         const SizedBox(height: 12),
         Center(
           child: Text(
-            'No agents right now',
+            spacesOpen ? 'No agents right now' : 'Nothing open on this server',
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
         const SizedBox(height: 4),
         Center(
-          child: Text(
-            'Start an agent in Herdr, then pull to refresh.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Text(
+              spacesOpen
+                  ? 'Start an agent in Herdr, then pull to refresh.'
+                  : 'Herdr has no spaces open. Pick a project on the host and '
+                      'open it as a space — you can start an agent in it from '
+                      'here afterwards.',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
           ),
         ),
+        if (!spacesOpen) ...[
+          const SizedBox(height: 20),
+          Center(
+            child: FilledButton.icon(
+              onPressed: () => showOpenSpaceSheet(context),
+              icon: const Icon(Icons.create_new_folder_outlined),
+              label: const Text('Open a project'),
+            ),
+          ),
+        ],
       ],
     );
   }

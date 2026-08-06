@@ -372,6 +372,14 @@ sealed class Snapshot with _$Snapshot {
     @Default(<TabInfo>[]) List<TabInfo> tabs,
     @Default(<WorkspaceInfo>[]) List<WorkspaceInfo> workspaces,
     @JsonKey(name: 'focused_pane_id') @Default('') String focusedPaneId,
+
+    /// Every Herdr session the bridge merged this snapshot from, default first
+    /// (see D14). It is the only place the app can learn a session exists when
+    /// that session has nothing in it — pane and workspace ids only name a
+    /// session once there is something to name — which is exactly the case the
+    /// "open a space" flow has to target. Empty on a bridge that predates the
+    /// field; treat that as the single default session.
+    @Default(<String>[]) List<String> sessions,
   }) = _Snapshot;
 
   factory Snapshot.fromJson(Map<String, dynamic> json) =>
@@ -380,6 +388,25 @@ sealed class Snapshot with _$Snapshot {
   /// Pane ids that have a detected coding agent — used to show the agent's
   /// avatar on a pane in the full-multiplexer overview.
   Set<String> get agentPaneIds => {for (final a in agents) a.paneId};
+
+  /// The Herdr sessions this snapshot covers, always at least one.
+  ///
+  /// Prefers the bridge's own [sessions] list; an older bridge that doesn't
+  /// send one is reconstructed from the session prefixes on the ids, which
+  /// finds every session that has *something* in it. Either way this is what an
+  /// action targeting a session (opening a new space, say) chooses from, and
+  /// when it has one entry there is no choice to make.
+  List<String> get sessionNames {
+    if (sessions.isNotEmpty) return sessions;
+    final names = <String>{
+      for (final p in panes) p.sessionName,
+      for (final a in agents) a.sessionName,
+      'default',
+    }.toList()..sort();
+    // Default first, matching the bridge's own ordering.
+    names.remove('default');
+    return ['default', ...names];
+  }
 
   /// All agents as one flat list for the "Agents" tab, ordered attention-first
   /// (blocked → done → working → idle → unknown) and, within a rank,

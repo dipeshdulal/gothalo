@@ -180,6 +180,9 @@ _Snapshot _$SnapshotFromJson(Map<String, dynamic> json) => _Snapshot(
           .toList() ??
       const <WorkspaceInfo>[],
   focusedPaneId: json['focused_pane_id'] as String? ?? '',
+  sessions:
+      (json['sessions'] as List<dynamic>?)?.map((e) => e as String).toList() ??
+      const <String>[],
 );
 
 Map<String, dynamic> _$SnapshotToJson(_Snapshot instance) => <String, dynamic>{
@@ -188,4 +191,5 @@ Map<String, dynamic> _$SnapshotToJson(_Snapshot instance) => <String, dynamic>{
   'tabs': instance.tabs,
   'workspaces': instance.workspaces,
   'focused_pane_id': instance.focusedPaneId,
+  'sessions': instance.sessions,
 };

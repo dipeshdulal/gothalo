@@ -71,7 +71,8 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
-| POST | `/herdr` | `{method, params}` | `{result}` or `{error}` | allowlisted generic proxy onto Herdr's command surface (below) |
+| GET  | `/browse` | — (query: `path?`, `hidden?`) | `{path, parent, roots[], entries[], truncated, limit}` | pick a directory on the host, so a space can be opened from the phone — read-only, directories-only (below; see [`CONTRACT-browse.md`](CONTRACT-browse.md)) |
+| POST | `/herdr` | `{method, params, session?}` | `{result}` or `{error}` | allowlisted generic proxy onto Herdr's command surface (below) |
 | GET  | `/branch-info` | — (query: `workspace_id`) | `{branch, default_branch, merged, deletable, …}` | preflight for "also delete the branch" when removing a worktree (below; see [`CONTRACT-branch-delete.md`](CONTRACT-branch-delete.md)) |
 | POST | `/branch-delete` | `{repo_root, branch, force?}` | `{deleted, forced, sha, upstream, …}` | delete a local git branch, after its worktree is gone (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
@@ -728,6 +729,47 @@ Response `200`: `{ "closed": true, "pane_id": "w4:p7" }`. Closing a tab's last
 pane closes the tab too. Errors: `400` missing `pane_id` · `404` unknown pane ·
 `401` no/invalid token · `502` herdr failed.
 
+## GET /browse — pick a directory on the host
+A read-only, **directories-only** view of the host's filesystem, so the phone can
+point at a project and open it as a Herdr space. It is the only way in when the
+session has **nothing** open: every other creating endpoint needs an existing
+pane or workspace to hang off, and with none the app has to name a directory
+outright.
+```
+GET /browse?path=/Users/you/projects        (omit path to start at the first root)
+GET /browse?path=/Users/you&hidden=1        (include dot-directories)
+```
+Response `200`:
+```json
+{ "path": "/Users/you/projects",
+  "parent": "/Users/you",
+  "is_repo": false,
+  "roots": [ { "path": "/Users/you", "label": "Home", "kind": "home" } ],
+  "entries": [
+    { "name": "gothalo", "path": "/Users/you/projects/gothalo",
+      "is_repo": true, "is_symlink": false, "open_workspace_id": "wN" }
+  ],
+  "truncated": false, "limit": 500 }
+```
+- `parent` is `""` when `path` **is a root** — that is how you know not to offer
+  "up". `path` comes back **resolved**, so navigate with what you were given.
+- `is_repo` decides which Herdr method opens the directory: `worktree.open` for a
+  checkout (richer metadata, idempotent), `workspace.create` otherwise. It is on
+  each entry **and** on the listing itself, so "open here" and "open that one"
+  agree about the same tree.
+- `open_workspace_id` (session-qualified, omitted when absent) means a space is
+  already open there — offer "go there", not a duplicate.
+
+Roots are derived on the host: the operator's home directory plus the parents of
+already-open spaces, minus anything above home. Symlinks and `..` are resolved
+and re-checked for containment, files are never returned, dot-directories need
+`hidden=1`, and results are capped at 500. The full rules, the reasoning, and the
+opening step live in [`CONTRACT-browse.md`](CONTRACT-browse.md).
+
+Status codes: `200` ok · `400` `path` not absolute · `401` no/invalid token ·
+`403` outside the allowed roots, or unreadable · `404` inside the roots but
+missing, or a file · `405` non-GET · `503` no browsable roots on this host.
+
 ## POST /herdr — allowlisted generic proxy (Herdr command parity)
 One authenticated endpoint that forwards a **Herdr socket method** straight to
 Herdr and returns its result — so the app gets parity with Herdr's command
@@ -742,6 +784,10 @@ POST /herdr
   `schemas.request`) — dotted, e.g. `tab.create`, NOT the CLI subcommand.
 - `params` is forwarded verbatim; use the shapes from the schema. Omit or `{}`
   for reads that take no params.
+- `session` picks the Herdr session (D14). Usually unnecessary — it is inferred
+  from session-qualified ids in `params` — but **required** for methods whose
+  params carry no id, notably `workspace.create` (a bare `cwd`), which otherwise
+  always lands in the default session.
 - Success `200`: `{ "result": <herdr result, verbatim> }`.
 - Failure: `{ "error": "<message>" }` with a status (see below).
 
