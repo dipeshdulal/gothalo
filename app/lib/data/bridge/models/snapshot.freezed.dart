@@ -1169,9 +1169,278 @@ as bool,
 
 
 /// @nodoc
+mixin _$WorktreeInfo {
+
+/// The space's own directory — the ONLY authoritative answer to "where does
+/// this space live". Individual panes wander into subdirectories and linked
+/// worktrees, so no pane's cwd can stand in for it.
+@JsonKey(name: 'checkout_path') String get checkoutPath;@JsonKey(name: 'repo_name') String get repoName;@JsonKey(name: 'is_linked_worktree') bool get isLinkedWorktree;
+/// Create a copy of WorktreeInfo
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$WorktreeInfoCopyWith<WorktreeInfo> get copyWith => _$WorktreeInfoCopyWithImpl<WorktreeInfo>(this as WorktreeInfo, _$identity);
+
+  /// Serializes this WorktreeInfo to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is WorktreeInfo&&(identical(other.checkoutPath, checkoutPath) || other.checkoutPath == checkoutPath)&&(identical(other.repoName, repoName) || other.repoName == repoName)&&(identical(other.isLinkedWorktree, isLinkedWorktree) || other.isLinkedWorktree == isLinkedWorktree));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,checkoutPath,repoName,isLinkedWorktree);
+
+@override
+String toString() {
+  return 'WorktreeInfo(checkoutPath: $checkoutPath, repoName: $repoName, isLinkedWorktree: $isLinkedWorktree)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $WorktreeInfoCopyWith<$Res>  {
+  factory $WorktreeInfoCopyWith(WorktreeInfo value, $Res Function(WorktreeInfo) _then) = _$WorktreeInfoCopyWithImpl;
+@useResult
+$Res call({
+@JsonKey(name: 'checkout_path') String checkoutPath,@JsonKey(name: 'repo_name') String repoName,@JsonKey(name: 'is_linked_worktree') bool isLinkedWorktree
+});
+
+
+
+
+}
+/// @nodoc
+class _$WorktreeInfoCopyWithImpl<$Res>
+    implements $WorktreeInfoCopyWith<$Res> {
+  _$WorktreeInfoCopyWithImpl(this._self, this._then);
+
+  final WorktreeInfo _self;
+  final $Res Function(WorktreeInfo) _then;
+
+/// Create a copy of WorktreeInfo
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? checkoutPath = null,Object? repoName = null,Object? isLinkedWorktree = null,}) {
+  return _then(_self.copyWith(
+checkoutPath: null == checkoutPath ? _self.checkoutPath : checkoutPath // ignore: cast_nullable_to_non_nullable
+as String,repoName: null == repoName ? _self.repoName : repoName // ignore: cast_nullable_to_non_nullable
+as String,isLinkedWorktree: null == isLinkedWorktree ? _self.isLinkedWorktree : isLinkedWorktree // ignore: cast_nullable_to_non_nullable
+as bool,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [WorktreeInfo].
+extension WorktreeInfoPatterns on WorktreeInfo {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _WorktreeInfo value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _WorktreeInfo() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _WorktreeInfo value)  $default,){
+final _that = this;
+switch (_that) {
+case _WorktreeInfo():
+return $default(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _WorktreeInfo value)?  $default,){
+final _that = this;
+switch (_that) {
+case _WorktreeInfo() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'checkout_path')  String checkoutPath, @JsonKey(name: 'repo_name')  String repoName, @JsonKey(name: 'is_linked_worktree')  bool isLinkedWorktree)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _WorktreeInfo() when $default != null:
+return $default(_that.checkoutPath,_that.repoName,_that.isLinkedWorktree);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'checkout_path')  String checkoutPath, @JsonKey(name: 'repo_name')  String repoName, @JsonKey(name: 'is_linked_worktree')  bool isLinkedWorktree)  $default,) {final _that = this;
+switch (_that) {
+case _WorktreeInfo():
+return $default(_that.checkoutPath,_that.repoName,_that.isLinkedWorktree);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'checkout_path')  String checkoutPath, @JsonKey(name: 'repo_name')  String repoName, @JsonKey(name: 'is_linked_worktree')  bool isLinkedWorktree)?  $default,) {final _that = this;
+switch (_that) {
+case _WorktreeInfo() when $default != null:
+return $default(_that.checkoutPath,_that.repoName,_that.isLinkedWorktree);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _WorktreeInfo implements WorktreeInfo {
+  const _WorktreeInfo({@JsonKey(name: 'checkout_path') this.checkoutPath = '', @JsonKey(name: 'repo_name') this.repoName = '', @JsonKey(name: 'is_linked_worktree') this.isLinkedWorktree = false});
+  factory _WorktreeInfo.fromJson(Map<String, dynamic> json) => _$WorktreeInfoFromJson(json);
+
+/// The space's own directory — the ONLY authoritative answer to "where does
+/// this space live". Individual panes wander into subdirectories and linked
+/// worktrees, so no pane's cwd can stand in for it.
+@override@JsonKey(name: 'checkout_path') final  String checkoutPath;
+@override@JsonKey(name: 'repo_name') final  String repoName;
+@override@JsonKey(name: 'is_linked_worktree') final  bool isLinkedWorktree;
+
+/// Create a copy of WorktreeInfo
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$WorktreeInfoCopyWith<_WorktreeInfo> get copyWith => __$WorktreeInfoCopyWithImpl<_WorktreeInfo>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$WorktreeInfoToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _WorktreeInfo&&(identical(other.checkoutPath, checkoutPath) || other.checkoutPath == checkoutPath)&&(identical(other.repoName, repoName) || other.repoName == repoName)&&(identical(other.isLinkedWorktree, isLinkedWorktree) || other.isLinkedWorktree == isLinkedWorktree));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,checkoutPath,repoName,isLinkedWorktree);
+
+@override
+String toString() {
+  return 'WorktreeInfo(checkoutPath: $checkoutPath, repoName: $repoName, isLinkedWorktree: $isLinkedWorktree)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$WorktreeInfoCopyWith<$Res> implements $WorktreeInfoCopyWith<$Res> {
+  factory _$WorktreeInfoCopyWith(_WorktreeInfo value, $Res Function(_WorktreeInfo) _then) = __$WorktreeInfoCopyWithImpl;
+@override @useResult
+$Res call({
+@JsonKey(name: 'checkout_path') String checkoutPath,@JsonKey(name: 'repo_name') String repoName,@JsonKey(name: 'is_linked_worktree') bool isLinkedWorktree
+});
+
+
+
+
+}
+/// @nodoc
+class __$WorktreeInfoCopyWithImpl<$Res>
+    implements _$WorktreeInfoCopyWith<$Res> {
+  __$WorktreeInfoCopyWithImpl(this._self, this._then);
+
+  final _WorktreeInfo _self;
+  final $Res Function(_WorktreeInfo) _then;
+
+/// Create a copy of WorktreeInfo
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? checkoutPath = null,Object? repoName = null,Object? isLinkedWorktree = null,}) {
+  return _then(_WorktreeInfo(
+checkoutPath: null == checkoutPath ? _self.checkoutPath : checkoutPath // ignore: cast_nullable_to_non_nullable
+as String,repoName: null == repoName ? _self.repoName : repoName // ignore: cast_nullable_to_non_nullable
+as String,isLinkedWorktree: null == isLinkedWorktree ? _self.isLinkedWorktree : isLinkedWorktree // ignore: cast_nullable_to_non_nullable
+as bool,
+  ));
+}
+
+
+}
+
+
+/// @nodoc
 mixin _$WorkspaceInfo {
 
-@JsonKey(name: 'workspace_id') String get workspaceId; String get label; int get number;@JsonKey(name: 'tab_count') int get tabCount;@JsonKey(name: 'pane_count') int get paneCount;@JsonKey(name: 'active_tab_id') String get activeTabId;@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus get agentStatus; bool get focused;
+@JsonKey(name: 'workspace_id') String get workspaceId; String get label; int get number;@JsonKey(name: 'tab_count') int get tabCount;@JsonKey(name: 'pane_count') int get paneCount;@JsonKey(name: 'active_tab_id') String get activeTabId;@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus get agentStatus; bool get focused; WorktreeInfo? get worktree;
 /// Create a copy of WorkspaceInfo
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -1184,16 +1453,16 @@ $WorkspaceInfoCopyWith<WorkspaceInfo> get copyWith => _$WorkspaceInfoCopyWithImp
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is WorkspaceInfo&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.label, label) || other.label == label)&&(identical(other.number, number) || other.number == number)&&(identical(other.tabCount, tabCount) || other.tabCount == tabCount)&&(identical(other.paneCount, paneCount) || other.paneCount == paneCount)&&(identical(other.activeTabId, activeTabId) || other.activeTabId == activeTabId)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.focused, focused) || other.focused == focused));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is WorkspaceInfo&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.label, label) || other.label == label)&&(identical(other.number, number) || other.number == number)&&(identical(other.tabCount, tabCount) || other.tabCount == tabCount)&&(identical(other.paneCount, paneCount) || other.paneCount == paneCount)&&(identical(other.activeTabId, activeTabId) || other.activeTabId == activeTabId)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.worktree, worktree) || other.worktree == worktree));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,workspaceId,label,number,tabCount,paneCount,activeTabId,agentStatus,focused);
+int get hashCode => Object.hash(runtimeType,workspaceId,label,number,tabCount,paneCount,activeTabId,agentStatus,focused,worktree);
 
 @override
 String toString() {
-  return 'WorkspaceInfo(workspaceId: $workspaceId, label: $label, number: $number, tabCount: $tabCount, paneCount: $paneCount, activeTabId: $activeTabId, agentStatus: $agentStatus, focused: $focused)';
+  return 'WorkspaceInfo(workspaceId: $workspaceId, label: $label, number: $number, tabCount: $tabCount, paneCount: $paneCount, activeTabId: $activeTabId, agentStatus: $agentStatus, focused: $focused, worktree: $worktree)';
 }
 
 
@@ -1204,11 +1473,11 @@ abstract mixin class $WorkspaceInfoCopyWith<$Res>  {
   factory $WorkspaceInfoCopyWith(WorkspaceInfo value, $Res Function(WorkspaceInfo) _then) = _$WorkspaceInfoCopyWithImpl;
 @useResult
 $Res call({
-@JsonKey(name: 'workspace_id') String workspaceId, String label, int number,@JsonKey(name: 'tab_count') int tabCount,@JsonKey(name: 'pane_count') int paneCount,@JsonKey(name: 'active_tab_id') String activeTabId,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus, bool focused
+@JsonKey(name: 'workspace_id') String workspaceId, String label, int number,@JsonKey(name: 'tab_count') int tabCount,@JsonKey(name: 'pane_count') int paneCount,@JsonKey(name: 'active_tab_id') String activeTabId,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus, bool focused, WorktreeInfo? worktree
 });
 
 
-
+$WorktreeInfoCopyWith<$Res>? get worktree;
 
 }
 /// @nodoc
@@ -1221,7 +1490,7 @@ class _$WorkspaceInfoCopyWithImpl<$Res>
 
 /// Create a copy of WorkspaceInfo
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? workspaceId = null,Object? label = null,Object? number = null,Object? tabCount = null,Object? paneCount = null,Object? activeTabId = null,Object? agentStatus = null,Object? focused = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? workspaceId = null,Object? label = null,Object? number = null,Object? tabCount = null,Object? paneCount = null,Object? activeTabId = null,Object? agentStatus = null,Object? focused = null,Object? worktree = freezed,}) {
   return _then(_self.copyWith(
 workspaceId: null == workspaceId ? _self.workspaceId : workspaceId // ignore: cast_nullable_to_non_nullable
 as String,label: null == label ? _self.label : label // ignore: cast_nullable_to_non_nullable
@@ -1231,10 +1500,23 @@ as int,paneCount: null == paneCount ? _self.paneCount : paneCount // ignore: cas
 as int,activeTabId: null == activeTabId ? _self.activeTabId : activeTabId // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
 as AgentStatus,focused: null == focused ? _self.focused : focused // ignore: cast_nullable_to_non_nullable
-as bool,
+as bool,worktree: freezed == worktree ? _self.worktree : worktree // ignore: cast_nullable_to_non_nullable
+as WorktreeInfo?,
   ));
 }
+/// Create a copy of WorkspaceInfo
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$WorktreeInfoCopyWith<$Res>? get worktree {
+    if (_self.worktree == null) {
+    return null;
+  }
 
+  return $WorktreeInfoCopyWith<$Res>(_self.worktree!, (value) {
+    return _then(_self.copyWith(worktree: value));
+  });
+}
 }
 
 
@@ -1313,10 +1595,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'workspace_id')  String workspaceId,  String label,  int number, @JsonKey(name: 'tab_count')  int tabCount, @JsonKey(name: 'pane_count')  int paneCount, @JsonKey(name: 'active_tab_id')  String activeTabId, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus,  bool focused)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'workspace_id')  String workspaceId,  String label,  int number, @JsonKey(name: 'tab_count')  int tabCount, @JsonKey(name: 'pane_count')  int paneCount, @JsonKey(name: 'active_tab_id')  String activeTabId, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus,  bool focused,  WorktreeInfo? worktree)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _WorkspaceInfo() when $default != null:
-return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.paneCount,_that.activeTabId,_that.agentStatus,_that.focused);case _:
+return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.paneCount,_that.activeTabId,_that.agentStatus,_that.focused,_that.worktree);case _:
   return orElse();
 
 }
@@ -1334,10 +1616,10 @@ return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'workspace_id')  String workspaceId,  String label,  int number, @JsonKey(name: 'tab_count')  int tabCount, @JsonKey(name: 'pane_count')  int paneCount, @JsonKey(name: 'active_tab_id')  String activeTabId, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus,  bool focused)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'workspace_id')  String workspaceId,  String label,  int number, @JsonKey(name: 'tab_count')  int tabCount, @JsonKey(name: 'pane_count')  int paneCount, @JsonKey(name: 'active_tab_id')  String activeTabId, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus,  bool focused,  WorktreeInfo? worktree)  $default,) {final _that = this;
 switch (_that) {
 case _WorkspaceInfo():
-return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.paneCount,_that.activeTabId,_that.agentStatus,_that.focused);}
+return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.paneCount,_that.activeTabId,_that.agentStatus,_that.focused,_that.worktree);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -1351,10 +1633,10 @@ return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'workspace_id')  String workspaceId,  String label,  int number, @JsonKey(name: 'tab_count')  int tabCount, @JsonKey(name: 'pane_count')  int paneCount, @JsonKey(name: 'active_tab_id')  String activeTabId, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus,  bool focused)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'workspace_id')  String workspaceId,  String label,  int number, @JsonKey(name: 'tab_count')  int tabCount, @JsonKey(name: 'pane_count')  int paneCount, @JsonKey(name: 'active_tab_id')  String activeTabId, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus,  bool focused,  WorktreeInfo? worktree)?  $default,) {final _that = this;
 switch (_that) {
 case _WorkspaceInfo() when $default != null:
-return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.paneCount,_that.activeTabId,_that.agentStatus,_that.focused);case _:
+return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.paneCount,_that.activeTabId,_that.agentStatus,_that.focused,_that.worktree);case _:
   return null;
 
 }
@@ -1366,7 +1648,7 @@ return $default(_that.workspaceId,_that.label,_that.number,_that.tabCount,_that.
 @JsonSerializable()
 
 class _WorkspaceInfo implements WorkspaceInfo {
-  const _WorkspaceInfo({@JsonKey(name: 'workspace_id') this.workspaceId = '', this.label = '', this.number = 0, @JsonKey(name: 'tab_count') this.tabCount = 0, @JsonKey(name: 'pane_count') this.paneCount = 0, @JsonKey(name: 'active_tab_id') this.activeTabId = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, this.focused = false});
+  const _WorkspaceInfo({@JsonKey(name: 'workspace_id') this.workspaceId = '', this.label = '', this.number = 0, @JsonKey(name: 'tab_count') this.tabCount = 0, @JsonKey(name: 'pane_count') this.paneCount = 0, @JsonKey(name: 'active_tab_id') this.activeTabId = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, this.focused = false, this.worktree});
   factory _WorkspaceInfo.fromJson(Map<String, dynamic> json) => _$WorkspaceInfoFromJson(json);
 
 @override@JsonKey(name: 'workspace_id') final  String workspaceId;
@@ -1377,6 +1659,7 @@ class _WorkspaceInfo implements WorkspaceInfo {
 @override@JsonKey(name: 'active_tab_id') final  String activeTabId;
 @override@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) final  AgentStatus agentStatus;
 @override@JsonKey() final  bool focused;
+@override final  WorktreeInfo? worktree;
 
 /// Create a copy of WorkspaceInfo
 /// with the given fields replaced by the non-null parameter values.
@@ -1391,16 +1674,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _WorkspaceInfo&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.label, label) || other.label == label)&&(identical(other.number, number) || other.number == number)&&(identical(other.tabCount, tabCount) || other.tabCount == tabCount)&&(identical(other.paneCount, paneCount) || other.paneCount == paneCount)&&(identical(other.activeTabId, activeTabId) || other.activeTabId == activeTabId)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.focused, focused) || other.focused == focused));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _WorkspaceInfo&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.label, label) || other.label == label)&&(identical(other.number, number) || other.number == number)&&(identical(other.tabCount, tabCount) || other.tabCount == tabCount)&&(identical(other.paneCount, paneCount) || other.paneCount == paneCount)&&(identical(other.activeTabId, activeTabId) || other.activeTabId == activeTabId)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.worktree, worktree) || other.worktree == worktree));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,workspaceId,label,number,tabCount,paneCount,activeTabId,agentStatus,focused);
+int get hashCode => Object.hash(runtimeType,workspaceId,label,number,tabCount,paneCount,activeTabId,agentStatus,focused,worktree);
 
 @override
 String toString() {
-  return 'WorkspaceInfo(workspaceId: $workspaceId, label: $label, number: $number, tabCount: $tabCount, paneCount: $paneCount, activeTabId: $activeTabId, agentStatus: $agentStatus, focused: $focused)';
+  return 'WorkspaceInfo(workspaceId: $workspaceId, label: $label, number: $number, tabCount: $tabCount, paneCount: $paneCount, activeTabId: $activeTabId, agentStatus: $agentStatus, focused: $focused, worktree: $worktree)';
 }
 
 
@@ -1411,11 +1694,11 @@ abstract mixin class _$WorkspaceInfoCopyWith<$Res> implements $WorkspaceInfoCopy
   factory _$WorkspaceInfoCopyWith(_WorkspaceInfo value, $Res Function(_WorkspaceInfo) _then) = __$WorkspaceInfoCopyWithImpl;
 @override @useResult
 $Res call({
-@JsonKey(name: 'workspace_id') String workspaceId, String label, int number,@JsonKey(name: 'tab_count') int tabCount,@JsonKey(name: 'pane_count') int paneCount,@JsonKey(name: 'active_tab_id') String activeTabId,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus, bool focused
+@JsonKey(name: 'workspace_id') String workspaceId, String label, int number,@JsonKey(name: 'tab_count') int tabCount,@JsonKey(name: 'pane_count') int paneCount,@JsonKey(name: 'active_tab_id') String activeTabId,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus, bool focused, WorktreeInfo? worktree
 });
 
 
-
+@override $WorktreeInfoCopyWith<$Res>? get worktree;
 
 }
 /// @nodoc
@@ -1428,7 +1711,7 @@ class __$WorkspaceInfoCopyWithImpl<$Res>
 
 /// Create a copy of WorkspaceInfo
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? workspaceId = null,Object? label = null,Object? number = null,Object? tabCount = null,Object? paneCount = null,Object? activeTabId = null,Object? agentStatus = null,Object? focused = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? workspaceId = null,Object? label = null,Object? number = null,Object? tabCount = null,Object? paneCount = null,Object? activeTabId = null,Object? agentStatus = null,Object? focused = null,Object? worktree = freezed,}) {
   return _then(_WorkspaceInfo(
 workspaceId: null == workspaceId ? _self.workspaceId : workspaceId // ignore: cast_nullable_to_non_nullable
 as String,label: null == label ? _self.label : label // ignore: cast_nullable_to_non_nullable
@@ -1438,11 +1721,24 @@ as int,paneCount: null == paneCount ? _self.paneCount : paneCount // ignore: cas
 as int,activeTabId: null == activeTabId ? _self.activeTabId : activeTabId // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
 as AgentStatus,focused: null == focused ? _self.focused : focused // ignore: cast_nullable_to_non_nullable
-as bool,
+as bool,worktree: freezed == worktree ? _self.worktree : worktree // ignore: cast_nullable_to_non_nullable
+as WorktreeInfo?,
   ));
 }
 
+/// Create a copy of WorkspaceInfo
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$WorktreeInfoCopyWith<$Res>? get worktree {
+    if (_self.worktree == null) {
+    return null;
+  }
 
+  return $WorktreeInfoCopyWith<$Res>(_self.worktree!, (value) {
+    return _then(_self.copyWith(worktree: value));
+  });
+}
 }
 
 

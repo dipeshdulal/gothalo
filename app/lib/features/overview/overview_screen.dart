@@ -58,7 +58,10 @@ class OverviewScreen extends ConsumerWidget {
       final panes =
           snap?.panes.where((p) => p.workspaceId == workspaceId).toList() ??
               const [];
-      spaceCwd = panes.isEmpty ? '' : panes.first.cwd;
+      spaceCwd = spaceCwdOf(
+        ws == null || ws.isEmpty ? null : ws.first,
+        panes,
+      );
       final git = gitContextForCwd(spaceCwd);
       branch = git.worktree;
       title = git.project.isNotEmpty
@@ -975,4 +978,35 @@ String _tabLabel(String tabId) {
   final colon = tabId.indexOf(':');
   final t = colon >= 0 ? tabId.substring(colon + 1) : tabId;
   return t.isEmpty ? '—' : t;
+}
+
+/// Where a space lives — the directory a new agent started in it should default
+/// to.
+///
+/// The workspace's own checkout path is the only authoritative answer, and it is
+/// used whenever Herdr reports one. A pane's cwd is NOT a substitute: panes
+/// wander into subdirectories and linked worktrees, so a single space routinely
+/// spans several directories at once (a repo root, its `app/`, and three
+/// `worktrees/*` checkouts is an ordinary spread). Picking the first pane in
+/// snapshot order therefore defaults the start sheet to an arbitrary one of
+/// them — which is the bug this replaces.
+///
+/// Only when a space has no checkout at all (a plain `~` space) does this fall
+/// back to the panes, and then to the SHALLOWEST cwd they share rather than an
+/// incidental one: the common ancestor is the closest thing to "where this
+/// space lives" that the panes can tell us.
+String spaceCwdOf(WorkspaceInfo? workspace, List<Pane> panes) {
+  final checkout = workspace?.worktree?.checkoutPath ?? '';
+  if (checkout.isNotEmpty) return checkout;
+  if (panes.isEmpty) return '';
+
+  var shallowest = panes.first.cwd;
+  for (final p in panes) {
+    if (p.cwd.isEmpty) continue;
+    if (shallowest.isEmpty ||
+        '/'.allMatches(p.cwd).length < '/'.allMatches(shallowest).length) {
+      shallowest = p.cwd;
+    }
+  }
+  return shallowest;
 }
