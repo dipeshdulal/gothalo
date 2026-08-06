@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
@@ -13,10 +14,12 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import 'quick_commands_providers.dart';
@@ -24,6 +27,9 @@ import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
 enum _Conn { connecting, connected, disconnected, closed, failed }
+
+/// The destructive per-agent actions in the chat's overflow menu.
+enum _AgentLifecycleAction { restart, stop }
 
 /// The chat view for an agent pane — a phone-native rendering of the agent's
 /// conversation over `WS /agent-transcript`.
@@ -516,6 +522,46 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     );
   }
 
+  /// Ask the bridge, over plain HTTP, why the WebSocket handshake keeps being
+  /// rejected — and return its own explanation.
+  ///
+  /// Dart's WebSocket client reports a rejected upgrade as a bare "not upgraded
+  /// to websocket" with no status and no body, so the reason the bridge sent is
+  /// unreachable from the handshake (see [_permanentFailureMessage]). The same
+  /// URL fetched without an Upgrade header answers with the real status and a
+  /// sentence saying what is wrong, because the endpoint deliberately fails
+  /// BEFORE upgrading.
+  ///
+  /// Worth the extra round trip only once retries are exhausted. Guessing
+  /// instead — the previous behaviour — told operators their agent kind "may not
+  /// support a chat view" when the truth was that the agent was sitting on a
+  /// trust prompt and had not reported its session id yet, which sends them to
+  /// debug entirely the wrong thing.
+  Future<String?> _serverFailureReason(Connection c) async {
+    try {
+      final ws = _transcriptUri(c);
+      final probe = ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http');
+      final res = await Dio().getUri<String>(
+        probe,
+        options: Options(
+          responseType: ResponseType.plain,
+          receiveTimeout: const Duration(seconds: 5),
+          // The interesting answers ARE the error statuses, so don't throw on
+          // them.
+          validateStatus: (_) => true,
+        ),
+      );
+      final body = (res.data ?? '').trim();
+      if (body.isEmpty || body.length > 300) return null;
+      // Go's default mux 404 explains nothing; only pass on a message the
+      // endpoint actually wrote.
+      if (body.toLowerCase() == '404 page not found') return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _connect() async {
     final client = _client;
     if (client == null || _disposed) return;
@@ -673,6 +719,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       return;
     }
 
+    // Retries are exhausted and the pane still exists, so the bridge is
+    // refusing this transcript for a reason it can state. Ask it rather than
+    // guess — see _serverFailureReason.
+    if (_attempts >= _maxSilentAttempts && _failure == null) {
+      final reason = await _serverFailureReason(client.connection);
+      if (_disposed) return;
+      if (reason != null) {
+        _reconnectTimer?.cancel();
+        if (mounted) setState(() => _failure = reason);
+        return;
+      }
+    }
+
     final delay = Duration(seconds: _attempts.clamp(1, 8));
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, _connect);
@@ -812,10 +871,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        titleSpacing: 12,
         title: PaneTitle(
           title: agent?.displayTitle ?? widget.pane,
           subtitle: [
+            // Age FIRST: the subtitle ellipsises, and this is the part that
+            // decides whether you act. Trailing it behind the branch and kind
+            // meant it was the first thing cut off on a long branch name.
+            //
+            // Reading a slow conversation without it, there is no way to tell a
+            // turn that just started from one that stalled twenty minutes ago.
+            if (agent?.sinceLastActivity case final age?)
+              '${agent!.agentStatus.name} ${formatAgentAge(age)}',
             if (agent != null) agent.gitLabel,
             if (agent != null) agent.agent,
           ].where((s) => s.isNotEmpty).join(' · '),
@@ -845,6 +911,41 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             onPressed: () =>
                 context.push('/diff/${Uri.encodeComponent(widget.pane)}'),
             icon: const Icon(Icons.difference_outlined),
+          ),
+          // Lifecycle lives in an overflow, not as bar buttons: these two kill
+          // running work, and a one-tap target next to "Changes" is exactly the
+          // wrong affordance for that. Both confirm before acting.
+          PopupMenuButton<_AgentLifecycleAction>(
+            tooltip: 'Agent actions',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) {
+              final kind = agent?.agent ?? 'agent';
+              switch (action) {
+                case _AgentLifecycleAction.restart:
+                  restartAgent(context, ref, widget.pane, kind: kind);
+                case _AgentLifecycleAction.stop:
+                  stopAgent(context, ref, widget.pane, kind: kind);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: _AgentLifecycleAction.restart,
+                child: ListTile(
+                  leading: Icon(Icons.restart_alt),
+                  title: Text('Restart agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _AgentLifecycleAction.stop,
+                child: ListTile(
+                  leading: Icon(Icons.stop_circle_outlined,
+                      color: Theme.of(ctx).colorScheme.error),
+                  title: const Text('Stop agent'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1051,7 +1152,27 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
 
+    DateTime? prevAt;
+    var prevWasTool = false;
     for (final e in entries) {
+      // A pause before an ASSISTANT entry is the agent working — the thing you
+      // want to see when a turn felt slow. A pause before a USER entry is you
+      // being away from your phone, which is not news and would otherwise
+      // litter the transcript with hours-long "gaps" every night.
+      final at = e.at;
+      if (at != null && prevAt != null && e.role == EntryRole.assistant) {
+        final gap = at.difference(prevAt);
+        if (gap >= _minShownGap) {
+          flush();
+          // A gap that follows a tool call is mostly the TOOL running, not the
+          // model thinking. Calling that "thought" overstates it, so the label
+          // only claims thinking when the pause really was the agent's own.
+          blocks.add(_GapBlock(gap, afterTool: prevWasTool));
+        }
+      }
+      if (at != null) prevAt = at;
+      prevWasTool = e.kind == EntryKind.toolCall || e.kind == EntryKind.toolResult;
+
       if (e.kind == EntryKind.toolCall) {
         (run ??= <TranscriptEntry>[]).add(e);
       } else {
@@ -1065,6 +1186,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
 
   Widget _blockWidget(_Block block) => switch (block) {
     _EntryBlock(:final entry) => _EntryTile(entry: entry),
+    _GapBlock(:final gap, :final afterTool) => _GapLine(
+      gap: gap,
+      afterTool: afterTool,
+    ),
     _ToolGroupBlock(:final calls) => _ToolLedger(
       calls: calls,
       resultFor: (id) => _resultsByForId[id],
@@ -1086,6 +1211,67 @@ class _EntryBlock extends _Block {
 class _ToolGroupBlock extends _Block {
   const _ToolGroupBlock(this.calls);
   final List<TranscriptEntry> calls;
+}
+
+/// A pause the AGENT spent working, rendered between the entries it separates.
+class _GapBlock extends _Block {
+  const _GapBlock(this.gap, {this.afterTool = false});
+  final Duration gap;
+
+  /// The pause followed a tool call, so most of it was the tool running.
+  final bool afterTool;
+}
+
+/// The shortest pause worth drawing.
+///
+/// A minute, not a few seconds. The first attempt used 10s and marked almost
+/// every tool call — "took 14s", "took 17s", "took 37s" down the whole
+/// transcript. All true, none of it useful: nothing you would do differently,
+/// and enough of it to bury the one pause that mattered.
+///
+/// The bar is whether you would have NOTICED the wait. Under a minute you would
+/// not, so the marker earns nothing and costs a row.
+const _minShownGap = Duration(minutes: 1);
+
+/// The time between two entries, drawn as a quiet timeline marker.
+///
+/// It answers a question the transcript otherwise hides: a long turn looks
+/// identical to a fast one once it is on screen, so there is no way to tell
+/// where the time went when a session felt slow.
+///
+/// Deliberately centred and low-contrast rather than left-aligned with an icon.
+/// The first attempt sat at the left margin with a "⋯" glyph, which read as a
+/// typing indicator or a failed message — it competed with the conversation
+/// instead of annotating it. Metadata should recede; centring it also matches
+/// the day separators, so it is legible as "a marker, not a message".
+class _GapLine extends StatelessWidget {
+  const _GapLine({required this.gap, this.afterTool = false});
+
+  final Duration gap;
+
+  /// The pause followed a tool call, so most of it was the tool running.
+  final bool afterTool;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Center(
+        child: Text(
+          afterTool
+              ? 'took ${formatAgentAge(gap)}'
+              : 'thought ${formatAgentAge(gap)}',
+          style: TextStyle(
+            fontSize: 10.5,
+            letterSpacing: 0.3,
+            fontWeight: FontWeight.w500,
+            color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// First non-blank string in [xs] (trimmed), or null.

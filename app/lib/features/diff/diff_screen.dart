@@ -72,7 +72,6 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        titleSpacing: 12,
         title: PaneTitle(
           title: 'Changes',
           subtitle: subtitle,

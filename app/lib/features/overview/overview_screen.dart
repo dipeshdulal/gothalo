@@ -8,6 +8,7 @@ import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../agents/start_agent_sheet.dart';
 import '../approvals/approve_action.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
@@ -57,7 +58,10 @@ class OverviewScreen extends ConsumerWidget {
       final panes =
           snap?.panes.where((p) => p.workspaceId == workspaceId).toList() ??
               const [];
-      spaceCwd = panes.isEmpty ? '' : panes.first.cwd;
+      spaceCwd = spaceCwdOf(
+        ws == null || ws.isEmpty ? null : ws.first,
+        panes,
+      );
       final git = gitContextForCwd(spaceCwd);
       branch = git.worktree;
       title = git.project.isNotEmpty
@@ -125,6 +129,17 @@ class OverviewScreen extends ConsumerWidget {
                 icon: const Icon(Icons.more_vert),
                 onSelected: (v) {
                   switch (v) {
+                    case 'agent':
+                      showStartAgentSheet(
+                        context,
+                        ref,
+                        target: StartAgentTarget(
+                          placement: StartAgentPlacement.newTab,
+                          id: workspaceId!,
+                          where: 'A new tab in $title',
+                          defaultCwd: spaceCwd,
+                        ),
+                      );
                     case 'tab':
                       newTab(context, ref, workspaceId!);
                     case 'worktree':
@@ -136,6 +151,16 @@ class OverviewScreen extends ConsumerWidget {
                   }
                 },
                 itemBuilder: (ctx) => [
+                  // First, because dispatching work is the reason to open a
+                  // space from a phone — the plain tab below is the fallback.
+                  const PopupMenuItem(
+                    value: 'agent',
+                    child: ListTile(
+                      leading: Icon(Icons.rocket_launch_outlined),
+                      title: Text('Start agent'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                   const PopupMenuItem(
                     value: 'tab',
                     child: ListTile(
@@ -715,7 +740,9 @@ class _PaneCard extends ConsumerWidget {
                         ),
                       ),
                     ],
-                    // Split / close this pane (Herdr parity via /herdr).
+                    // Split / close this pane (Herdr parity via /herdr), plus
+                    // the agent lifecycle: an idle shell can host a new agent,
+                    // and a pane already hosting one can restart or stop it.
                     PopupMenuButton<String>(
                       tooltip: 'Pane actions',
                       padding: EdgeInsets.zero,
@@ -724,6 +751,23 @@ class _PaneCard extends ConsumerWidget {
                           color: scheme.onSurfaceVariant),
                       onSelected: (v) {
                         switch (v) {
+                          case 'start-agent':
+                            showStartAgentSheet(
+                              context,
+                              ref,
+                              target: StartAgentTarget(
+                                placement: StartAgentPlacement.existingPane,
+                                id: pane.paneId,
+                                where: 'In this pane (${pane.paneId})',
+                                defaultCwd: pane.cwd,
+                              ),
+                            );
+                          case 'restart-agent':
+                            restartAgent(context, ref, pane.paneId,
+                                kind: agent!.agent);
+                          case 'stop-agent':
+                            stopAgent(context, ref, pane.paneId,
+                                kind: agent!.agent);
                           case 'split':
                             splitPane(context, ref, pane.paneId);
                           case 'close':
@@ -731,6 +775,39 @@ class _PaneCard extends ConsumerWidget {
                         }
                       },
                       itemBuilder: (ctx) => [
+                        // Offered only on a pane with no agent in it. A pane
+                        // running a dev server is rejected by the bridge, but
+                        // it's a shell either way — only an agent pane is a
+                        // definitively wrong target, and it gets restart/stop
+                        // instead.
+                        if (!isAgent)
+                          const PopupMenuItem(
+                            value: 'start-agent',
+                            child: ListTile(
+                              leading: Icon(Icons.rocket_launch_outlined),
+                              title: Text('Start agent here'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        if (isAgent) ...[
+                          const PopupMenuItem(
+                            value: 'restart-agent',
+                            child: ListTile(
+                              leading: Icon(Icons.restart_alt),
+                              title: Text('Restart agent'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'stop-agent',
+                            child: ListTile(
+                              leading: Icon(Icons.stop_circle_outlined,
+                                  color: Theme.of(ctx).colorScheme.error),
+                              title: const Text('Stop agent'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
                         const PopupMenuItem(
                           value: 'split',
                           child: ListTile(
@@ -901,4 +978,35 @@ String _tabLabel(String tabId) {
   final colon = tabId.indexOf(':');
   final t = colon >= 0 ? tabId.substring(colon + 1) : tabId;
   return t.isEmpty ? '—' : t;
+}
+
+/// Where a space lives — the directory a new agent started in it should default
+/// to.
+///
+/// The workspace's own checkout path is the only authoritative answer, and it is
+/// used whenever Herdr reports one. A pane's cwd is NOT a substitute: panes
+/// wander into subdirectories and linked worktrees, so a single space routinely
+/// spans several directories at once (a repo root, its `app/`, and three
+/// `worktrees/*` checkouts is an ordinary spread). Picking the first pane in
+/// snapshot order therefore defaults the start sheet to an arbitrary one of
+/// them — which is the bug this replaces.
+///
+/// Only when a space has no checkout at all (a plain `~` space) does this fall
+/// back to the panes, and then to the SHALLOWEST cwd they share rather than an
+/// incidental one: the common ancestor is the closest thing to "where this
+/// space lives" that the panes can tell us.
+String spaceCwdOf(WorkspaceInfo? workspace, List<Pane> panes) {
+  final checkout = workspace?.worktree?.checkoutPath ?? '';
+  if (checkout.isNotEmpty) return checkout;
+  if (panes.isEmpty) return '';
+
+  var shallowest = panes.first.cwd;
+  for (final p in panes) {
+    if (p.cwd.isEmpty) continue;
+    if (shallowest.isEmpty ||
+        '/'.allMatches(p.cwd).length < '/'.allMatches(shallowest).length) {
+      shallowest = p.cwd;
+    }
+  }
+  return shallowest;
 }

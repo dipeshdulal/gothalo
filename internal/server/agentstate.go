@@ -91,7 +91,7 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		Title:     agent.Title,
 		Detection: detection,
 		Recent:    recent,
-		History:   agentHistory(agent, pane),
+		History:   agentHistory(c, bare, agent, pane),
 	})
 
 	// Enrich a block with Herdr's own detection category (agent.explain): the
@@ -126,7 +126,13 @@ const agentHistoryEntries = 40
 // Best-effort by design. A kind with no reader, an unresolvable session, or a
 // read error all yield nil, and the parser's terminal-derived values stand. The
 // card must never fail because a transcript is missing.
-func agentHistory(agent herdr.Agent, pane string) []agentstate.HistoryEntry {
+func agentHistory(c *herdr.Client, bare string, agent herdr.Agent, pane string) []agentstate.HistoryEntry {
+	// Same ambiguity guard as the transcript stream: with no session id and a
+	// sibling agent in the same directory, resolution cannot tell the two apart,
+	// and a card showing another agent's messages is worse than one showing none.
+	if _, ambiguous := siblingSharesCwd(c, bare, agent); ambiguous {
+		return nil
+	}
 	src, err := transcript.Open(agent.Kind, agent.Cwd, agent.SessionID())
 	if err != nil {
 		// Unsupported kind / no transcript yet is the normal case for some agents,

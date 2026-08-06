@@ -67,6 +67,11 @@ type Push struct {
 // DevicesPath is where the paired-device registry lives.
 func (c *Config) DevicesPath() string { return filepath.Join(c.DataDir, "devices.json") }
 
+// TimelinePath is where the recorded agent-activity ring is persisted. It lives
+// in DataDir with the rest of the per-install state so a restart — the moment
+// the recent past matters most — does not start from an empty history.
+func (c *Config) TimelinePath() string { return filepath.Join(c.DataDir, "timeline.json") }
+
 // Load resolves configuration. If path is empty it looks for
 // <DataDir>/config.json. Missing config file is fine (defaults apply).
 // Environment variables override file values.

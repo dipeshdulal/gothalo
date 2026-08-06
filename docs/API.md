@@ -58,7 +58,12 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
 | GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into an **agent** pane's tree and get the path back, to paste into a prompt (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
+| GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
+| GET  | `/agents/available` | — | `{agents[],known_kinds[],discovery}` | which agent kinds this host can actually launch (below) |
+| POST | `/agent/start` | `{kind, pane_id\|split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id,kind,name,…}` | launch an agent, optionally in a pane it creates (below) |
+| POST | `/agent/restart` | `{pane_id, prompt?}` | `{restarted:true,pane_id,kind,…}` | replace the agent in a pane — **loses the conversation** (below) |
+| POST | `/agent/stop` | `{pane_id}` | `{stopped:true,pane_id,kind}` | quit the agent, keep the pane (below) |
 | GET  | `/agent-transcript` | — (query: `pane`, `token`) | **WebSocket** | streamed structured chat transcript for an **agent** pane (below) |
 | GET  | `/attach` | — (query: `pane`, `token`) | **WebSocket** | live terminal for **any** pane (below) |
 | GET  | `/events` | — (query: `token`) | **WebSocket** | unified push event stream: snapshot-on-connect, then deltas (below) |
@@ -291,6 +296,41 @@ Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` no agent
 that pane · `405` non-POST · `413` over the cap · `415` not an accepted image
 type · `500` the drop directory couldn't be written · `502` herdr command failed.
 Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
+## GET /timeline — recent agent activity
+The only read that describes the **past**. Every other endpoint says what is true
+now, which is why none of them can tell you whether an agent blocked fifty
+minutes ago or ten seconds ago — the status is the same either way.
+
+```
+GET /timeline?limit=100&pane=w4:p2
+```
+Both query params are optional: `limit` defaults to `100` and is capped at `500`;
+`pane` (session-qualified, matched whole) restricts the log to one agent.
+
+Response `200`, **newest first**:
+```json
+{ "entries": [
+  { "ts": 1785681000000, "pane": "w4:p2", "agent": "claude", "session": "default",
+    "workspace": "w4", "from": "working", "to": "blocked", "prev_ms": 742000 }
+], "limit": 100 }
+```
+- **`prev_ms`** — how long the agent spent in `from`. This is the whole point of
+  the endpoint and the one fact `/snapshot` cannot reconstruct (`state_change_seq`
+  is a counter, not a clock). **Absent ≠ `0`**: `0` is a real instantaneous flip,
+  absent means the bridge could not see where the span began. Render nothing, not
+  "0s".
+- **`from` absent** = a first sighting of that pane, not a transition out of an
+  unnamed state. **`to: "gone"`** = the pane closed or its process exited.
+- Answered from an in-memory ring — **no herdr call** — so it is cheap to poll
+  and still answers while herdr is down. The ring is bounded (1500 entries / 72h)
+  and persisted, so a bridge restart does not lose the recent past.
+
+Errors: `400` `limit` present but not a positive integer (malformed is rejected,
+never silently defaulted) · `401` bad bearer · `503` bridge running without a
+recorder (distinct from an empty `entries[]`, which just means nothing has
+happened yet). Timeline entries are deliberately **not** carried on `WS /events`
+— see [`CONTRACT-timeline.md`](CONTRACT-timeline.md) for why, and for the full
+schema and restart semantics.
 
 ## POST /agent-mode/cycle — change a Claude agent's permission mode
 The mobile remote for Claude's **Shift+Tab** key: it advances a Claude pane's
@@ -470,6 +510,70 @@ resync/reconnect rules** live in [`CONTRACT.md`](../CONTRACT.md) at the repo roo
 agent_status}`; it does **not** carry `state_change_seq` (Herdr's event omits
 it), so pair `pane_id` with the snapshot to get the seq for `/approve`.
 
+## Agent lifecycle — start / restart / stop
+Full contract, live captures and the reasoning behind each rule:
+[`docs/CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md). Summary:
+
+**`GET /agents/available`** — the kinds this host can run *right now*. Discovered
+on the bridge (Herdr's own `--kind` catalog ∩ what resolves on the daemon's PATH,
+since Herdr documents a kind as its canonical executable); nothing is hardcoded.
+```json
+{ "agents": [{ "kind": "claude", "path": "/opt/homebrew/bin/claude", "state_reporting": true }],
+  "known_kinds": ["pi","claude","codex","…"],
+  "discovery": "herdr agent kinds + PATH lookup" }
+```
+`state_reporting:false` means the kind will run but Herdr can't classify it — it
+stays `unknown` forever and never raises an approval or a push. **Only offer
+kinds from `agents[]`.**
+
+**`POST /agent/start`** — one of three targets, exactly one (naming none or
+several is a `400`):
+```
+{ "kind":"claude", "pane_id":"wN:p7" }                                    // reuse an idle shell pane
+{ "kind":"claude", "split_from":"wN:p1", "direction":"down", "cwd":"…" }  // split, agent in the new pane
+{ "kind":"claude", "workspace_id":"wN", "label":"review", "cwd":"…" }     // new tab, agent in its root pane
+```
+Optional: `cwd` (absolute, existing directory — **rejected with `pane_id`**),
+`prompt` (the agent's first message), `name` (`[a-z][a-z0-9_-]{0,31}`),
+`timeout_ms` (clamped 5 000–300 000, default 60 000). Response `200`:
+```json
+{ "pane_id":"wN:p7", "tab_id":"wN:t5", "workspace_id":"wN",
+  "kind":"claude", "name":"claude-wn-p7", "created_pane":true, "prompt_sent":true }
+```
+`pane_id` is session-qualified, so it feeds `/attach`, `/transcript` and `/send`
+directly. **This call blocks 5–30 s** — Herdr only returns once it has verified
+the agent is really up — so raise the client's receive timeout.
+
+`prompt_error` is present only when a `prompt` was asked for and did not land.
+The agent is running either way (hence still `200`), but the client must be able
+to tell an instructed agent from an empty one — show the reason rather than
+navigating to it as if the prompt arrived.
+
+`cwd` is validated server-side: absolute, canonical (every `..`/`.`/`//` form is
+rejected, not normalised), must exist, must be a directory.
+
+**`POST /agent/stop`** `{pane_id}` → `{stopped:true,pane_id,kind}`. Kills running
+work; the pane survives. Herdr has no stop method, so the bridge sends repeated
+`ctrl+c` and returns `200` **only** once it has observed the pane back at its
+shell prompt. A `409` means the agent ignored the interrupts and is **still
+running** — never treat it as a slow success.
+
+**`POST /agent/restart`** `{pane_id, prompt?}` →
+`{restarted:true,pane_id,kind,name,cwd,prompt_sent,history_kept:false}`. Stops the
+agent and starts the same kind in the same pane and directory. The pane, its id,
+its scrollback, its cwd and the agent's name survive. **The conversation does
+not** — the replacement is a new session with no memory of the old one, the
+in-flight turn is lost, and so is queued input and permission/plan mode. Confirm
+before calling.
+
+Status codes: `400` bad shape / bad `cwd` / unknown kind · `401` · `404` unknown
+pane or no agent in it · `405` wrong method · `409` pane busy, pane already hosts
+an agent, kind not installed, or the agent would not stop · `502` Herdr failed
+(a start that fails after creating a pane says so and names the pane).
+
+These publish `agent_started` / `agent_stopped` / `agent_restarted` on
+`WS /events`.
+
 ## POST /pane/new — create a terminal from mobile
 Creates a pane and returns its identity so the app can immediately `/attach` to
 it. Two modes, chosen by the body:
@@ -548,11 +652,13 @@ other Herdr error.
 `401` missing/invalid bearer · `403` invalid pairing code / method not allowlisted
 (`/herdr`) · `400` bad body ·
 `404` unknown pane/tab/workspace, no agent in that pane (`/agent-state`,
-`/agent-mode/cycle`, `/agent-transcript`), or no transcript file / unsupported
-kind (`/agent-transcript`) · `405` wrong method (`/agent-mode/cycle` non-POST,
-`/image` non-POST) ·
+`/agent-mode/cycle`, `/agent-transcript`, `/agent/stop`, `/agent/restart`), or no
+transcript file / unsupported kind (`/agent-transcript`) · `405` wrong method
+(`/agent-mode/cycle` non-POST, `/image` non-POST, `/agents/available`,
+`/agent/*` non-POST) ·
 `409` mode switching not supported for the agent kind (`/agent-mode/cycle` on a
-non-Claude pane) · `413` upload over the 10 MiB cap (`/image`) · `415` body is
-not an accepted image type (`/image`) · `500` transcript read failed
-(`/agent-transcript`), drop directory unwritable (`/image`) · `502` herdr command
-failed.
+non-Claude pane), or pane busy / already hosts an agent / kind not installed /
+agent would not stop (`/agent/*`) · `413` upload over the 10 MiB cap (`/image`) ·
+`415` body is not an accepted image type (`/image`) · `500` transcript read
+failed (`/agent-transcript`), drop directory unwritable (`/image`) · `502` herdr
+command failed.

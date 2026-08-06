@@ -40,6 +40,40 @@ Future<Map<String, dynamic>?> _run(
   }
 }
 
+/// Run one dedicated bridge endpoint (not the `/herdr` proxy), surfacing the
+/// outcome as a snackbar. Returns whether it succeeded.
+///
+/// The agent-lifecycle endpoints are not proxy calls — starting an agent is a
+/// multi-step operation with server-side validation, and stopping one has no
+/// Herdr method at all — so they need their own runner alongside [_run]. The
+/// snackbar/no-connection behaviour is kept identical so every action in this
+/// file feels the same.
+Future<bool> _bridge(
+  BuildContext context,
+  WidgetRef ref,
+  Future<void> Function(BridgeClient client) call, {
+  String? successMessage,
+}) async {
+  final client = ref.read(bridgeClientProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  if (client == null) {
+    messenger.showSnackBar(const SnackBar(content: Text('No bridge connection.')));
+    return false;
+  }
+  try {
+    await call(client);
+    if (successMessage != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(successMessage), duration: const Duration(seconds: 2)),
+      );
+    }
+    return true;
+  } on BridgeException catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    return false;
+  }
+}
+
 /// A yes/no confirm for a destructive action; the confirm button is error-tinted.
 Future<bool> _confirm(
   BuildContext context, {
@@ -144,6 +178,58 @@ Future<void> removeWorktree(
   if (!context.mounted) return;
   await _run(context, ref, 'worktree.remove', {'workspace_id': workspaceId},
       successMessage: 'Worktree removed');
+}
+
+/// Stop the agent running in [paneId], leaving the pane open at a shell prompt.
+///
+/// Confirmed first, and worded so the cost is unambiguous: this is not a pause
+/// or a disconnect, it quits a process that may be mid-edit. [kind] names the
+/// agent in the prompt ("Stop claude?") so the dialog says what is being killed.
+Future<bool> stopAgent(
+  BuildContext context,
+  WidgetRef ref,
+  String paneId, {
+  String kind = 'agent',
+}) async {
+  if (!await _confirm(
+    context,
+    title: 'Stop $kind?',
+    message: 'This quits the $kind running in $paneId on the host. Whatever '
+        'it is doing right now is interrupted and lost. The pane stays open.',
+    confirmLabel: 'Stop',
+  )) {
+    return false;
+  }
+  if (!context.mounted) return false;
+  return _bridge(context, ref, (c) => c.stopAgent(paneId),
+      successMessage: '$kind stopped');
+}
+
+/// Stop the agent in [paneId] and start the same kind again in the same pane
+/// and directory.
+///
+/// Confirmed first. The message leads with the part that surprises people: the
+/// replacement is a NEW agent session, so nothing that was discussed carries
+/// over. "Restart" reads like a refresh, and it isn't one.
+Future<bool> restartAgent(
+  BuildContext context,
+  WidgetRef ref,
+  String paneId, {
+  String kind = 'agent',
+}) async {
+  if (!await _confirm(
+    context,
+    title: 'Restart $kind?',
+    message: 'This quits the $kind in $paneId and starts a fresh one in the '
+        'same directory. The conversation is NOT carried over — the new agent '
+        'has no memory of this one — and the current turn is lost.',
+    confirmLabel: 'Restart',
+  )) {
+    return false;
+  }
+  if (!context.mounted) return false;
+  return _bridge(context, ref, (c) => c.restartAgent(paneId),
+      successMessage: '$kind restarted');
 }
 
 /// Prompt for a branch name and create a new git worktree off [cwd]'s repo.

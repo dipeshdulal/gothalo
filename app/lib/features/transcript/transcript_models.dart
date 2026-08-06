@@ -181,6 +181,14 @@ class TranscriptEntry {
   EntryRole get role => _entryRole(roleRaw);
   EntryKind get kind => _entryKind(kindRaw);
 
+  /// When the agent wrote this entry, or null when the source line carried no
+  /// timestamp.
+  DateTime? get at {
+    final raw = ts;
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw)?.toLocal();
+  }
+
   factory TranscriptEntry.fromJson(Map<String, dynamic> json) {
     return TranscriptEntry(
       id: json['id'] as String? ?? '',

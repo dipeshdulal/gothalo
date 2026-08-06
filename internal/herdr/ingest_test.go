@@ -150,9 +150,9 @@ func TestAgentStatusDedup(t *testing.T) {
 	ing := NewIngester(New(), bus)
 
 	// Same status arriving from two different signals collapses to one emit.
-	ing.emitAgentStatus("wN:pB", "wN", "claude", "working")
-	ing.emitAgentStatus("wN:pB", "wN", "claude", "working")
-	ing.emitAgentStatus("wN:pB", "wN", "claude", "blocked") // real change
+	ing.emitAgentStatus("wN:pB", "wN", "claude", "working", "Fix the parser")
+	ing.emitAgentStatus("wN:pB", "wN", "claude", "working", "Fix the parser")
+	ing.emitAgentStatus("wN:pB", "wN", "claude", "blocked", "Fix the parser") // real change
 
 	got := collect(t, sub, 2)
 	if got[0].Type != events.TypePaneAgentStatusChanged || got[1].Type != events.TypePaneAgentStatusChanged {
@@ -288,5 +288,29 @@ func TestLivenessProbeNeedsSilence(t *testing.T) {
 	i.mu.Unlock()
 	if !i.silentFor(probeSilence) {
 		t.Error("a socket quiet for twice the window is not reported silent")
+	}
+}
+
+// TestAgentStatusCarriesTitle: a status envelope has to name the pane a person
+// would recognise. "claude" is a KIND — a host running a dozen Claudes produces
+// a dozen rows that all read the same, which is exactly when a log or an inbox
+// stops being usable. Herdr sends the title on the event; it just was not read.
+func TestAgentStatusCarriesTitle(t *testing.T) {
+	bus := events.New()
+	sub := bus.Subscribe(4)
+	defer sub.Close()
+	ing := NewIngester(New(), bus)
+
+	ing.emitAgentStatus("wN:pC", "wN", "claude", "blocked", "Evaluate MLX model speedup")
+
+	got := collect(t, sub, 1)
+	var p struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(got[0].Payload, &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if p.Title != "Evaluate MLX model speedup" {
+		t.Errorf("title = %q, want the pane's human name", p.Title)
 	}
 }
