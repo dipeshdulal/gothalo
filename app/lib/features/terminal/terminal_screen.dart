@@ -19,6 +19,7 @@ import '../../features/approvals/approve_action.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import '../transcript/quick_commands_providers.dart';
+import 'pty_mouse_handler.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
 /// [closed] is terminal: the pane no longer exists (closed on the host or the
@@ -43,7 +44,12 @@ class TerminalScreen extends ConsumerStatefulWidget {
 }
 
 class _TerminalScreenState extends ConsumerState<TerminalScreen> {
-  final terminal = Terminal(maxLines: 10000);
+  /// [PtyMouseHandler] replaces xterm's wheel encoding so a drag on an
+  /// alt-screen pane actually scrolls the application — see its doc comment.
+  final terminal = Terminal(
+    maxLines: 10000,
+    mouseHandler: const PtyMouseHandler(),
+  );
   bool _stickyCtrl = false;
 
   BridgeClient? _client;
