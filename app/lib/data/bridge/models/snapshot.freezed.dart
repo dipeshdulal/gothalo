@@ -31,7 +31,18 @@ mixin _$Agent {
 /// aggregate header) orders identically instead of each deriving its own.
 /// Null on an older bridge that doesn't send it — see [attention], which
 /// falls back to the local [AgentStatus.rank].
-@JsonKey(name: 'attention_rank') int? get attentionRank;
+@JsonKey(name: 'attention_rank') int? get attentionRank;/// When this agent last wrote to its transcript, in unix milliseconds —
+/// the bridge's answer to "how long has it been like this".
+///
+/// Every other field describes NOW. This is the only one that dates it, and
+/// it is what turns "blocked" into "blocked 50m" — the difference that
+/// decides whether you pick the phone up.
+///
+/// **Null means unknown, never "just now".** Absent for a kind whose
+/// sessions share one store (the bridge refuses to report another agent's
+/// age as this one's) and for an agent that has not spoken yet. Render
+/// nothing rather than "0s".
+@JsonKey(name: 'last_activity_ts') int? get lastActivityTs;
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -44,16 +55,16 @@ $AgentCopyWith<Agent> get copyWith => _$AgentCopyWithImpl<Agent>(this as Agent, 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank)&&(identical(other.lastActivityTs, lastActivityTs) || other.lastActivityTs == lastActivityTs));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank);
+int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank,lastActivityTs);
 
 @override
 String toString() {
-  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank)';
+  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank, lastActivityTs: $lastActivityTs)';
 }
 
 
@@ -64,7 +75,7 @@ abstract mixin class $AgentCopyWith<$Res>  {
   factory $AgentCopyWith(Agent value, $Res Function(Agent) _then) = _$AgentCopyWithImpl;
 @useResult
 $Res call({
- String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank
+ String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank,@JsonKey(name: 'last_activity_ts') int? lastActivityTs
 });
 
 
@@ -81,7 +92,7 @@ class _$AgentCopyWithImpl<$Res>
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,Object? lastActivityTs = freezed,}) {
   return _then(_self.copyWith(
 agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
@@ -96,6 +107,7 @@ as String,focused: null == focused ? _self.focused : focused // ignore: cast_nul
 as bool,session: freezed == session ? _self.session : session // ignore: cast_nullable_to_non_nullable
 as AgentSession?,stateChangeSeq: freezed == stateChangeSeq ? _self.stateChangeSeq : stateChangeSeq // ignore: cast_nullable_to_non_nullable
 as int?,attentionRank: freezed == attentionRank ? _self.attentionRank : attentionRank // ignore: cast_nullable_to_non_nullable
+as int?,lastActivityTs: freezed == lastActivityTs ? _self.lastActivityTs : lastActivityTs // ignore: cast_nullable_to_non_nullable
 as int?,
   ));
 }
@@ -190,10 +202,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Agent() when $default != null:
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank);case _:
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.lastActivityTs);case _:
   return orElse();
 
 }
@@ -211,10 +223,10 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs)  $default,) {final _that = this;
 switch (_that) {
 case _Agent():
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank);}
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.lastActivityTs);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -228,10 +240,10 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs)?  $default,) {final _that = this;
 switch (_that) {
 case _Agent() when $default != null:
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank);case _:
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.lastActivityTs);case _:
   return null;
 
 }
@@ -243,7 +255,7 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 @JsonSerializable()
 
 class _Agent extends Agent {
-  const _Agent({this.agent = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, @JsonKey(name: 'pane_id') this.paneId = '', @JsonKey(name: 'terminal_title_stripped') this.title = '', @JsonKey(name: 'workspace_id') this.workspaceId = '', @JsonKey(name: 'tab_id') this.tabId = '', this.cwd = '', @JsonKey(name: 'foreground_cwd') this.foregroundCwd = '', this.branch = '', this.focused = false, @JsonKey(name: 'agent_session') this.session, @JsonKey(name: 'state_change_seq') this.stateChangeSeq, @JsonKey(name: 'attention_rank') this.attentionRank}): super._();
+  const _Agent({this.agent = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, @JsonKey(name: 'pane_id') this.paneId = '', @JsonKey(name: 'terminal_title_stripped') this.title = '', @JsonKey(name: 'workspace_id') this.workspaceId = '', @JsonKey(name: 'tab_id') this.tabId = '', this.cwd = '', @JsonKey(name: 'foreground_cwd') this.foregroundCwd = '', this.branch = '', this.focused = false, @JsonKey(name: 'agent_session') this.session, @JsonKey(name: 'state_change_seq') this.stateChangeSeq, @JsonKey(name: 'attention_rank') this.attentionRank, @JsonKey(name: 'last_activity_ts') this.lastActivityTs}): super._();
   factory _Agent.fromJson(Map<String, dynamic> json) => _$AgentFromJson(json);
 
 @override@JsonKey() final  String agent;
@@ -275,6 +287,18 @@ class _Agent extends Agent {
 /// Null on an older bridge that doesn't send it — see [attention], which
 /// falls back to the local [AgentStatus.rank].
 @override@JsonKey(name: 'attention_rank') final  int? attentionRank;
+/// When this agent last wrote to its transcript, in unix milliseconds —
+/// the bridge's answer to "how long has it been like this".
+///
+/// Every other field describes NOW. This is the only one that dates it, and
+/// it is what turns "blocked" into "blocked 50m" — the difference that
+/// decides whether you pick the phone up.
+///
+/// **Null means unknown, never "just now".** Absent for a kind whose
+/// sessions share one store (the bridge refuses to report another agent's
+/// age as this one's) and for an agent that has not spoken yet. Render
+/// nothing rather than "0s".
+@override@JsonKey(name: 'last_activity_ts') final  int? lastActivityTs;
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
@@ -289,16 +313,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank)&&(identical(other.lastActivityTs, lastActivityTs) || other.lastActivityTs == lastActivityTs));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank);
+int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank,lastActivityTs);
 
 @override
 String toString() {
-  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank)';
+  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank, lastActivityTs: $lastActivityTs)';
 }
 
 
@@ -309,7 +333,7 @@ abstract mixin class _$AgentCopyWith<$Res> implements $AgentCopyWith<$Res> {
   factory _$AgentCopyWith(_Agent value, $Res Function(_Agent) _then) = __$AgentCopyWithImpl;
 @override @useResult
 $Res call({
- String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank
+ String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank,@JsonKey(name: 'last_activity_ts') int? lastActivityTs
 });
 
 
@@ -326,7 +350,7 @@ class __$AgentCopyWithImpl<$Res>
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,Object? lastActivityTs = freezed,}) {
   return _then(_Agent(
 agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
@@ -341,6 +365,7 @@ as String,focused: null == focused ? _self.focused : focused // ignore: cast_nul
 as bool,session: freezed == session ? _self.session : session // ignore: cast_nullable_to_non_nullable
 as AgentSession?,stateChangeSeq: freezed == stateChangeSeq ? _self.stateChangeSeq : stateChangeSeq // ignore: cast_nullable_to_non_nullable
 as int?,attentionRank: freezed == attentionRank ? _self.attentionRank : attentionRank // ignore: cast_nullable_to_non_nullable
+as int?,lastActivityTs: freezed == lastActivityTs ? _self.lastActivityTs : lastActivityTs // ignore: cast_nullable_to_non_nullable
 as int?,
   ));
 }

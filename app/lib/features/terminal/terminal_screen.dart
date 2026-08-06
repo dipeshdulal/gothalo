@@ -318,7 +318,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
-        titleSpacing: 12,
         title: PaneTitle(
           title: agent?.displayTitle ?? widget.pane,
           subtitle: agent != null

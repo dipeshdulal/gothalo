@@ -8,6 +8,7 @@ import '../../core/widgets/live_activity_line.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/widgets/agent_avatar.dart';
+import '../../core/widgets/agent_age.dart';
 import '../inbox/widgets/status_badge.dart';
 import 'priority_providers.dart';
 
@@ -167,6 +168,13 @@ class _AgentRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // The wait itself, next to the state. "Blocked" tells you what;
+          // this tells you whether to care.
+          AgentAge(
+            agent.sinceLastActivity,
+            emphasize: agent.agentStatus == AgentStatus.blocked,
+          ),
+          const SizedBox(width: 8),
           StatusBadge(agent.agentStatus),
           IconButton(
             tooltip: starred ? 'Unstar' : 'Star',

@@ -8,6 +8,7 @@ import '../../core/theme.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/widgets/agent_avatar.dart';
+import '../../core/widgets/agent_age.dart';
 import '../inbox/widgets/status_badge.dart';
 import '../priority/priority_providers.dart';
 
@@ -92,7 +93,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
       asset: Backgrounds.servers,
       child: Scaffold(
         appBar: AppBar(
-          titleSpacing: 12,
           title: Row(
             mainAxisSize: MainAxisSize.min,
             children: const [
@@ -213,6 +213,12 @@ class _PriorityTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       onTap: onTap,
+      // ListTile reserves a fixed 40dp leading slot and then adds a separate
+      // 16dp horizontalTitleGap, so shrinking the avatar only grows the empty
+      // space inside the slot — the text never moves closer. Both have to come
+      // down together, and identically on every tile in this list.
+      minLeadingWidth: 36,
+      horizontalTitleGap: 10,
       leading: AgentAvatar(agent: hit.agent.agent, radius: 18),
       title: Text(
         hit.agent.displayTitle,
@@ -234,6 +240,14 @@ class _PriorityTile extends StatelessWidget {
               padding: EdgeInsets.only(right: 6),
               child: Icon(Icons.star, size: 15, color: Color(0xFFF5C043)),
             ),
+          // How long it has been like this. "Done" is a state; "Done · 4m" is a
+          // decision. This is the first screen you see, so the number belongs
+          // here more than anywhere.
+          AgentAge(
+            hit.agent.sinceLastActivity,
+            emphasize: hit.agent.agentStatus == AgentStatus.blocked,
+          ),
+          const SizedBox(width: 8),
           StatusBadge(hit.agent.agentStatus),
         ],
       ),
@@ -288,12 +302,19 @@ class _ServerTile extends StatelessWidget {
 
     return ListTile(
       onTap: onTap,
+      // Radius 18 to match AgentAvatar in the Priority rows above; the leading
+      // slot and title gap match for the same reason — the two sections read as
+      // one list, so they share a grid.
+      minLeadingWidth: 36,
+      horizontalTitleGap: 10,
       leading: CircleAvatar(
+        radius: 18,
         backgroundColor: server.isActive
             ? scheme.primary
             : scheme.surfaceContainerHighest,
         child: Icon(
           Icons.dns_outlined,
+          size: 20,
           color: server.isActive ? scheme.onPrimary : scheme.onSurfaceVariant,
         ),
       ),

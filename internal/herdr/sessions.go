@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/gitdiff"
+	"github.com/dipeshdulal/gothalo/internal/transcript"
 )
 
 // defaultSessionName is how Herdr names its default session.
@@ -331,6 +332,7 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 
 	enrichAgentBranches(merged["agents"])
 	enrichAgentAttention(merged["agents"])
+	enrichAgentLastActivity(merged["agents"])
 
 	return json.Marshal(map[string]any{
 		"id":     "gothalo:snapshot",
@@ -423,6 +425,42 @@ var attentionRanks = map[string]int{
 // the same slot as "unknown", so a status Herdr adds later degrades to "sorts
 // last" instead of jumping to the top of the inbox.
 const unknownAttentionRank = 4
+
+// enrichAgentLastActivity stamps `last_activity_ts` (unix milliseconds) on every
+// agent whose transcript can be found, and leaves it off every agent whose
+// cannot.
+//
+// It is what lets a client show "blocked 50m" instead of "blocked". The snapshot
+// is otherwise entirely a statement about NOW: it can say an agent is waiting,
+// never for how long, and the difference is the whole question you have when you
+// pick your phone up. See [transcript.LastActivity] for why the transcript's
+// mtime is the source rather than anything the bridge observes — briefly, it
+// survives a restart and knows spans that predate the bridge entirely.
+//
+// ABSENT means unknown, never "just now". A client must render nothing rather
+// than "0s" for an agent whose transcript could not be resolved (a kind that
+// keeps sessions in a shared database, or an agent that has not spoken yet).
+func enrichAgentLastActivity(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok {
+		return
+	}
+	for _, it := range agents {
+		obj, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		kind, _ := obj["agent"].(string)
+		cwd, _ := obj["cwd"].(string)
+		var sessionID string
+		if sess, ok := obj["agent_session"].(map[string]any); ok {
+			sessionID, _ = sess["value"].(string)
+		}
+		if at, ok := transcript.LastActivity(kind, cwd, sessionID); ok {
+			obj["last_activity_ts"] = at.UnixMilli()
+		}
+	}
+}
 
 // enrichAgentAttention stamps `attention_rank` on every agent in the snapshot
 // from its `agent_status`. Ordering by this field (then by whatever tiebreak the
