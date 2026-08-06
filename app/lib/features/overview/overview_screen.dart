@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/app_mark.dart';
+import '../../core/widgets/live_activity_line.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -853,6 +854,18 @@ class _PaneCard extends ConsumerWidget {
                     ),
                   ],
                 ),
+                // The agent's most recent message — the same line the Flock
+                // list carries, from the same widget and the same
+                // `/agent-state` source, so a space and the flock can never
+                // disagree about whether an agent is alive. It sits under the
+                // task rather than beside the status chip, and stays one
+                // ellipsized line with its height reserved, so a long message
+                // can't reflow the card or shove the Approve button around.
+                if (isAgent)
+                  LiveActivityLine(
+                    paneId: pane.paneId,
+                    status: agent!.agentStatus,
+                  ),
                 // A running command still shows *where* it runs, on a muted line
                 // beneath the command itself.
                 if (cmd != null && pane.locationLabel.isNotEmpty) ...[

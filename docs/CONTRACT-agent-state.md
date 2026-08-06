@@ -29,6 +29,20 @@ Authorization: Bearer <bearer>
 Stateless per request: the bridge shells out to `herdr` (`agent get` + `agent
 read`) and parses; it stores nothing.
 
+### Who calls it, and how often
+
+The app's one-line "what's it doing right now" (`core/widgets/live_activity_line.dart`)
+is the heaviest caller: it polls **per agent tile**, once on mount and then every
+5s only while that agent is `working` — a settled agent's line cannot change
+until its status does, so it is fetched once. Every list that shows agents mounts
+that same widget: **Flock → Agents**, **Priority**, and the **space / overview**
+pane cards. So the shape of the load is one request per visible agent, not one
+per screen, and the same agent visited on two screens is two callers.
+
+Nothing here is stateful, so that is safe by construction — it is only a note on
+volume: a list of N working agents is N requests every 5s, each one a `herdr`
+round-trip.
+
 ---
 
 ## Response `200` — schema
