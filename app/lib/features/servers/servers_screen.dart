@@ -214,6 +214,12 @@ class _PriorityTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       onTap: onTap,
+      // ListTile reserves a fixed 40dp leading slot and then adds a separate
+      // 16dp horizontalTitleGap, so shrinking the avatar only grows the empty
+      // space inside the slot — the text never moves closer. Both have to come
+      // down together, and identically on every tile in this list.
+      minLeadingWidth: 36,
+      horizontalTitleGap: 10,
       leading: AgentAvatar(agent: hit.agent.agent, radius: 18),
       title: Text(
         hit.agent.displayTitle,
@@ -297,10 +303,11 @@ class _ServerTile extends StatelessWidget {
 
     return ListTile(
       onTap: onTap,
-      // Radius 18 to match AgentAvatar in the Priority rows above. A default
-      // CircleAvatar is radius 20, and those 2dp shifted this whole list's text
-      // column out of line with the one directly above it — the two sections
-      // read as one list, so they have to share a grid.
+      // Radius 18 to match AgentAvatar in the Priority rows above; the leading
+      // slot and title gap match for the same reason — the two sections read as
+      // one list, so they share a grid.
+      minLeadingWidth: 36,
+      horizontalTitleGap: 10,
       leading: CircleAvatar(
         radius: 18,
         backgroundColor: server.isActive

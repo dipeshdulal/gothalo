@@ -1232,41 +1232,42 @@ class _GapBlock extends _Block {
 /// noise on every fast turn and would push the messages apart for nothing.
 const _minShownGap = Duration(seconds: 10);
 
-/// "⋯ thought 45s" — the time an agent spent before this reply.
+/// The time between two entries, drawn as a quiet timeline marker.
 ///
 /// It answers a question the transcript otherwise hides: a long turn looks
 /// identical to a fast one once it is on screen, so there is no way to tell
-/// where the time actually went when a session felt slow.
+/// where the time went when a session felt slow.
+///
+/// Deliberately centred and low-contrast rather than left-aligned with an icon.
+/// The first attempt sat at the left margin with a "⋯" glyph, which read as a
+/// typing indicator or a failed message — it competed with the conversation
+/// instead of annotating it. Metadata should recede; centring it also matches
+/// the day separators, so it is legible as "a marker, not a message".
 class _GapLine extends StatelessWidget {
   const _GapLine({required this.gap, this.afterTool = false});
 
   final Duration gap;
+
+  /// The pause followed a tool call, so most of it was the tool running.
   final bool afterTool;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-      child: Row(
-        children: [
-          Icon(
-            Icons.more_horiz,
-            size: 14,
-            color: scheme.onSurfaceVariant.withValues(alpha: 0.7),
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Center(
+        child: Text(
+          afterTool
+              ? 'took ${formatAgentAge(gap)}'
+              : 'thought ${formatAgentAge(gap)}',
+          style: TextStyle(
+            fontSize: 10.5,
+            letterSpacing: 0.3,
+            fontWeight: FontWeight.w500,
+            color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
-          const SizedBox(width: 6),
-          Text(
-            afterTool
-                ? 'took ${formatAgentAge(gap)}'
-                : 'thought ${formatAgentAge(gap)}',
-            style: TextStyle(
-              fontSize: 11.5,
-              fontStyle: FontStyle.italic,
-              color: scheme.onSurfaceVariant.withValues(alpha: 0.85),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
