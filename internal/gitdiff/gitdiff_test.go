@@ -207,7 +207,168 @@ func TestBranch(t *testing.T) {
 	})
 }
 
+func TestReadContext(t *testing.T) {
+	t.Run("non-repo reports Repo false", func(t *testing.T) {
+		c := ReadContext(t.TempDir())
+		if c.Repo {
+			t.Errorf("Repo = true for a plain directory, want false")
+		}
+	})
+
+	t.Run("empty cwd reports Repo false", func(t *testing.T) {
+		if ReadContext("").Repo {
+			t.Errorf("Repo = true for an empty cwd, want false")
+		}
+	})
+
+	t.Run("feature branch ahead of the default branch", func(t *testing.T) {
+		dir := initRepo(t)
+		mustWrite(t, dir, "f.txt", "one\n")
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "-q", "-m", "base")
+		runGit(t, dir, "checkout", "-q", "-b", "feat/x")
+		mustWrite(t, dir, "f.txt", "two\n")
+		runGit(t, dir, "commit", "-qam", "work")
+		// An uncommitted change on top, so Dirty has something to see.
+		mustWrite(t, dir, "g.txt", "untracked\n")
+
+		c := ReadContext(dir)
+		if !c.Repo {
+			t.Fatalf("Repo = false, want true")
+		}
+		if c.Branch != "feat/x" {
+			t.Errorf("Branch = %q, want feat/x", c.Branch)
+		}
+		if c.DefaultBranch != "main" {
+			t.Errorf("DefaultBranch = %q, want main", c.DefaultBranch)
+		}
+		if c.DefaultRef != "refs/heads/main" {
+			t.Errorf("DefaultRef = %q, want refs/heads/main", c.DefaultRef)
+		}
+		if c.Ahead != 1 || c.Behind != 0 {
+			t.Errorf("ahead/behind = %d/%d, want 1/0", c.Ahead, c.Behind)
+		}
+		if !c.Dirty {
+			t.Errorf("Dirty = false, want true (an untracked file is uncommitted work)")
+		}
+		if c.Remote != "" {
+			t.Errorf("Remote = %q, want empty for a repo with no remote", c.Remote)
+		}
+		if c.Upstream != "" {
+			t.Errorf("Upstream = %q, want empty for an unpushed branch", c.Upstream)
+		}
+	})
+
+	t.Run("clean tree on the default branch", func(t *testing.T) {
+		dir := initRepo(t)
+		mustWrite(t, dir, "f.txt", "one\n")
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "-q", "-m", "base")
+
+		c := ReadContext(dir)
+		if c.Branch != "main" || c.DefaultBranch != "main" {
+			t.Errorf("branch/default = %q/%q, want main/main", c.Branch, c.DefaultBranch)
+		}
+		if c.Ahead != 0 || c.Behind != 0 || c.Dirty {
+			t.Errorf("got ahead=%d behind=%d dirty=%v, want 0/0/false", c.Ahead, c.Behind, c.Dirty)
+		}
+	})
+
+	t.Run("detached HEAD has no branch", func(t *testing.T) {
+		dir := initRepo(t)
+		mustWrite(t, dir, "f.txt", "one\n")
+		runGit(t, dir, "add", ".")
+		runGit(t, dir, "commit", "-q", "-m", "c1")
+		mustWrite(t, dir, "f.txt", "two\n")
+		runGit(t, dir, "commit", "-qam", "c2")
+		runGit(t, dir, "checkout", "-q", "HEAD~1")
+
+		c := ReadContext(dir)
+		if !c.Repo {
+			t.Fatalf("Repo = false, want true")
+		}
+		if c.Branch != "" {
+			t.Errorf("Branch = %q, want empty on a detached HEAD", c.Branch)
+		}
+	})
+
+	t.Run("names an unborn branch in a repo with no commits", func(t *testing.T) {
+		dir := initRepo(t)
+		c := ReadContext(dir)
+		if c.Branch != "main" {
+			t.Errorf("Branch = %q, want main even before the first commit", c.Branch)
+		}
+		if c.DefaultBranch != "" {
+			t.Errorf("DefaultBranch = %q, want empty — refs/heads/main does not exist yet", c.DefaultBranch)
+		}
+		if c.Ahead != 0 {
+			t.Errorf("Ahead = %d, want 0 with no ref to compare against", c.Ahead)
+		}
+	})
+
+	t.Run("prefers the remote-tracking default and reports the remote", func(t *testing.T) {
+		// A bare "remote" cloned from a seed repo, so origin/main is a real ref
+		// and the branch has a real upstream — the shape a PR is opened from.
+		origin := t.TempDir()
+		runGit(t, origin, "init", "-q", "--bare", "-b", "main")
+
+		seed := initRepo(t)
+		mustWrite(t, seed, "f.txt", "one\n")
+		runGit(t, seed, "add", ".")
+		runGit(t, seed, "commit", "-q", "-m", "base")
+		runGit(t, seed, "remote", "add", "origin", origin)
+		runGit(t, seed, "push", "-q", "-u", "origin", "main")
+
+		c := ReadContext(seed)
+		if c.Remote != "origin" {
+			t.Errorf("Remote = %q, want origin", c.Remote)
+		}
+		if c.DefaultRef != "refs/remotes/origin/main" {
+			t.Errorf("DefaultRef = %q, want refs/remotes/origin/main", c.DefaultRef)
+		}
+		if c.Upstream != "origin/main" {
+			t.Errorf("Upstream = %q, want origin/main", c.Upstream)
+		}
+	})
+}
+
+// TestCollectCarriesContext pins the promise that a caller fetching the full
+// diff never needs a second call for the git context.
+func TestCollectCarriesContext(t *testing.T) {
+	dir := initRepo(t)
+	mustWrite(t, dir, "f.txt", "one\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "base")
+	runGit(t, dir, "checkout", "-q", "-b", "feat/y")
+	mustWrite(t, dir, "f.txt", "two\n")
+
+	result, err := Collect(dir)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !result.Git.Repo || result.Git.Branch != "feat/y" {
+		t.Errorf("Git = %+v, want a repo on feat/y", result.Git)
+	}
+	if !result.Git.Dirty {
+		t.Errorf("Git.Dirty = false with a modified file, want true")
+	}
+	if result.Branch != result.Git.Branch {
+		t.Errorf("Branch = %q but Git.Branch = %q — they must agree", result.Branch, result.Git.Branch)
+	}
+}
+
 // ---- test helpers ----
+
+// initRepo makes an empty repo on "main" with an identity configured, which is
+// where every context test starts.
+func initRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	return dir
+}
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
