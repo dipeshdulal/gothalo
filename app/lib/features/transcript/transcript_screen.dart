@@ -23,6 +23,7 @@ import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import 'quick_commands_providers.dart';
+import 'slash_commands.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -143,10 +144,29 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// sheet in front of it did not.
   final ValueNotifier<bool> _blocked = ValueNotifier(false);
 
+  /// The active `/…` token in the composer, or null when the typeahead should be
+  /// hidden. Recomputed on every composer change (text AND caret — moving the
+  /// caret out of the token dismisses the list just as typing a space does).
+  SlashQuery? _slash;
+
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    _composer.addListener(_onComposerChanged);
+  }
+
+  /// Keeps [_slash] in step with the composer. Only calls setState when the
+  /// typeahead's visibility or query actually changes — this fires on every
+  /// keystroke, and rebuilding the whole transcript for each one is exactly the
+  /// cost that would make typing feel heavy.
+  void _onComposerChanged() {
+    final next = SlashQuery.parse(
+      _composer.text,
+      _composer.selection.baseOffset,
+    );
+    if (next?.query == _slash?.query) return;
+    setState(() => _slash = next);
   }
 
   /// Publish the live blocked-ness to anything following it. Called from every
@@ -165,6 +185,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     _channel?.sink.close(ws_status.normalClosure);
     _agentStateTimer?.cancel();
     _scroll.dispose();
+    _composer.removeListener(_onComposerChanged);
     _composer.dispose();
     _blocked.dispose();
     super.dispose();
@@ -867,6 +888,20 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       }
     }
 
+    // The slash typeahead's matches, or empty when it should not show — no
+    // active `/…` token, the fetch has not landed, or nothing matches what was
+    // typed. Watched unconditionally (hooks cannot be conditional) but the
+    // provider is cheap and returns an empty list for every pane without a
+    // command surface, so a non-claude pane costs one 200 and renders nothing.
+    final slashMatches = switch (_slash) {
+      final q? => rankSlashCommands(
+          ref.watch(slashCommandsProvider(widget.pane)).asData?.value ??
+              const [],
+          q.query,
+        ),
+      null => const <SlashCommand>[],
+    };
+
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
@@ -988,20 +1023,30 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // cluttered header, and a fragmented "chip pinned left / icon
             // pinned right / second row below" layout, both read worse than
             // one consistent strip.
-            _ComposerActionsRow(
-              modeLabel: _agentState?.permissionMode != null
-                  ? _modeLabel(_agentState!.permissionMode!)
-                  : null,
-              onCycleMode: _cycleMode,
-              onOpenTerminal: () =>
-                  context.push('/terminal/${Uri.encodeComponent(widget.pane)}'),
-              onQuickCommand: _handleQuickCommand,
-              onAttachImage: _uploading ? null : _pickImageSource,
-              enabled:
-                  _conn != _Conn.closed &&
-                  _conn != _Conn.failed &&
-                  _failure == null,
-            ),
+            // While the slash typeahead is up it REPLACES the actions row rather
+            // than stacking on top of it. Two reasons: with a keyboard open the
+            // phone has no room for both above the composer, and mid-command the
+            // chips are not what you are reaching for — the list is.
+            if (slashMatches.isNotEmpty)
+              SlashCommandList(
+                commands: slashMatches,
+                onSelected: (c) => applySlashCommand(_composer, c),
+              )
+            else
+              _ComposerActionsRow(
+                modeLabel: _agentState?.permissionMode != null
+                    ? _modeLabel(_agentState!.permissionMode!)
+                    : null,
+                onCycleMode: _cycleMode,
+                onOpenTerminal: () => context
+                    .push('/terminal/${Uri.encodeComponent(widget.pane)}'),
+                onQuickCommand: _handleQuickCommand,
+                onAttachImage: _uploading ? null : _pickImageSource,
+                enabled:
+                    _conn != _Conn.closed &&
+                    _conn != _Conn.failed &&
+                    _failure == null,
+              ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
             _ComposerBar(

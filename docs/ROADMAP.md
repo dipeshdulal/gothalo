@@ -5,9 +5,10 @@ Build order was deliberately **backend-first**: every risky piece proven with
 over endpoints already trusted.
 
 Phases 0–3 are complete and Phase 4 is most of the way there. The status below
-was re-derived from the tree on 2026-08-05 — it had drifted badly (everything
-past Phase 0 still read ⬜ long after it shipped). Keep it honest: this is the
-first doc anyone reads.
+was re-derived from the tree on 2026-08-05 and corrected again on 2026-08-06 —
+it drifts fast, and both times in the same direction: shipped work left marked
+unstarted or in-progress. Keep it honest, and re-derive from the tree rather than
+trusting the marks: this is the first doc anyone reads.
 
 Status legend: ✅ done · 🚧 in progress · ⬜ not started
 
@@ -61,9 +62,17 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ✅ Agent transcript reading — the conversation, not just terminal scrollback
       (`internal/transcript`, `docs/CONTRACT-agent-transcript.md`).
       **No competing Herdr client does this.**
-- 🚧 Image paste → file in the agent's cwd → send the path *(`feat/image-to-agent`)*
-- 🚧 Recent-activity timeline *(`feat/activity-timeline`)*
-- 🚧 Start / restart / stop an agent from the phone *(`feat/agent-lifecycle`)*
+- ✅ Image paste → file in the agent's cwd → send the path (#85,
+      `docs/CONTRACT-image.md`)
+- ✅ Recent-activity timeline (#88, `internal/timeline`,
+      `docs/CONTRACT-timeline.md`)
+- ✅ Start / restart / stop an agent from the phone (#87,
+      `docs/CONTRACT-agent-lifecycle.md`). One-shot launch only — saved launch
+      profiles were deliberately left out.
+- ✅ Slash-command typeahead in the composer — `/` in the transcript composer
+      lists what the agent really accepts, read off the host's disk
+      (`internal/commands`, `docs/CONTRACT-commands.md`). Plugin commands are a
+      recorded gap, not an omission; see the contract.
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
@@ -76,11 +85,14 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
   subscription and a machine with real `~/.codex` rollout files: the format must
   be read off a live machine, not guessed. This is the one hole in the transcript
   feature, which is otherwise gothalo's strongest differentiator.
-- **Subagent transcripts are invisible.** Claude Code writes each subagent to
-  `<session>/subagents/agent-<id>.jsonl` beside the session file, joined to the
-  parent's `Task` call by `meta.json`'s `toolUseId`. The reader never looks
-  there, so when an agent fans work out the phone goes dark exactly when it
-  should be most useful. See #11 in `docs/RESEARCH-feature-ideas.md`.
+- **Subagent transcripts are readable but not rendered.** The bridge side landed
+  (#86): `/agent-transcript`'s hello frame carries the session's full subagent
+  roster and `?subagent=<id>` streams a delegated conversation
+  (`internal/transcript/subagents.go`). **The app ignores both** — nothing in
+  `app/lib` references the roster — so when an agent fans work out the phone
+  still goes dark exactly when it should be most useful. The remaining work is
+  one nesting level in the transcript screen, against a contract that already
+  exists. See #11 in `docs/RESEARCH-feature-ideas.md`.
 - `GOTHALO_MODE=relay` stays a stub **by decision** (2026-08-05), not oversight.
 - No self-update. Deferred until there is release wiring to hang it on. Bridge/app
   version skew is still the likeliest real-world failure with more than one user.

@@ -40,23 +40,38 @@ type agentGetter interface {
 // that produces that. Scoped to agent panes, since a plain shell pane has no
 // agent cwd to resolve -> 404.
 func (s *Server) paneCwd(id string) (string, int, error) {
+	agent, status, err := s.paneAgent(id)
+	if err != nil {
+		return "", status, err
+	}
+	return agent.Cwd, http.StatusOK, nil
+}
+
+// paneAgent is paneCwd's resolution step, returning the whole agent rather than
+// just its cwd — for callers that also need the KIND, like GET /commands, where
+// the kind picks the lister and the cwd says where to look.
+//
+// Split out rather than copied so there stays exactly one answer to "which agent
+// is in this pane?", including the session-qualified form and the s.agents test
+// seam. Errors carry the HTTP status to report, same contract as paneCwd.
+func (s *Server) paneAgent(id string) (herdr.Agent, int, error) {
 	session, bare := herdr.SplitTarget(id)
 	var g agentGetter = s.agents
 	if g == nil {
 		c, err := s.sessions.Client(session)
 		if err != nil {
-			return "", herdrStatus(err), err
+			return herdr.Agent{}, herdrStatus(err), err
 		}
 		g = c
 	}
 	agent, err := g.Get(bare)
 	if err != nil {
 		if errors.Is(err, herdr.ErrAgentNotFound) {
-			return "", http.StatusNotFound, errors.New("no such agent")
+			return herdr.Agent{}, http.StatusNotFound, errors.New("no such agent")
 		}
-		return "", http.StatusBadGateway, err
+		return herdr.Agent{}, http.StatusBadGateway, err
 	}
-	return agent.Cwd, http.StatusOK, nil
+	return agent, http.StatusOK, nil
 }
 
 // POST /pane/new — create a terminal and return its identity so the app can

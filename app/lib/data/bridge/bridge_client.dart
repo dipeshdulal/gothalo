@@ -147,6 +147,55 @@ class DiffResult {
   }
 }
 
+/// One slash command the pane's agent will accept, from `GET /commands` — the
+/// composer typeahead's unit. See `docs/CONTRACT-commands.md`.
+class SlashCommand {
+  const SlashCommand({
+    required this.name,
+    required this.source,
+    this.description = '',
+    this.argumentHint = '',
+    this.scope = '',
+  });
+
+  /// The invocation WITHOUT the leading slash — "compact", "frontend:component".
+  final String name;
+
+  /// One-line summary. May be empty; a command with no description is still
+  /// perfectly invocable, so this must never gate whether the row renders.
+  final String description;
+
+  /// e.g. "[pr-number]" — shown dimmed after the name when the command wants an
+  /// argument, which is the hint that stops a bare `/review` doing nothing.
+  final String argumentHint;
+
+  /// `builtin` | `command` | `skill`.
+  final String source;
+
+  /// `user` | `project`, empty for a built-in.
+  final String scope;
+
+  /// True for a command compiled into the agent rather than read off disk. The
+  /// only entries that can drift from what the agent really accepts, so the UI
+  /// badges them honestly instead of implying they were discovered.
+  bool get isBuiltin => source == 'builtin';
+
+  /// What the typeahead row shows as its badge.
+  String get badge => switch (source) {
+        'builtin' => 'built-in',
+        'skill' => scope == 'project' ? 'project skill' : 'skill',
+        _ => scope == 'project' ? 'project' : 'user',
+      };
+
+  factory SlashCommand.fromJson(Map<String, dynamic> j) => SlashCommand(
+        name: (j['name'] as String?) ?? '',
+        description: (j['description'] as String?) ?? '',
+        argumentHint: (j['argument_hint'] as String?) ?? '',
+        source: (j['source'] as String?) ?? '',
+        scope: (j['scope'] as String?) ?? '',
+      );
+}
+
 /// One recorded agent status transition from `GET /timeline` — see
 /// `docs/CONTRACT-timeline.md`.
 ///
@@ -618,6 +667,33 @@ class BridgeClient {
       if (body == null) throw BridgeException('Empty diff response');
       return DiffResult.fromJson(body);
     } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /commands?pane=<id>` → the slash commands this pane's agent accepts,
+  /// for the composer typeahead. See CONTRACT-commands.md.
+  ///
+  /// Returns an empty list rather than throwing for every "no typeahead here"
+  /// case — an agent kind with no command surface, a plain pane, or a bridge too
+  /// old to have the endpoint (404). The composer degrades to a plain text field
+  /// and the user is told nothing, because there is nothing they could do about
+  /// it. A genuine transport failure still throws.
+  Future<List<SlashCommand>> getCommands(String pane) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/commands',
+        queryParameters: {'pane': pane},
+      );
+      final list = (res.data ?? const {})['commands'];
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((c) => SlashCommand.fromJson(Map<String, dynamic>.from(c)))
+          .where((c) => c.name.isNotEmpty)
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return const [];
       throw _asBridgeException(e);
     }
   }
