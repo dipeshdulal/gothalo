@@ -9,6 +9,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../core/firebase_web_options.dart';
 import '../../data/bridge/bridge_providers.dart';
 import 'notification_actions.dart';
+import 'notification_permission_io.dart'
+    if (dart.library.js_interop) 'notification_permission_web.dart';
 import 'push_payload.dart';
 
 part 'push_service.g.dart';
@@ -289,7 +291,13 @@ class PushController extends _$PushController {
       await _ensureLocal();
 
       final messaging = FirebaseMessaging.instance;
-      await messaging.requestPermission();
+      // iOS only honours a web notification-permission request made inside a
+      // user gesture, so the startup path must not ask — [enable] does, from
+      // the inbox banner's tap. Once granted (and everywhere native), asking
+      // here is the no-op that keeps the token fresh across launches.
+      if (!kIsWeb || webNotificationPermission == 'granted') {
+        await messaging.requestPermission();
+      }
 
       // Foreground: the app is open and the live event stream already reflects
       // this change, so we do NOT raise a tray notification — that would just be
@@ -312,6 +320,12 @@ class PushController extends _$PushController {
 
       // Re-register the token whenever the active bridge changes.
       ref.listen(bridgeClientProvider, (_, _) => _registerCurrent());
+
+      // No permission yet on web: stop before getToken, which would only
+      // fail. The token arrives later through [enable].
+      if (kIsWeb && webNotificationPermission != 'granted') {
+        return null;
+      }
 
       // Web push needs the VAPID public key; native does not take one at all.
       // Without it the browser refuses the subscription, and the error reads
@@ -362,6 +376,28 @@ class PushController extends _$PushController {
       seq: p.seq,
       options: p.options,
     );
+  }
+
+  /// Ask for notification permission and register the token, from a user tap.
+  ///
+  /// iOS refuses a web permission prompt outside a user gesture, which is why
+  /// [build] cannot do this at startup; the inbox banner routes a real tap
+  /// here instead. Returns whether a token was obtained and registered.
+  Future<bool> enable() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      await messaging.requestPermission();
+      if (kIsWeb && webNotificationPermission != 'granted') return false;
+      _token = await messaging.getToken(
+        vapidKey: kIsWeb ? firebaseWebVapidKey : null,
+      );
+      await _registerCurrent();
+      state = AsyncData(_token);
+      return _token != null;
+    } catch (e) {
+      debugPrint('Push enable failed: $e');
+      return false;
+    }
   }
 
   Future<void> _onToken(String token) async {
