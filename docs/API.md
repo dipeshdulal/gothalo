@@ -59,6 +59,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into an **agent** pane's tree and get the path back, to paste into a prompt (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
+| GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agents/available` | — | `{agents[],known_kinds[],discovery}` | which agent kinds this host can actually launch (below) |
 | POST | `/agent/start` | `{kind, pane_id\|split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id,kind,name,…}` | launch an agent, optionally in a pane it creates (below) |
@@ -296,6 +297,41 @@ Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` no agent
 that pane · `405` non-POST · `413` over the cap · `415` not an accepted image
 type · `500` the drop directory couldn't be written · `502` herdr command failed.
 Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
+
+## GET /commands — slash commands for the composer typeahead
+What the pane's agent will **actually accept** after a `/`, so the phone offers a
+list instead of asking the user to recall and thumb-type `/compact`.
+
+```
+GET /commands?pane=w5:p18
+```
+
+```json
+{
+  "pane": "w5:p18",
+  "agent_kind": "claude",
+  "commands": [
+    {"name": "migrations", "description": "…", "source": "skill", "scope": "project"},
+    {"name": "compact", "description": "…", "argument_hint": "[instructions]", "source": "builtin"}
+  ]
+}
+```
+
+`source` is `command` (`.claude/commands/**.md`) · `skill`
+(`.claude/skills/<name>/SKILL.md`) · `builtin`. The first two are read off disk
+per request and are ground truth; `builtin` is a hand-maintained list, because
+built-ins live inside the agent's binary with no manifest to read — it is a
+separate `source` precisely so the app can badge what it cannot verify. `scope`
+is `user`/`project` for discovered commands, absent for built-ins. Sorted
+most-specific first: project → user → built-in.
+
+An agent kind with no command surface (codex, opencode) is **`200` with an empty
+list, not an error** — "no typeahead here" is a normal state, and a 404 would put
+an error in front of a working pane. Errors: `400` missing `pane` · `401` bad
+bearer · `404` no such pane, a plain pane, or a bridge predating the endpoint
+(the app hides the typeahead for all three). Full details, plus a live capture
+and the plugin-commands gap, in [`CONTRACT-commands.md`](./CONTRACT-commands.md).
+
 ## GET /timeline — recent agent activity
 The only read that describes the **past**. Every other endpoint says what is true
 now, which is why none of them can tell you whether an agent blocked fifty

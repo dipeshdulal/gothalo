@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/image", s.handleImage)
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
+	mux.HandleFunc("/commands", s.handleCommands)
 	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
 	mux.HandleFunc("/agent/start", s.handleAgentStart)
 	mux.HandleFunc("/agent/restart", s.handleAgentRestart)
@@ -327,7 +328,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	    still have nothing installed to launch — so this records the capability
 //	    without being the thing that unlocks it.
 //	4 — GET /timeline (recorded agent-activity history).
-const BridgeVersion = 4
+//	5 — GET /commands: the slash commands a pane's agent accepts, for the
+//	    composer typeahead. The app gates the typeahead on the endpoint
+//	    answering rather than on this number — an older bridge 404s and the
+//	    composer stays a plain text field — so this records the capability
+//	    without being what unlocks it.
+const BridgeVersion = 5
 
 // GET /info -> this bridge's identity and capability level.
 //

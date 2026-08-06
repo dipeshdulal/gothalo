@@ -203,5 +203,14 @@ No code was changed — this is research and ideation only.
   themselves plus the duration of the span they closed, which is the one fact
   `/snapshot` genuinely cannot reconstruct — not a mirror of live status.
   `GET /timeline` + `docs/CONTRACT-timeline.md`.
-- [ ] Slash-command typeahead in the composer — queued (2026-08-05)
+- [x] Slash-command typeahead in the composer — landed (2026-08-06).
+  `GET /commands` + [`CONTRACT-commands.md`](CONTRACT-commands.md). Bar set by
+  the same rule as #10's launch flow: everything offered must actually work, so
+  commands and skills are read off the host's disk per request rather than
+  guessed. The one exception is the agent's own built-ins, which live inside its
+  binary with no manifest to read — carried as a distinct `builtin` source the
+  app badges, so the part that can drift is visibly the part that can drift.
+  Plugin commands are deliberately **not** listed: `enabledPlugins` was null on
+  every machine available, and enumerating the installed marketplace would offer
+  dozens of commands that are installed but not invocable.
 - [ ] Copy from the transcript screen — queued, small (2026-08-05)

@@ -21,6 +21,7 @@ import (
 // the lookup rather than passed through to Herdr.
 type fakeAgents struct {
 	cwd   string
+	kind  string // agent kind, for callers that resolve more than the cwd (/commands)
 	asked string
 	err   error
 }
@@ -30,7 +31,7 @@ func (f *fakeAgents) Get(pane string) (herdr.Agent, error) {
 	if f.err != nil {
 		return herdr.Agent{}, f.err
 	}
-	return herdr.Agent{PaneID: pane, Cwd: f.cwd}, nil
+	return herdr.Agent{PaneID: pane, Cwd: f.cwd, Kind: f.kind}, nil
 }
 
 func pngUpload() []byte {
