@@ -353,12 +353,12 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	promptSent := sendOpeningPrompt(c, name, qualified, body.Prompt)
+	promptSent, promptErr := sendOpeningPrompt(c, name, qualified, body.Prompt)
 	log.Info("started agent", "pane", qualified, "kind", body.Kind, "name", name, "prompt", promptSent)
 	s.publish(events.TypeAgentStarted, map[string]any{
 		"pane_id": qualified, "kind": body.Kind, "name": name, "created_pane": created,
 	})
-	writeJSON(w, map[string]any{
+	res := map[string]any{
 		"pane_id":      qualified,
 		"tab_id":       herdr.Qualify(session, pane.TabID),
 		"workspace_id": herdr.Qualify(session, pane.Workspace),
@@ -366,7 +366,14 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		"name":         name,
 		"created_pane": created,
 		"prompt_sent":  promptSent,
-	})
+	}
+	// Only present when an opening prompt was asked for and did not land. The
+	// agent is running either way, so this stays a 200 — but the caller must be
+	// able to tell "started, instructed" from "started, empty".
+	if promptErr != "" {
+		res["prompt_error"] = promptErr
+	}
+	writeJSON(w, res)
 }
 
 // startMode is which of the three targeting forms a start request used.
@@ -497,18 +504,28 @@ func (s *Server) resolveStartPane(c *herdr.Client, mode startMode, bareTarget st
 }
 
 // sendOpeningPrompt submits the caller's first message, if there is one, and
-// reports whether it landed. A failure here is logged, never fatal: the agent is
-// up and addressable at that point, and losing the whole start over an unsent
-// opening line would be a far worse outcome than a prompt the operator retypes.
-func sendOpeningPrompt(c *herdr.Client, name, qualifiedPane, prompt string) bool {
+// reports whether it landed plus why it did not.
+//
+// A failure here is never fatal: the agent is up and addressable at that point,
+// and losing the whole start over an unsent opening line would be a far worse
+// outcome than a prompt the operator retypes. It must not be SILENT either —
+// the caller asked for an agent carrying a first instruction, and an
+// undifferentiated 200 would have the app navigate to an idle agent as if the
+// instruction had been delivered. The reason travels back in the response so it
+// can be shown.
+//
+// The wait is the whole reason this used to fail: the agent is addressable by
+// PANE the moment start returns, but by NAME only once Herdr's registry catches
+// up, and this addresses it by name.
+func sendOpeningPrompt(c *herdr.Client, name, qualifiedPane, prompt string) (bool, string) {
 	if prompt == "" {
-		return false
+		return false, ""
 	}
-	if err := c.PromptAgent(name, prompt); err != nil {
+	if err := c.PromptAgentWhenReady(name, prompt, herdr.PromptReadyBudget); err != nil {
 		log.Error("agent start: opening prompt failed", "pane", qualifiedPane, "agent", name, "err", err)
-		return false
+		return false, fmt.Sprintf("the agent started but your opening prompt was not delivered: %v", err)
 	}
-	return true
+	return true, ""
 }
 
 // ---- POST /agent/stop ----
@@ -657,12 +674,12 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	promptSent := sendOpeningPrompt(c, name, body.PaneID, body.Prompt)
+	promptSent, promptErr := sendOpeningPrompt(c, name, body.PaneID, body.Prompt)
 	log.Info("restarted agent", "pane", body.PaneID, "kind", agent.Kind, "name", name, "prompt", promptSent)
 	s.publish(events.TypeAgentRestarted, map[string]any{
 		"pane_id": body.PaneID, "kind": agent.Kind, "name": name,
 	})
-	writeJSON(w, map[string]any{
+	res := map[string]any{
 		"restarted":    true,
 		"pane_id":      herdr.Qualify(session, bare),
 		"kind":         agent.Kind,
@@ -670,5 +687,9 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 		"cwd":          agent.Cwd,
 		"prompt_sent":  promptSent,
 		"history_kept": false,
-	})
+	}
+	if promptErr != "" {
+		res["prompt_error"] = promptErr
+	}
+	writeJSON(w, res)
 }

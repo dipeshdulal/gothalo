@@ -461,6 +461,11 @@ Optional: `cwd` (absolute, existing directory — **rejected with `pane_id`**),
 directly. **This call blocks 5–30 s** — Herdr only returns once it has verified
 the agent is really up — so raise the client's receive timeout.
 
+`prompt_error` is present only when a `prompt` was asked for and did not land.
+The agent is running either way (hence still `200`), but the client must be able
+to tell an instructed agent from an empty one — show the reason rather than
+navigating to it as if the prompt arrived.
+
 `cwd` is validated server-side: absolute, canonical (every `..`/`.`/`//` form is
 rejected, not normalised), must exist, must be a directory.
 

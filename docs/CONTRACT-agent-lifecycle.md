@@ -170,6 +170,14 @@ asked for but failed. A failed opening prompt never fails the request: the agent
 is up and addressable at that point, and losing a successful launch over an
 unsent first line would be the worse outcome.
 
+`prompt_error` disambiguates those two cases. It is present **only** when a
+prompt was asked for and did not land, and carries the reason in words. Without
+it a client cannot tell "started, carrying your instruction" from "started,
+sitting there empty" — which is precisely the state this endpoint used to return
+as an undifferentiated `200` while silently dropping the prompt. A client that
+shows the agent as instructed should key that on `prompt_sent`, and surface
+`prompt_error` when it appears.
+
 ### It waits, and the client must let it
 
 `agent.start` returns only after Herdr has **verified the expected agent is
@@ -431,18 +439,46 @@ hermes), and `pane.process_info` classifying all three pane states correctly —
 idle shell (`atPrompt=true`), a pane running a command (`fg="./gothalo serve"`),
 and a pane hosting an agent (`fg="claude"`).
 
-**NOT verified live, and honestly so:** the **success** paths of
-`POST /agent/start`, `POST /agent/restart` and `POST /agent/stop`. Confirming
-them requires actually launching and killing agents, and this branch was built in
-a session with other people's real agents running in the same Herdr — a stray
-Ctrl-C would have destroyed live work. Specifically unproven on this host:
+### Success paths — verified live, and initially broken
 
-- that `agent.start` succeeds end-to-end through the bridge's orchestration
-  (each step is verified individually; their composition is not);
-- that repeated `ctrl+c` actually quits each agent kind, and how many rounds it
-  needs in practice. The **detection** of success is sound either way — the pane
-  is only reported stopped once its shell is back in the foreground — so the
-  failure mode of a wrong guess here is an honest `409`, not a false success.
+The success paths originally shipped unproven, because confirming them means
+launching and killing real agents. They have since been exercised against Herdr
+0.8.0 in a dedicated tab, and **all three composition failures that review could
+not see turned out to be real**. Every one came from the same wrong assumption:
+that Herdr's state transitions are synchronous with the calls that cause them.
+
+```
+POST /agent/start   {kind:claude, pane_id:wN:p2R}                -> 200  agent live in pane
+POST /agent/start   {kind:claude, split_from:wN:p2R, prompt:"…"} -> 200  prompt_sent:true, agent answered it
+POST /agent/start   {kind:claude, workspace_id:wN, label:"…"}    -> 200  new tab, agent live
+POST /agent/restart {pane_id:wN:p34, prompt:"…"}                 -> 200  new session id, same terminal id, prompt delivered
+POST /agent/stop    {pane_id:wN:p2R}                             -> 200  agent gone, pane back at its shell
+```
+
+Restart was confirmed to be a genuine replacement rather than a reported one:
+the agent session id changed (`de445d60…` → `f175d266…`) while the terminal id
+did not — exactly the promise this endpoint makes. The pane survives, the
+conversation does not.
+
+What was broken, and is now covered by `internal/herdr/lifecycle_retry_test.go`:
+
+| Symptom | Cause |
+|---|---|
+| Both pane-creating start forms failed **100%** (`agent_pane_busy`), orphaning a pane each time | Herdr's "available shell" test is stricter than `pane.process_info` and settles ~1.5s later. The bridge waited for the wrong signal, got it, and started too early. |
+| Opening prompts silently dropped, reported as `200` | `agent.prompt` rejects a just-started agent with `agent_not_ready` even after its name resolves through `agent.get`. The error was logged and swallowed. |
+| Restart could kill an agent and fail to replace it | The derived name is still held by the agent the restart just stopped, so the replacement start hit `agent_name_taken` — after the old agent was already dead. |
+
+The fix predicts none of these. Each precondition is either waited for where
+Herdr reports it faithfully (name release, via `agent.get`) or discovered by
+retrying the real operation until Herdr accepts it. On exhaustion Herdr's own
+structured error is returned unchanged, so a genuinely busy pane still reports
+as `agent_pane_busy` — just later.
+
+**Still unproven:** how many `ctrl+c` rounds each agent kind needs. Only
+`claude` has been stopped for real. The **detection** of success is sound either
+way — the pane is only reported stopped once its shell is back in the
+foreground — so the failure mode of a wrong guess is an honest `409`, not a
+false success.
 
 Go tests: `internal/herdr/lifecycle_test.go` (kind-catalog parsing from real
 `--help` and usage fixtures, both parsers failing closed, `pane.process_info`

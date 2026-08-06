@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -51,6 +52,48 @@ const (
 	// round is headroom for a slow redraw. Every round re-checks first, so an
 	// agent that quit on round one is never sent a stray keystroke.
 	interruptRounds = 4
+
+	// NameSettleWait bounds the wait for a live agent name to appear (after a
+	// start) or be released (after a stop). Herdr updates its name registry
+	// asynchronously from the start/stop that causes it, so the moment a start
+	// returns is not the moment its name resolves, and the moment a stop returns
+	// is not the moment its name is free again.
+	//
+	// A ceiling on a poll loop, not a delay.
+	NameSettleWait = 3 * time.Second
+
+	// PromptReadyBudget bounds how long an opening prompt is retried against an
+	// agent Herdr has not yet made promptable. Exported because the decision to
+	// wait belongs to the caller sending the prompt, not to the transport.
+	//
+	// Generous on purpose: the alternative to waiting is dropping the operator's
+	// first instruction, which is worse than a slow start.
+	PromptReadyBudget = 10 * time.Second
+)
+
+// Retry pacing for agent.start. These are vars rather than consts only so tests
+// can exercise the give-up path without spending the full budget doing it.
+var (
+	// startRetryBudget bounds how long StartAgent keeps retrying a start Herdr
+	// rejects because the pane is not yet startable.
+	//
+	// This exists because Herdr's notion of "an available shell pane" is STRICTER
+	// than the bridge's, and settles later. A freshly created pane reaches
+	// PaneProcessInfo.AtShellPrompt in ~0.15s (measured), and the bridge waits for
+	// exactly that before starting — yet an agent.start issued at that moment
+	// still fails with `agent_pane_busy`, while the same start ~1.5s later
+	// succeeds. Whatever Herdr checks in addition is internal to it and not
+	// observable through the pane API, so this does not predict readiness: it
+	// retries the real operation until Herdr accepts it.
+	//
+	// Sized in failed attempts rather than seconds: each rejected start costs
+	// ~1.5s, so this allows roughly six before giving up and returning Herdr's
+	// own error.
+	startRetryBudget = 10 * time.Second
+
+	// startRetryInterval is the pause between rejected start attempts. Short,
+	// because the attempt itself dominates.
+	startRetryInterval = 250 * time.Millisecond
 )
 
 // AgentKind names both a Herdr agent kind and, per Herdr's own `--kind` help
@@ -269,15 +312,102 @@ func (c *Client) WaitForShellPrompt(pane string, within time.Duration) (PaneProc
 // timeout is Herdr's own startup budget; the transport deadline is deliberately
 // set past it so Herdr's structured "startup timed out" always wins over a
 // severed connection.
+//
+// Two preconditions are handled here, because neither becomes true at the moment
+// the operation causing it returns:
+//
+//   - The NAME must be free. Herdr releases a name some time after the agent
+//     holding it exits, so a restart reusing the same derived name can collide
+//     with the agent it just killed. This one IS observable, so it is waited for.
+//   - The PANE must be startable by Herdr's own definition, which is stricter
+//     than "at a shell prompt" and settles later. That is NOT observable through
+//     the pane API, so it is not predicted: the start is retried until Herdr
+//     stops rejecting it. See startRetryBudget.
+//
+// On exhaustion Herdr's own structured error is returned unchanged, so a pane
+// that is genuinely busy still reports as `agent_pane_busy` — just later.
 func (c *Client) StartAgent(name, kind, pane string, timeout time.Duration) error {
+	c.WaitForNameRelease(name, NameSettleWait)
+
 	params := struct {
 		Name      string `json:"name"`
 		Kind      string `json:"kind"`
 		PaneID    string `json:"pane_id"`
 		TimeoutMS int    `json:"timeout_ms"`
 	}{Name: name, Kind: kind, PaneID: pane, TimeoutMS: int(timeout / time.Millisecond)}
-	_, err := c.RequestFor(timeout+startSlack, "agent.start", params)
-	return err
+
+	deadline := time.Now().Add(startRetryBudget)
+	for {
+		_, err := c.RequestFor(timeout+startSlack, "agent.start", params)
+		if err == nil {
+			return nil
+		}
+		if !isRetryableStartError(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(startRetryInterval)
+	}
+}
+
+// isRetryableStartError reports whether a failed agent.start is worth trying
+// again. Both codes describe a precondition that is still settling rather than a
+// wrong request: the pane is not startable YET, or the previous holder of the
+// name has not been reaped YET. Every other failure — an unknown kind, a startup
+// timeout, a malformed name — is permanent and returned immediately.
+func isRetryableStartError(err error) bool {
+	var serr *SocketError
+	if !errors.As(err, &serr) {
+		return false
+	}
+	return serr.Code == "agent_pane_busy" || serr.Code == "agent_name_taken"
+}
+
+// WaitForNameRelease blocks until name no longer resolves to a live agent,
+// reporting whether it came free.
+//
+// Herdr releases a name some time AFTER the agent holding it exits, so a
+// restart that reuses the same derived name races the agent it just killed.
+// Unlike the readiness conditions around start and prompt, this one is
+// faithfully observable through agent.get, so it is waited for rather than
+// discovered by failing.
+func (c *Client) WaitForNameRelease(name string, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		if _, err := c.Get(name); errors.Is(err, ErrAgentNotFound) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(shellPollInterval)
+	}
+}
+
+// PromptAgentWhenReady submits an opening prompt, retrying while Herdr reports
+// the agent is not ready to receive one.
+//
+// A started agent becomes promptable in stages, and none of them coincide with
+// agent.start returning: the name enters the registry (agent.get resolves), and
+// then — measurably later — the agent becomes an "active named agent" that
+// agent.prompt will accept. Waiting on agent.get is NOT enough; that was the
+// original bug, where a healthy agent rejected its own opening prompt.
+//
+// As with StartAgent, the operation is treated as the only authority on its own
+// preconditions rather than predicting them from a field that might not be the
+// one Herdr consults.
+func (c *Client) PromptAgentWhenReady(target, text string, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for {
+		err := c.PromptAgent(target, text)
+		if err == nil {
+			return nil
+		}
+		var serr *SocketError
+		if !errors.As(err, &serr) || serr.Code != "agent_not_ready" || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(shellPollInterval)
+	}
 }
 
 // PromptAgent submits text to an agent as one atomic prompt (`agent.prompt`),
