@@ -79,6 +79,13 @@ class AppTheme {
         surfaceTintColor: Colors.transparent,
         centerTitle: false,
         elevation: 0,
+        // Set HERE, not per screen. Three screens had already picked 12 while
+        // the rest kept Material's 16, so headers drifted apart before anyone
+        // looked; a per-screen override is how that happens. Flutter has no
+        // themeable leadingWidth, which is exactly why nothing should override
+        // it locally either — one screen tightening its back button is
+        // immediately visible as inconsistent when you move between them.
+        titleSpacing: 12,
       ),
       cardTheme: CardThemeData(
         clipBehavior: Clip.antiAlias,
