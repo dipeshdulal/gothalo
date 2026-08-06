@@ -178,3 +178,36 @@ Consequences:
 - The metadata-server branch means a future hosted relay (D12) can run with **no**
   key material anywhere. That is a free consequence of following ADC, not a
   commitment to build the relay.
+
+## D21 — Terminal scroll is a wheel report to the application, not scrollback
+Dragging the live terminal scrolls the **remote application**, by sending it SGR
+mouse-wheel reports on the same PTY stream as every keystroke (D6). There is no
+client-side scrollback to scroll, and no host-side one either:
+
+- Every agent pane runs on the **alternate screen** (herdr replays `?1049h` on
+  attach), so herdr keeps no scrollback for it — `max_offset_from_bottom` is `0`
+  on every agent pane and `pane read --source recent` returns exactly the visible
+  frame. A bigger `--lines` cannot recover what left the alt screen.
+- Herdr has **no scroll-offset API** (149 socket methods, none of them set
+  `scroll`), so the bridge can't ask for a window of history either.
+- Claude Code turns on mouse tracking and SGR coordinates (`?1000h ?1002h ?1003h
+  ?1006h`), so it consumes wheel reports itself. Verified on a live pane:
+  `ESC[<64;20;20M` scrolls it.
+
+Consequence, accepted: the pane's own viewport moves, so a desktop operator
+watching that pane sees it scroll too. That is inherent to alt-screen apps —
+Moshi has it as well (its docs describe the same drag → wheel forwarding when
+attached to a multiplexer).
+
+The shim is `PtyMouseHandler`: xterm.dart encodes wheel-up/down as buttons 68/69
+(`64 + 4`, which sets the **shift** bit) instead of 64/65, and applications
+ignore shift+wheel. Everything else about xterm's gesture path already worked.
+
+**Not chosen** — the two things the open-source herdr clients do instead, both of
+which give up the live terminal: merino re-reads `--source recent` with a growing
+line budget (400→2000) and renders it as text, which yields nothing on an
+alt-screen agent pane; herdr-mobile-relay snapshots each pane every 4 s and
+sequence-merges the diff into a reconstructed 10k-line history, which is lossy
+and plain-text. For agent history gothalo already has the transcript (D16), read
+from the agent's own log — complete and structured. Plain (non-alt-screen) panes
+are the one case where a `recent` read is worth having; that stays open.
