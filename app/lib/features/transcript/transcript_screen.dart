@@ -432,6 +432,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         );
       }
       return;
+    } catch (e) {
+      // Anything else — a missing platform implementation, an interop
+      // failure — must surface too: swallowed, the button just silently
+      // does nothing, which is exactly how a build problem hid here once.
+      if (mounted) setState(() => _uploadError = 'Picker failed: $e');
+      return;
     }
     if (picked == null || !mounted) return; // cancelled
 
@@ -474,8 +480,14 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
   /// different: a screenshot already in the camera roll ("this screen is
   /// wrong"), and something in front of you right now (a whiteboard, a monitor,
   /// a device showing the bug).
+  ///
+  /// The picker is started INSIDE the tap handler, not after awaiting the
+  /// sheet's result: on the web the picker is a synthetic click on a file
+  /// input, which Safari only honors while the tap's user activation is still
+  /// live. Awaiting the sheet's pop animation first spends it — the tap then
+  /// closes the sheet and silently nothing opens (the iOS PWA symptom).
   Future<void> _pickImageSource() async {
-    final source = await showModalBottomSheet<ImageSource>(
+    await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
         child: Column(
@@ -485,19 +497,24 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Photo library'),
               subtitle: const Text('A screenshot you already took'),
-              onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                unawaited(_attachImage(ImageSource.gallery));
+              },
             ),
             ListTile(
               leading: const Icon(Icons.photo_camera_outlined),
               title: const Text('Camera'),
               subtitle: const Text('Shoot a screen or whiteboard'),
-              onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                unawaited(_attachImage(ImageSource.camera));
+              },
             ),
           ],
         ),
       ),
     );
-    if (source != null) await _attachImage(source);
   }
 
   /// Insert [text] at the composer's cursor, leaving the caret after it so the
