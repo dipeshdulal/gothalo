@@ -26,6 +26,15 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Purpose strings for the two things that open a camera/library picker:
+	     attaching a screenshot to a prompt (image_picker) and scanning a pairing
+	     QR (mobile_scanner). iOS does not prompt without these — it terminates
+	     the app the moment the picker is requested, so their absence is a crash
+	     on device, not a missing dialog. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Gothalo uses the camera to scan a pairing QR code and to photograph a screen or whiteboard to attach to an agent prompt.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Gothalo needs your photo library so you can attach a screenshot to an agent prompt.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

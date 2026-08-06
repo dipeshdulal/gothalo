@@ -22,6 +22,7 @@ internal/
 ├── events/             in-process pub/sub bus (fan-out; drops slow subscribers)
 ├── agentstate/         parse `herdr agent read` -> compact per-agent state (per-kind)
 ├── transcript/         tail the agent's on-disk transcript -> kind-agnostic chat
+├── imagedrop/          land an uploaded image in the agent's cwd -> a path it can read
 ├── notify/             bus consumer: dismiss stale "blocked" pushes
 └── web/                embedded web-push receiver page (go:embed)
 ```

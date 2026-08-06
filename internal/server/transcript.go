@@ -23,8 +23,9 @@ const transcriptPollInterval = 250 * time.Millisecond
 // transcriptProtocol is the wire-protocol version echoed in the hello frame, so a
 // client can detect an incompatible framing without guessing. Bumped to 2 when
 // the backlog became paginated (newest page + load_older) and inbound control
-// frames stopped being end-of-stream.
-const transcriptProtocol = 2
+// frames stopped being end-of-stream; to 3 when hello gained the session's
+// subagent roster and ?subagent= let a client stream a delegated conversation.
+const transcriptProtocol = 3
 
 // transcriptNewestPage is how many newest normalized entries the backlog sends on
 // connect. Small enough for a cheap mobile connect; older history is fetched on
@@ -56,6 +57,17 @@ type helloFrame struct {
 	// HasOlder is true when entries with seq < OldestLoadedSeq exist (== HasMore;
 	// named for the load_older cursor semantics).
 	HasOlder bool `json:"has_older"`
+	// Subagent echoes the ?subagent= that is being streamed, or "" for the
+	// session's own transcript. A client that reconnects can tell from hello
+	// alone which conversation it landed in.
+	Subagent string `json:"subagent,omitempty"`
+	// Subagents is the session's complete, FLAT subagent roster — every depth,
+	// not just children of the conversation being streamed. That is deliberate:
+	// a subagent's own children are found by matching their ToolUseID against
+	// the Tool.ID of the Task calls in whichever transcript is on screen, so one
+	// roster serves every level and drilling down needs no extra round trip.
+	// Omitted entirely when the session delegated nothing, which is the norm.
+	Subagents []transcript.Subagent `json:"subagents,omitempty"`
 }
 
 // loadOlderFrame is the one client→server control frame: fetch the page of history
@@ -167,13 +179,36 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 	// Open the pane's transcript through the per-kind Source registry. What backs
 	// it — a JSONL file for Claude, a SQLite database for Hermes — is the source's
 	// business; everything below here is storage-agnostic.
-	src, err := transcript.Open(agent.Kind, agent.Cwd, agent.SessionID())
+	//
+	// ?subagent=<agent_id> streams a delegated conversation instead of the
+	// session's own. It is the same JSONL dialect behind the same Source
+	// interface, so nothing downstream — paging, tailing, framing — changes.
+	// The id is matched against discovery rather than pasted into a path, so a
+	// hostile value resolves to nothing rather than escaping the session dir.
+	var src transcript.Source
+	sub := r.URL.Query().Get("subagent")
+	if sub != "" {
+		src, err = transcript.OpenSubagent(agent.Kind, agent.Cwd, agent.SessionID(), sub)
+	} else {
+		src, err = transcript.Open(agent.Kind, agent.Cwd, agent.SessionID())
+	}
 	if err != nil {
-		log.Warn("agent-transcript: open failed", "pane", pane, "kind", agent.Kind, "err", err)
+		log.Warn("agent-transcript: open failed", "pane", pane, "kind", agent.Kind,
+			"subagent", sub, "err", err)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	defer src.Close()
+
+	// The roster is advisory: a session that delegated nothing, or a kind with no
+	// subagent concept, yields an empty list. A failure here must not cost the
+	// user their transcript, so it is logged and the stream continues without it.
+	subagents, err := transcript.Subagents(agent.Kind, agent.Cwd, agent.SessionID())
+	if err != nil {
+		log.Warn("agent-transcript: subagent discovery failed", "pane", pane,
+			"kind", agent.Kind, "err", err)
+		subagents = nil
+	}
 
 	// Read the newest page before the upgrade so a read failure is a clean 500.
 	// This also arms the source's read cursor, so the live tail below resumes
@@ -253,6 +288,8 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		HasMore:         backlog.HasMore,
 		OldestLoadedSeq: backlog.OldestSeq,
 		HasOlder:        backlog.HasMore,
+		Subagent:        sub,
+		Subagents:       subagents,
 	}); err != nil {
 		return
 	}

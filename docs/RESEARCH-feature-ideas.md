@@ -94,8 +94,63 @@ A **day-grouped activity timeline**: turn completions, tool errors, agents start
 ### #9 — Image paste / screenshot into prompt  *Medium*
 Moshi's crop/scribble and Omnara's screenshot-to-agent. Attach a screenshot to a prompt for design/bug feedback. *Requires* the bridge + target agent to accept image input (Claude Code supports it), so it's gated on backend/agent support — hence Medium, not quick.
 
+> **Shipped** — `POST /image` + an "Image" chip on the composer. The gating
+> assumption above turned out not to hold: **no agent-side image input is
+> needed**. Agents read an image when handed a *path*, so the bridge writes the
+> upload into the agent's own working directory and returns that path, which the
+> app inserts into the composer (without sending) for the user to write around.
+> Crop/scribble is the remaining Moshi delta. See
+> [`CONTRACT-image.md`](CONTRACT-image.md).
+
 ### #10 — "Start a new agent task" flow  *Bigger project*
 Omnara/Orca let you *launch* parallel agents, not just watch them. You already have `worktree.create` and `pane/new`; a guided "new task → creates worktree + starts agent with this prompt" flow would close the loop from *monitor* to *dispatch*. Bigger because it needs a start-agent contract on the bridge, but it's the natural next act for a fleet controller.
+
+### #11 — Subagent view in the transcript  *Medium* — added 2026-08-05
+
+Agents increasingly fan work out to **subagents**: Claude Code's Task tool, and
+OpenCode's subagents. Today the transcript flattens that — you see the parent
+invoke a tool and then, minutes later, a result, with no visibility into what
+happened in between. On a phone, where the whole point is answering *"what is it
+doing right now?"*, a long-running subagent is exactly the case where the current
+view goes dark.
+
+**On-disk layout — verified against live files on 2026-08-05**, not guessed.
+Claude Code does *not* inline subagent turns in the session file. It writes each
+subagent to a sibling directory named after the session:
+
+```
+~/.claude/projects/<encoded-cwd>/
+    <session>.jsonl                      main transcript
+    <session>/subagents/
+        agent-<agentID>.jsonl            subagent transcript, same line format
+        agent-<agentID>.meta.json        {agentType, description, toolUseId, spawnDepth}
+```
+
+The join is clean and needs no heuristics: `meta.json`'s **`toolUseId` equals the
+`tool_use` id of the `Task` call in the main transcript**, which the reader
+already captures as `Tool.ID`. `spawnDepth` gives nesting for free, and
+`agentType` + `description` are exactly the label a collapsed row wants
+("general-purpose · Build mobile Phase-3 control surface").
+
+*(An earlier draft of this entry claimed the mechanism was an `isSidechain` flag
+inline in `<session>.jsonl`. That was wrong — `isSidechain` exists as a field but
+the subagent bodies live in the separate files above. Recorded so the mistake is
+not repeated.)*
+
+Shape: discover the sibling `subagents/` dir when resolving a session, attach a
+subagent reference to the `Task` `tool_call` entry via the `toolUseId` join, and
+let the app fetch a subagent's transcript on demand rather than inlining it
+(these files are large — the sampled one was part of a 1.4 MB session). Render
+collapsed-by-default with a live count and status — "3 subagents · 1 working".
+`Entry` already carries `KindToolCall`/`KindToolResult` and the WS framing does
+not change, so this is reader work plus one nesting level in the transcript
+screen.
+
+Worth doing because it compounds the differentiator: no competing Herdr client
+reads transcripts at all, and a fleet controller that goes blind precisely when
+an agent parallelizes has a hole in it. `opencode.go` needs the equivalent
+treatment — check whether its SQLite store models subagents as separate sessions,
+which would make the join different from Claude's.
 
 ---
 
@@ -134,10 +189,15 @@ No code was changed — this is research and ideation only.
 
 ## Status (tracked here, updated as work lands)
 
-- [ ] #4 Diff/working-tree review screen — **in progress** (2026-08-04)
-- [ ] #7 Quick-commands/snippets above composer — **in progress** (2026-08-04)
-- [ ] #10 Start/restart/stop an agent — **in progress** (2026-08-05). One-shot
-  launch only; saved launch profiles and rename/clear deliberately left out. See
-  [`CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md), including which
-  paths could not be exercised live.
-- Everything else: deferred, revisit later per user direction (2026-08-04).
+- [x] #4 Diff/working-tree review screen — landed (`features/diff`)
+- [x] #7 Quick-commands/snippets above composer — landed (`quick_commands_providers.dart`)
+- [x] #9 Image/screenshot into prompt — landed (#85)
+- [x] #11 Subagent view in the transcript — landed, bridge side (#86)
+- [x] #10 Start/restart/stop an agent — landed (#87). One-shot launch only; saved
+  launch profiles and rename/clear deliberately left out. See
+  [`CONTRACT-agent-lifecycle.md`](CONTRACT-agent-lifecycle.md) — including the
+  settling races found only by running it against a live Herdr and a real phone,
+  none of which were visible to review.
+- [ ] #8 Recent-activity timeline — **in progress**, branch `feat/activity-timeline` (2026-08-05)
+- [ ] Slash-command typeahead in the composer — queued (2026-08-05)
+- [ ] Copy from the transcript screen — queued, small (2026-08-05)
