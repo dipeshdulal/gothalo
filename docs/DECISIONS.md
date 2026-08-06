@@ -435,3 +435,37 @@ never touches the remote, so `upstream` and `remote_deleted:false` come back in
 the payload and the UI states it. Pushing a branch deletion from a phone affects
 everyone and reaches outside the host; nothing else on this bridge does that, and
 this does not either.
+
+## D26 — "Create PR" instructs the agent; the bridge never pushes
+The one-tap pull request is a **prompt**, not an endpoint. The app sends the
+pane's agent a message telling it to commit anything outstanding with a
+Conventional Commit, `git push -u`, and run `gh pr create`; the bridge's only
+contribution is a read (`GET /diff?context=1`) that says whether a PR is
+possible from this pane at all.
+
+A `POST /pr` that shelled out to git and `gh` was the obvious alternative and is
+rejected on three counts:
+
+- **Agent-agnostic by construction (D7).** Every agent Herdr hosts has a shell.
+  Nothing here knows or cares that it is talking to Claude.
+- **The agent is the one with the context.** It holds the `gh` auth, the repo's
+  commit conventions, and enough of the work to write a PR body worth reading. A
+  bridge-side implementation would have to reinvent all three, badly.
+- **It is watchable.** Every step lands in the transcript, where it can be read
+  and interrupted mid-flight — as opposed to an opaque HTTP call from a phone
+  that either worked or didn't.
+
+Two consequences follow, both deliberate:
+
+- **The prompt is shown and editable before it is sent.** Committing and pushing
+  are irreversible and outward-facing; a phone tap that silently does them is
+  the wrong default, and the wording is exactly what a person wants to adjust.
+- **The gate is a host-side git read, never a path guess.** A directory named
+  `feat/x` is not evidence of a repository. `git.repo` decides whether the button
+  exists; the finer conditions (feature branch, has a remote, has work) are
+  reported *with their reason* in the sheet, because a button that silently
+  vanishes teaches nobody what to do next.
+
+The git context is a widening of `/diff` rather than a new endpoint: same shell
+-out, same resolved pane cwd. `?context=1` skips the working-tree diff so a gate
+that runs on screen build doesn't pay for it. See `docs/CONTRACT-diff.md`.

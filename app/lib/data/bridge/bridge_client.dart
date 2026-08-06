@@ -179,18 +179,123 @@ class DiffFile {
       );
 }
 
-/// The full `GET /diff` payload — an agent pane's working-tree changes.
-class DiffResult {
-  const DiffResult({required this.branch, required this.files});
+/// The pane's git *situation*, from the `git` object on `GET /diff` — which
+/// branch, where it sits relative to the default branch, whether there is a
+/// remote to push to. See CONTRACT-diff.md.
+///
+/// This is what decides whether offering "Create PR" for a pane makes any
+/// sense, and it is read from the host rather than inferred from the cwd path:
+/// a directory named `feat/x` is not evidence of a repository, let alone of a
+/// branch with commits on it.
+///
+/// A bridge older than the `git` object sends nothing, which decodes to
+/// [unknown] — [repo] false, so every gate reads it as "can't tell" and hides
+/// the action rather than offering one that would fail.
+class GitContext {
+  const GitContext({
+    required this.repo,
+    required this.branch,
+    required this.defaultBranch,
+    required this.defaultRef,
+    required this.remote,
+    required this.upstream,
+    required this.ahead,
+    required this.behind,
+    required this.dirty,
+  });
 
-  /// Best-effort; "" on a detached HEAD or if git couldn't resolve one.
+  /// What an absent `git` object (an older bridge) means: nothing is known.
+  static const unknown = GitContext(
+    repo: false,
+    branch: '',
+    defaultBranch: '',
+    defaultRef: '',
+    remote: '',
+    upstream: '',
+    ahead: 0,
+    behind: 0,
+    dirty: false,
+  );
+
+  /// The pane's cwd is inside a git work tree. False makes every other field
+  /// meaningless.
+  final bool repo;
+
+  /// The checked-out branch; "" on a detached HEAD.
   final String branch;
+
+  /// The repo's trunk — what a PR would target. "" when git couldn't name one.
+  final String defaultBranch;
+
+  /// The ref [ahead]/[behind] were counted against, e.g.
+  /// `refs/remotes/origin/main`. Display/diagnostic only.
+  final String defaultRef;
+
+  /// The remote a push would go to ("origin"); "" when the repo has none.
+  final String remote;
+
+  /// The branch's tracking ref, "" when it has never been pushed. Not
+  /// disqualifying — `git push -u` is part of what the agent is asked to do.
+  final String upstream;
+
+  /// Commits on this branch that [defaultBranch] doesn't have — the work a PR
+  /// would contain.
+  final int ahead;
+
+  /// Commits on [defaultBranch] that this branch doesn't have.
+  final int behind;
+
+  /// The working tree has uncommitted changes (untracked files included).
+  final bool dirty;
+
+  /// True when the pane sits on the trunk itself — you don't open a PR from
+  /// `main` to `main`.
+  bool get onDefaultBranch =>
+      branch.isNotEmpty && defaultBranch.isNotEmpty && branch == defaultBranch;
+
+  /// There is something to turn into a pull request: commits the default
+  /// branch doesn't have, or uncommitted work that would become one.
+  bool get hasWork => ahead > 0 || dirty;
+
+  factory GitContext.fromJson(Map<String, dynamic> j) => GitContext(
+        repo: j['repo'] == true,
+        branch: (j['branch'] as String?) ?? '',
+        defaultBranch: (j['default_branch'] as String?) ?? '',
+        defaultRef: (j['default_ref'] as String?) ?? '',
+        remote: (j['remote'] as String?) ?? '',
+        upstream: (j['upstream'] as String?) ?? '',
+        ahead: (j['ahead'] as num?)?.toInt() ?? 0,
+        behind: (j['behind'] as num?)?.toInt() ?? 0,
+        dirty: j['dirty'] == true,
+      );
+}
+
+/// The full `GET /diff` payload — an agent pane's working-tree changes, plus
+/// the [git] context they sit in.
+class DiffResult {
+  const DiffResult({
+    required this.branch,
+    required this.files,
+    this.git = GitContext.unknown,
+  });
+
+  /// Best-effort; "" on a detached HEAD or if git couldn't resolve one. Same
+  /// value as `git.branch`, kept because the app read it before `git` existed.
+  final String branch;
+
+  /// The pane's git situation. [GitContext.unknown] on a bridge too old to
+  /// send it.
+  final GitContext git;
   final List<DiffFile> files;
 
   factory DiffResult.fromJson(Map<String, dynamic> j) {
     final files = j['files'];
+    final git = j['git'];
     return DiffResult(
       branch: (j['branch'] as String?) ?? '',
+      git: git is Map
+          ? GitContext.fromJson(Map<String, dynamic>.from(git))
+          : GitContext.unknown,
       files: files is List
           ? files
               .whereType<Map>()
@@ -835,13 +940,19 @@ class BridgeClient {
   }
 
   /// `GET /diff?pane=<id>` → an agent pane's working-tree changes (branch +
-  /// one unified diff per changed file). Agent panes only — a non-agent pane
-  /// throws (404). See CONTRACT-diff.md.
-  Future<DiffResult> getDiff(String pane) async {
+  /// one unified diff per changed file), plus the pane's [GitContext]. Agent
+  /// panes only — a non-agent pane throws (404). See CONTRACT-diff.md.
+  ///
+  /// [contextOnly] narrows the request to the git context and skips the diff
+  /// itself — the read behind the "Create PR" gate, which needs to know whether
+  /// the pane is on a pushable feature branch and has no use for a single line
+  /// of diff. Diffing a large tree is the expensive half of this endpoint, so a
+  /// gate that runs on screen build must not pay for it.
+  Future<DiffResult> getDiff(String pane, {bool contextOnly = false}) async {
     try {
       final res = await _dio.get<Map<String, dynamic>>(
         '/diff',
-        queryParameters: {'pane': pane},
+        queryParameters: {'pane': pane, if (contextOnly) 'context': '1'},
       );
       final body = res.data;
       if (body == null) throw BridgeException('Empty diff response');
