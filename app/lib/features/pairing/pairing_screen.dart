@@ -10,6 +10,8 @@ import '../../core/theme.dart';
 
 import '../../core/connection/connection_providers.dart';
 import '../push/push_service.dart';
+import 'camera_release_io.dart'
+    if (dart.library.js_interop) 'camera_release_web.dart';
 import 'pairing_service.dart';
 
 /// Scan a pairing QR (`{"url":…,"code":…}`), redeem it for a per-device bearer,
@@ -54,6 +56,10 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
   @override
   void dispose() {
     _scanner.dispose();
+    // mobile_scanner's web implementation loses its MediaStream reference
+    // without stopping the tracks, so the camera would stay on for the life of
+    // the page. Harmless on native, where dispose() already released it.
+    releaseCameraStreams();
     _deviceName.dispose();
     super.dispose();
   }
