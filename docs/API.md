@@ -719,7 +719,7 @@ authoritative allowlist, each method's params, and real captured examples live i
 worktree/tab/pane controls are built against. Currently allowed: reads
 (`session.snapshot`, `workspace.list/get`, `worktree.list`, `tab.list/get`,
 `pane.list/get`, `agent.list/get`) and mutations (`worktree.create/open/remove`,
-`workspace.create`, `tab.create/close/focus`, `pane.split/close/focus`,
+`workspace.create`, `tab.create/close/focus/rename`, `pane.split/close/focus`,
 `agent.focus`).
 
 Status codes: `200` ok · `400` malformed body / missing `method` · `401`

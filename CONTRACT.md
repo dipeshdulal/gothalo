@@ -181,7 +181,7 @@ tab, `wN:p2` pane). The **driver** for the inbox is `pane_agent_status_changed`.
 | `tab_created` | a tab was created | `{"tab":{"tab_id":"wT:t2","workspace_id":"wT","label":"evbus-live","number":2,"pane_count":1,"agent_status":"unknown","focused":false},"type":"tab_created"}` |
 | `tab_closed` | a tab closed | `{"tab_id":"w4:t2","workspace_id":"w4","type":"tab_closed"}` |
 | `tab_focused` | focus moved to a tab | `{"tab_id":"wN:t1","workspace_id":"wN","type":"tab_focused"}` |
-| `tab_renamed` | a tab was renamed *(shape from schema)* | `{"type":"tab_renamed","tab_id":"…","workspace_id":"…","label":"…"}` |
+| `tab_renamed` | a tab was renamed *(captured on herdr 0.8.0 / protocol 19)* | `{"type":"tab_renamed","tab_id":"wZ:t2","workspace_id":"wZ","label":"api server"}` |
 | `tab_moved` | a tab was reordered *(shape from schema)* | `{"type":"tab_moved","tab_id":"…","workspace_id":"…","insert_index":<int>,"tabs":[…]}` |
 | `workspace_created` | a workspace opened | `{"workspace":{"workspace_id":"wQ","label":"agent-state","number":10,"active_tab_id":"wQ:t1","agent_status":"unknown","pane_count":1,"tab_count":1,"focused":true,"worktree":{…}},"type":"workspace_created"}` |
 | `workspace_updated` | a workspace changed | `{"workspace":{"workspace_id":"wN","label":"gothalo","agent_status":"working",…},"type":"workspace_updated"}` |

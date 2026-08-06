@@ -117,7 +117,7 @@ func TestHerdrProxyAllowlistCoversContract(t *testing.T) {
 	srv := newProxyServer(t, fake)
 	for _, m := range []string{
 		"worktree.create", "worktree.remove", "worktree.list",
-		"tab.create", "tab.close", "pane.split", "pane.close",
+		"tab.create", "tab.close", "tab.rename", "pane.split", "pane.close",
 		"pane.focus", "tab.focus", "agent.focus",
 		"pane.list", "pane.get", "agent.list", "session.snapshot",
 	} {
@@ -128,6 +128,24 @@ func TestHerdrProxyAllowlistCoversContract(t *testing.T) {
 		}
 		if !fake.called {
 			t.Errorf("%s did not reach the requester", m)
+		}
+	}
+}
+
+// The methods left off the allowlist on purpose, pinned so that "we decided
+// against this" cannot quietly become "somebody forgot". Each one is a real
+// Herdr method the contract doc explains the exclusion for.
+func TestHerdrProxyDeliberateExclusions(t *testing.T) {
+	fake := &fakeRequester{result: json.RawMessage(`{}`)}
+	srv := newProxyServer(t, fake)
+	for _, m := range []string{"pane.rename", "agent.view.set", "agent.view.clear", "pane.send_text"} {
+		fake.called = false
+		rec := proxyRequest(t, srv, "admintok", `{"method":"`+m+`","params":{}}`)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403 (it is excluded on purpose)", m, rec.Code)
+		}
+		if fake.called {
+			t.Errorf("%s reached the requester — allowlist bypassed", m)
 		}
 	}
 }

@@ -153,6 +153,123 @@ Future<void> closeTab(BuildContext context, WidgetRef ref, String tabId) async {
       successMessage: 'Tab closed');
 }
 
+/// The longest tab label the app will send.
+///
+/// Herdr imposes no limit of its own and happily accepts an empty string —
+/// verified against the socket, where `tab.rename` with `""` blanks the label
+/// and leaves a nameless tab behind. Both ends of the range are therefore the
+/// app's to enforce: a blank tab is unrecoverable from the phone (there is
+/// nothing left to long-press meaningfully), and a very long one just truncates
+/// in the tab strip while pushing every other tab off screen.
+const int maxTabLabelLength = 60;
+
+/// The label to send for [raw], or null when it is not something worth sending.
+///
+/// Split out from the dialog so the rule is testable and so the confirm button
+/// and the submit path cannot disagree about what counts as valid.
+String? normalizeTabLabel(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty || trimmed.length > maxTabLabelLength) return null;
+  return trimmed;
+}
+
+/// Prompt for a new label and rename [tabId].
+///
+/// Prefilled with the tab's current label and selected, so the common case
+/// (replace it) is one keystroke and the rarer one (edit it) is still possible.
+/// No manual refresh: Herdr emits `tab.renamed`, which reaches the app over
+/// `/events` and re-snapshots like every other change.
+Future<void> renameTabDialog(
+  BuildContext context,
+  WidgetRef ref,
+  String tabId, {
+  String currentLabel = '',
+}) async {
+  final label = await showDialog<String>(
+    context: context,
+    builder: (ctx) => _RenameTabDialog(initialLabel: currentLabel),
+  );
+  if (label == null || !context.mounted) return;
+  // An unchanged name is a no-op, not a rename. Herdr would accept it, but the
+  // round-trip and the "renamed" snackbar would both be lies.
+  if (label == currentLabel.trim()) return;
+  await _run(
+    context,
+    ref,
+    'tab.rename',
+    {'tab_id': tabId, 'label': label},
+    successMessage: 'Tab renamed to "$label"',
+  );
+}
+
+/// The rename prompt itself, pops with the normalized label or null.
+///
+/// A widget rather than an inline builder because it has to own its controller:
+/// disposing one the moment `showDialog` returns tears it out from under the
+/// field that is still animating away, and the confirm button listens to it too.
+class _RenameTabDialog extends StatefulWidget {
+  const _RenameTabDialog({required this.initialLabel});
+
+  final String initialLabel;
+
+  @override
+  State<_RenameTabDialog> createState() => _RenameTabDialogState();
+}
+
+class _RenameTabDialogState extends State<_RenameTabDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialLabel,
+  )..selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: widget.initialLabel.length,
+    );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final label = normalizeTabLabel(_controller.text);
+    if (label != null) Navigator.pop(context, label);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rename tab'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLength: maxTabLabelLength,
+        textInputAction: TextInputAction.done,
+        decoration: const InputDecoration(
+          labelText: 'Tab name',
+          hintText: 'api server',
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        // Live-disabled rather than validated on submit: an empty or over-long
+        // name is a state you can see, not an error to be told about after the
+        // fact.
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _controller,
+          builder: (_, value, _) => FilledButton(
+            onPressed: normalizeTabLabel(value.text) == null ? null : _submit,
+            child: const Text('Rename'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// Add a new tab (with its root shell) to [workspaceId].
 Future<void> newTab(BuildContext context, WidgetRef ref, String workspaceId) =>
     _run(context, ref, 'tab.create', {'workspace_id': workspaceId},
