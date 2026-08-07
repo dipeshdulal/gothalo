@@ -77,7 +77,7 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 |---|---|---|---|
 | `worktree.create` | `{ "cwd"?, "branch"?, "base"?, "path"?, "label"?, "workspace_id"?, "focus"?=false }` | `worktree_created` | creates a git worktree **and** opens it as a workspace |
 | `worktree.open` | `{ "cwd"?, "branch"?, "path"?, "label"?, "workspace_id"?, "focus"?=false }` | `worktree_*` | open an existing worktree as a workspace |
-| `worktree.remove` | `{ "workspace_id": "wN", "force"?=false }` | `worktree_removed` | **DESTRUCTIVE** — gate behind an in-app confirm |
+| `worktree.remove` | `{ "workspace_id": "wN", "force"?=false }` | `worktree_removed` | **DESTRUCTIVE** — gate behind an in-app confirm. Removes the checkout only; the **branch is left behind** (see below) |
 | `workspace.create` | `{ "cwd"?, "label"?, "env"?, "focus"?=false }` | `workspace_*` | new empty workspace |
 | `tab.create` | `{ "workspace_id"?, "cwd"?, "label"?, "env"?, "focus"?=false }` | `tab_created` | new tab + its root pane |
 | `tab.close` | `{ "tab_id": "wN:tM" }` | `ok` | **DESTRUCTIVE** — in-app confirm |
@@ -87,6 +87,18 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 | `pane.close` | `{ "pane_id": "wN:pM" }` | `ok` | **DESTRUCTIVE** — in-app confirm; closing a tab's last pane closes the tab |
 | `pane.focus` | `{ "pane_id": "wN:pM" }` | `ok` | |
 | `agent.focus` | `{ "target": "<pane id / agent>" }` | `ok` | focus an agent's pane |
+
+> **`worktree.remove` does not delete the branch, and no Herdr method does.**
+> Herdr has no notion of branches anywhere on this socket — it removes the
+> checkout, closes the workspace, and the ref stays forever. Deleting it is the
+> bridge's own typed endpoint pair, `GET /branch-info` + `POST /branch-delete`
+> (see [`CONTRACT-branch-delete.md`](./CONTRACT-branch-delete.md)), which drives
+> git directly because there is nothing here to proxy. It is deliberately NOT
+> part of this proxy: "params verbatim" would mean no server-side validation,
+> and the safety rules (never the default branch, never a checked-out branch,
+> unmerged only on an explicit force) are the whole substance of that feature.
+> Call the branch delete **after** `worktree.remove` succeeds, never before —
+> git refuses to delete a branch that is still checked out.
 
 > **`tab.rename` validates nothing.** Herdr accepts any string, including `""`,
 > which blanks the tab's label — verified on the live socket (`tab.rename` with

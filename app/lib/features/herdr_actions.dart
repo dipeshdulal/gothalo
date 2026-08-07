@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/theme.dart';
 import '../data/bridge/bridge_client.dart';
 import '../data/bridge/bridge_providers.dart';
 
@@ -275,26 +276,258 @@ Future<void> newTab(BuildContext context, WidgetRef ref, String workspaceId) =>
     _run(context, ref, 'tab.create', {'workspace_id': workspaceId},
         successMessage: 'Tab created');
 
-/// Remove a git worktree workspace (deletes its checkout on the host).
+/// Remove a git worktree workspace (deletes its checkout on the host), and
+/// optionally the branch it was on.
+///
+/// Herdr removes the checkout and closes the workspace, and stops there — it
+/// has no branch concept — so every removal used to leave a ref behind. The
+/// branch delete is the bridge's own `POST /branch-delete`; see
+/// `docs/CONTRACT-branch-delete.md`.
+///
+/// Three things this ordering is deliberate about:
+///
+///   - the preflight (`GET /branch-info`) runs BEFORE the dialog, so the
+///     confirm can name the branch and say whether it is merged rather than
+///     asking the user to opt into something unnamed;
+///   - the branch delete runs only if `worktree.remove` succeeded — git cannot
+///     delete a checked-out branch, and a failed removal must not be followed
+///     by an attempt on the branch anyway;
+///   - the result is reported as what actually happened. "Worktree gone, branch
+///     kept" is a normal outcome (unmerged, refused, bridge too old) and says
+///     so instead of a generic success.
 Future<void> removeWorktree(
   BuildContext context,
   WidgetRef ref,
   String workspaceId,
   String label,
 ) async {
-  if (!await _confirm(
-    context,
-    title: 'Remove worktree?',
-    message:
-        'This removes the "$label" worktree checkout on the host. Uncommitted '
-        'changes there are lost.',
-    confirmLabel: 'Remove',
-  )) {
+  final client = ref.read(bridgeClientProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  if (client == null) {
+    messenger.showSnackBar(const SnackBar(content: Text('No bridge connection.')));
     return;
   }
+
+  // Null when the bridge is too old to answer or the space has no branch to
+  // offer; the dialog then degrades to the plain confirm it always was.
+  final branch = await client.branchInfo(workspaceId);
   if (!context.mounted) return;
-  await _run(context, ref, 'worktree.remove', {'workspace_id': workspaceId},
-      successMessage: 'Worktree removed');
+
+  final deleteBranch = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => _RemoveWorktreeDialog(label: label, branch: branch),
+  );
+  if (deleteBranch == null || !context.mounted) return;
+
+  // No successMessage: the outcome line depends on what happens to the branch,
+  // and two snackbars for one action would race each other.
+  final removed = await _run(
+    context,
+    ref,
+    'worktree.remove',
+    {'workspace_id': workspaceId},
+  );
+  if (removed == null) return; // removal failed — _run reported it; stop here.
+
+  if (!deleteBranch || branch == null) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Worktree removed'), duration: Duration(seconds: 1)),
+    );
+    return;
+  }
+
+  try {
+    final result = await client.deleteBranch(
+      repoRoot: branch.repoRoot,
+      branch: branch.branch,
+      // Only ever true for a branch the user confirmed twice — the checkbox
+      // cannot be ticked for an unmerged branch without the second dialog.
+      force: !branch.merged,
+    );
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(removeWorktreeSummary(result)),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  } on BridgeException catch (e) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(branchKeptSummary(branch.branch, e.message)),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+}
+
+/// The outcome line for a removal that also deleted the branch.
+///
+/// Split out and pure so the wording is testable, and so the three things it
+/// must never conflate stay visible in one place: a forced delete says commits
+/// were dropped (and leaves the sha, the only way back), a plain one does not,
+/// and an upstream is reported as *kept* because nothing here pushes.
+String removeWorktreeSummary(BranchDeleteResult r) {
+  final parts = <String>['Worktree removed'];
+  parts.add(r.forced
+      ? 'unmerged branch ${r.branch} deleted (was ${r.sha})'
+      : 'branch ${r.branch} deleted');
+  if (r.upstream.isNotEmpty && !r.remoteDeleted) {
+    parts.add('${r.upstream} left on the remote');
+  }
+  return parts.join(' · ');
+}
+
+/// The outcome line for a removal whose branch survived — the normal partial
+/// result, not an error. [reason] is the bridge's own sentence.
+String branchKeptSummary(String branch, String reason) =>
+    'Worktree removed · branch $branch kept: $reason';
+
+/// The "Remove worktree?" confirm, with the opt-in branch delete.
+///
+/// Pops `null` (cancelled), `false` (remove the worktree only) or `true`
+/// (remove it and delete the branch). Default is **off**: removing a worktree
+/// is recoverable — the branch is still there and `worktree.open` brings it
+/// back — while deleting a branch is much less so, and a phone is exactly where
+/// a mis-tap is most likely.
+class _RemoveWorktreeDialog extends StatefulWidget {
+  const _RemoveWorktreeDialog({required this.label, required this.branch});
+
+  final String label;
+
+  /// The preflight, or null when there is nothing to offer.
+  final BranchInfo? branch;
+
+  @override
+  State<_RemoveWorktreeDialog> createState() => _RemoveWorktreeDialogState();
+}
+
+class _RemoveWorktreeDialogState extends State<_RemoveWorktreeDialog> {
+  bool _deleteBranch = false;
+
+  /// Ticking the box for an **unmerged** branch is a different decision from
+  /// ticking it for a merged one, so it is a different dialog rather than the
+  /// same tap. Unticking is free and never asks.
+  Future<void> _toggle(bool? on, BranchInfo info) async {
+    if (on != true) {
+      setState(() => _deleteBranch = false);
+      return;
+    }
+    if (info.merged) {
+      setState(() => _deleteBranch = true);
+      return;
+    }
+    final n = info.unmergedCommits;
+    final commits = n == 1 ? '1 commit' : '$n commits';
+    final ok = await _confirm(
+      context,
+      title: 'Delete unmerged branch?',
+      message:
+          '"${info.branch}" is NOT merged into ${info.defaultBranch}. Deleting '
+          'it drops $commits that exist nowhere else. This cannot be undone '
+          'from the app.',
+      confirmLabel: 'Delete anyway',
+    );
+    if (!mounted) return;
+    setState(() => _deleteBranch = ok);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final info = widget.branch;
+    final offerable = info != null && info.deletable && info.branch.isNotEmpty;
+
+    return AlertDialog(
+      title: const Text('Remove worktree?'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'This removes the "${widget.label}" worktree checkout on the '
+              'host. Uncommitted changes there are lost.',
+            ),
+            if (offerable) ...[
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: _deleteBranch,
+                onChanged: (v) => _toggle(v, info),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text.rich(
+                  TextSpan(
+                    children: [
+                      const TextSpan(text: 'Also delete the branch '),
+                      TextSpan(
+                        text: info.branch,
+                        style: const TextStyle(
+                          fontFamily: AppTheme.monoFamily,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                subtitle: Text(
+                  _branchStatusLine(info),
+                  style: TextStyle(
+                    color: info.merged ? null : scheme.error,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              // Stated whether or not the box is ticked: the remote branch is
+              // the thing people assume went with it.
+              if (info.hasUpstream)
+                Text(
+                  'The remote branch ${info.upstream} is never deleted from here.',
+                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                ),
+            ] else if (info != null &&
+                info.branch.isNotEmpty &&
+                info.blockedReason.isNotEmpty)
+              // Not offerable, but there IS a branch — say which one survives
+              // and why, rather than silently leaving it behind.
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'The branch ${info.branch} is kept: ${info.blockedReason}.',
+                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: scheme.error,
+            foregroundColor: scheme.onError,
+          ),
+          onPressed: () => Navigator.pop(context, _deleteBranch),
+          child: Text(_deleteBranch ? 'Remove & delete branch' : 'Remove'),
+        ),
+      ],
+    );
+  }
+}
+
+/// The one-line verdict under the checkbox — the thing that has to be true
+/// *before* the user confirms, not discovered afterwards.
+String _branchStatusLine(BranchInfo info) {
+  if (info.merged) {
+    final into = info.mergedInto.isEmpty ? info.defaultBranch : info.mergedInto;
+    return 'Merged into $into — deleting loses nothing.';
+  }
+  final n = info.unmergedCommits;
+  final commits = n == 1 ? '1 commit' : '$n commits';
+  return 'Not merged into ${info.defaultBranch} — $commits would be lost.';
 }
 
 /// Stop the agent running in [paneId], leaving the pane open at a shell prompt.

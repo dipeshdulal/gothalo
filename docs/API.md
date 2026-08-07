@@ -71,6 +71,8 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/pane/new` | `{split_from\|workspace_id, …}` | `{pane_id,tab_id,workspace_id}` | create a terminal, attach to it (below) |
 | POST | `/pane/close` | `{pane_id}` | `{closed:true,pane_id}` | close a pane (below) |
 | POST | `/herdr` | `{method, params}` | `{result}` or `{error}` | allowlisted generic proxy onto Herdr's command surface (below) |
+| GET  | `/branch-info` | — (query: `workspace_id`) | `{branch, default_branch, merged, deletable, …}` | preflight for "also delete the branch" when removing a worktree (below; see [`CONTRACT-branch-delete.md`](CONTRACT-branch-delete.md)) |
+| POST | `/branch-delete` | `{repo_root, branch, force?}` | `{deleted, forced, sha, upstream, …}` | delete a local git branch, after its worktree is gone (below) |
 | POST | `/register-token` | `{token}` | `{ok:true}` | call on FCM token refresh to update THIS device |
 | POST | `/testpush` | — | `{ok:true,sent:true}` | fan a sample push to all devices (test your FCM handler) |
 
@@ -730,6 +732,45 @@ no/invalid token · `403` method not on the allowlist · `404` Herdr
 target-not-found (e.g. `pane_not_found`) · `502` socket/herdr unreachable or
 other Herdr error.
 
+## GET /branch-info + POST /branch-delete — delete a worktree's branch
+Herdr's `worktree.remove` drops the checkout and closes the workspace, and stops
+there: Herdr has **no branch concept**, so the branch is left behind on every
+removal. These two endpoints are the only place the bridge drives **git**
+directly rather than proxying Herdr — there is no method to proxy.
+```
+GET  /branch-info?workspace_id=w1F           ← before the confirm
+POST /branch-delete
+{ "repo_root": "/…/gothalo", "branch": "feat/x", "force": false }   ← after
+```
+They are split at the moment the user decides, and the order is not optional:
+the preflight needs the workspace to still exist (it names the branch and the
+repo root); the delete needs the checkout to be gone (git refuses to delete a
+checked-out branch). **If the `worktree.remove` between them fails, the branch
+delete must not be attempted.**
+
+`/branch-info` answers `200` for every "nothing to offer" case too
+(`deletable:false` + `blocked_reason`) — a plain workspace, a detached HEAD, the
+repo's main checkout. `deletable:true` with `merged:false` means "possible, but
+it costs commits"; clients are expected to make that a distinct confirmation.
+
+The safety rules, enforced on **every** delete regardless of what the client
+saw: the repository's **default branch is never deleted** (resolved from
+`refs/remotes/<remote>/HEAD`, then a conventional local name — never assumed to
+be `main`; unresolvable ⇒ nothing is deletable), a branch **checked out in any
+worktree is never deleted**, and unmerged deletion (`git branch -D`) happens
+only with `force:true`. `force` overrides that last rule and nothing else.
+Deleting locally **never** touches the remote — `upstream` and
+`remote_deleted:false` are returned so the UI can say so.
+
+Status codes: `200` ok (including "not deletable, here's why" on
+`/branch-info`) · `400` missing/invalid params or `repo_root` · `401`
+no/invalid token · `404` no such branch (`/branch-delete`) or unknown session ·
+`405` wrong method · `409` a safety rule refused (`/branch-delete`) · `502`
+Herdr unreachable (`/branch-info`).
+
+Full schemas, examples and rationale:
+[`docs/CONTRACT-branch-delete.md`](CONTRACT-branch-delete.md).
+
 ## Errors
 `401` missing/invalid bearer · `403` invalid pairing code / method not allowlisted
 (`/herdr`) · `400` bad body ·
@@ -739,8 +780,10 @@ transcript file / unsupported kind (`/agent-transcript`) · `405` wrong method
 (`/agent-mode/cycle` non-POST, `/image` non-POST, `/agents/available`,
 `/agent/*` non-POST) ·
 `409` mode switching not supported for the agent kind (`/agent-mode/cycle` on a
-non-Claude pane), or pane busy / already hosts an agent / kind not installed /
-agent would not stop (`/agent/*`) · `413` upload over the 10 MiB cap (`/image`) ·
+non-Claude pane), pane busy / already hosts an agent / kind not installed /
+agent would not stop (`/agent/*`), or a branch-safety rule refused
+(`/branch-delete`: default branch, still checked out, unmerged without
+`force`) · `413` upload over the 10 MiB cap (`/image`) ·
 `415` body is not an accepted image type (`/image`) · `500` transcript read
 failed (`/agent-transcript`), drop directory unwritable (`/image`) · `502` herdr
 command failed.

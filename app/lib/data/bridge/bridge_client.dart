@@ -147,6 +147,132 @@ class DiffResult {
   }
 }
 
+/// `GET /branch-info` — what removing a worktree would leave behind, and
+/// whether the branch can go with it. See `docs/CONTRACT-branch-delete.md`.
+///
+/// Every field is the bridge's answer, not a guess made here: [branch] and
+/// [repoRoot] come from Herdr's own worktree record for the space, and the
+/// merge/checkout facts come from git on the host. The app reconstructs none of
+/// it from paths — a Herdr worktree directory is named after the branch it was
+/// *created* for, which stops being true the moment anyone switches branches
+/// inside it.
+class BranchInfo {
+  const BranchInfo({
+    required this.repoRoot,
+    required this.branch,
+    required this.defaultBranch,
+    required this.isDefault,
+    required this.checkedOutElsewhere,
+    required this.merged,
+    required this.mergedInto,
+    required this.unmergedCommits,
+    required this.upstream,
+    required this.deletable,
+    required this.blockedReason,
+  });
+
+  /// The repository's main checkout — echoed back to [BridgeClient.deleteBranch]
+  /// after the worktree is gone, when the workspace id no longer resolves.
+  final String repoRoot;
+
+  /// The branch the worktree is on. Empty when the space has none to offer
+  /// (not a worktree, detached HEAD, …), in which case [deletable] is false.
+  final String branch;
+
+  /// The repo's default branch, resolved on the host rather than assumed to be
+  /// `main`. Empty when it could not be determined — which is itself a reason
+  /// not to offer the delete.
+  final String defaultBranch;
+  final bool isDefault;
+
+  /// Other worktrees still holding this branch. Non-empty means removing this
+  /// one does not free the branch, so it cannot be deleted.
+  final List<String> checkedOutElsewhere;
+
+  /// Merged into [defaultBranch] — i.e. deleting loses nothing. False means the
+  /// delete needs the deliberate second confirm.
+  final bool merged;
+
+  /// Which ref proved it: `main`, or `origin/main` for the very common case of
+  /// a PR merged on the forge but not yet pulled locally. Empty when unmerged.
+  final String mergedInto;
+
+  /// Commits on the branch that are not in the default branch — what would be
+  /// lost. Zero when [merged].
+  final int unmergedCommits;
+
+  /// The tracking ref (`origin/feat/x`), empty when there is none. Deleting the
+  /// local branch does NOT delete this, and the UI has to say so.
+  final String upstream;
+
+  /// Whether the branch could be deleted once the worktree is removed —
+  /// including the unmerged case, which is possible but costs an extra confirm.
+  final bool deletable;
+
+  /// Why not, when [deletable] is false. Empty otherwise.
+  final String blockedReason;
+
+  bool get hasUpstream => upstream.isNotEmpty;
+
+  factory BranchInfo.fromJson(Map<String, dynamic> j) => BranchInfo(
+        repoRoot: (j['repo_root'] as String?) ?? '',
+        branch: (j['branch'] as String?) ?? '',
+        defaultBranch: (j['default_branch'] as String?) ?? '',
+        isDefault: (j['is_default'] as bool?) ?? false,
+        checkedOutElsewhere:
+            (j['checked_out_elsewhere'] as List?)?.whereType<String>().toList() ??
+                const [],
+        merged: (j['merged'] as bool?) ?? false,
+        mergedInto: (j['merged_into'] as String?) ?? '',
+        unmergedCommits: (j['unmerged_commits'] as num?)?.toInt() ?? 0,
+        upstream: (j['upstream'] as String?) ?? '',
+        deletable: (j['deletable'] as bool?) ?? false,
+        blockedReason: (j['blocked_reason'] as String?) ?? '',
+      );
+}
+
+/// `POST /branch-delete` — what the delete actually did.
+///
+/// [forced] is the command git ran, not what was asked for: forcing an
+/// already-merged branch still deletes with `-d`, and the app must not claim
+/// commits were dropped when none were.
+class BranchDeleteResult {
+  const BranchDeleteResult({
+    required this.branch,
+    required this.deleted,
+    required this.forced,
+    required this.merged,
+    required this.sha,
+    required this.upstream,
+    required this.remoteDeleted,
+  });
+
+  final String branch;
+  final bool deleted;
+  final bool forced;
+  final bool merged;
+
+  /// The commit the branch pointed at, read before the delete — the only
+  /// handle left for `git branch <name> <sha>` afterwards.
+  final String sha;
+  final String upstream;
+
+  /// Always false: the bridge never pushes. Carried so the app states it
+  /// rather than leaving the user to assume either way.
+  final bool remoteDeleted;
+
+  factory BranchDeleteResult.fromJson(Map<String, dynamic> j) =>
+      BranchDeleteResult(
+        branch: (j['branch'] as String?) ?? '',
+        deleted: (j['deleted'] as bool?) ?? false,
+        forced: (j['forced'] as bool?) ?? false,
+        merged: (j['merged'] as bool?) ?? false,
+        sha: (j['sha'] as String?) ?? '',
+        upstream: (j['upstream'] as String?) ?? '',
+        remoteDeleted: (j['remote_deleted'] as bool?) ?? false,
+      );
+}
+
 /// One slash command the pane's agent will accept, from `GET /commands` — the
 /// composer typeahead's unit. See `docs/CONTRACT-commands.md`.
 class SlashCommand {
@@ -887,6 +1013,64 @@ class BridgeClient {
       );
       final result = (res.data ?? const {})['result'];
       return result is Map ? Map<String, dynamic>.from(result) : {};
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map && data['error'] is String) {
+        throw BridgeException(
+          data['error'] as String,
+          statusCode: e.response?.statusCode,
+        );
+      }
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /branch-info?workspace_id=<id>` → the preflight behind "also delete
+  /// the branch" in the remove-worktree confirm. See
+  /// `docs/CONTRACT-branch-delete.md`.
+  ///
+  /// Returns null rather than throwing when the option simply cannot be
+  /// offered: a bridge too old to have the endpoint (404), or any failure
+  /// reaching it. The confirm dialog then falls back to exactly what it was
+  /// before this feature existed — removing a worktree must not become harder
+  /// because a side question could not be answered. A bridge that *can* answer
+  /// but says "not deletable" returns a [BranchInfo] carrying the reason, which
+  /// is a different thing and is shown.
+  Future<BranchInfo?> branchInfo(String workspaceId) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/branch-info',
+        queryParameters: {'workspace_id': workspaceId},
+      );
+      final body = res.data;
+      if (body == null) return null;
+      return BranchInfo.fromJson(body);
+    } on DioException {
+      return null;
+    }
+  }
+
+  /// `POST /branch-delete {repo_root, branch, force}` → delete a local branch.
+  ///
+  /// Call this only after the worktree removal has succeeded: git refuses to
+  /// delete a branch that is still checked out, and so does the bridge. [force]
+  /// is the explicit opt-in to losing unmerged commits; it does not override
+  /// the default-branch or still-checked-out refusals, which have no override.
+  ///
+  /// A refusal is a `409` carrying the bridge's reason, which surfaces as a
+  /// [BridgeException] whose message is worth showing verbatim — "worktree
+  /// gone, branch kept, here's why" is a normal outcome, not a crash.
+  Future<BranchDeleteResult> deleteBranch({
+    required String repoRoot,
+    required String branch,
+    bool force = false,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/branch-delete',
+        data: {'repo_root': repoRoot, 'branch': branch, 'force': force},
+      );
+      return BranchDeleteResult.fromJson(res.data ?? const {});
     } on DioException catch (e) {
       final data = e.response?.data;
       if (data is Map && data['error'] is String) {

@@ -324,3 +324,49 @@ Expanded/collapsed is remembered **for the session** (a plain `Notifier`) and
 Priority screen. It is one list drawn twice; open in one place and shut in the
 other reads as a bug. A cold start comes back collapsed, which is the state that
 fits the screen.
+
+## D24 — Deleting a worktree's branch is the bridge's own endpoint, and the safety rules live there
+Removing a worktree from the phone cleaned up the checkout and the workspace and
+left the **branch** behind, every time. That is not an oversight in the app:
+Herdr has no notion of branches anywhere on its socket, so there was nothing to
+proxy and nothing else in the system to pick it up. With worktree creation down
+to one tap, the refs pile up faster than anyone prunes them, and a phone is the
+one place with no way to prune.
+
+So `GET /branch-info` + `POST /branch-delete` (see
+[`CONTRACT-branch-delete.md`](CONTRACT-branch-delete.md)) shell out to **git**
+directly — the same exception `/diff` and `internal/transcript` already are, for
+the same reason: the thing being read or done is not part of Herdr's model.
+
+They are deliberately **not** on the `/herdr` allowlist (D18). That proxy's whole
+design is "params verbatim, no server-side validation", which is exactly wrong
+for an operation whose entire substance is what it refuses to do. The rules —
+never the default branch, whatever it is called; never a branch checked out in
+any worktree; unmerged only on an explicit force — live in `internal/gitbranch`
+and re-run on **every** delete, so they hold for any caller and never depend on
+the preflight the client happens to be holding.
+
+Two endpoints rather than one, because they answer either side of an operation
+that can fail. The preflight needs the workspace to still exist (it is what
+names the branch and the repo root); the delete needs the checkout to be gone
+(git refuses a checked-out branch). Between them sits `worktree.remove`, and if
+that fails the branch delete must not run — which only the caller can know.
+
+**Default off, and unmerged is a second dialog.** Removing a worktree is
+recoverable (`worktree.open` brings it back); deleting a branch is much less so,
+and a phone is where a mis-tap is most likely. A merged branch is one checkbox.
+An unmerged one names the commit count in its own confirm before the box will
+tick — the same tap must not mean both things.
+
+**The default branch is resolved, never assumed.** `refs/remotes/<remote>/HEAD`
+first, then a conventional local name; if neither answers, nothing in that repo
+is deletable. Assuming `main` is the single failure mode here with no recovery,
+and a repo on `trunk` is not exotic.
+
+**Partial outcomes are reported as partial.** "Worktree gone, branch kept" is a
+normal result — unmerged, refused, or a bridge too old to have the endpoint —
+and it says so rather than showing a generic success. Likewise the local delete
+never touches the remote, so `upstream` and `remote_deleted:false` come back in
+the payload and the UI states it. Pushing a branch deletion from a phone affects
+everyone and reaches outside the host; nothing else on this bridge does that, and
+this does not either.
