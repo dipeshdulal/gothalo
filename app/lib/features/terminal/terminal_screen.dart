@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
@@ -16,12 +17,14 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../../features/approvals/approve_action.dart';
+import '../attach/image_attach.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import '../transcript/quick_commands_providers.dart';
-import '../../core/widgets/accessory_button.dart';
+import 'accessory_key_row.dart';
 import 'direction_pad.dart';
 import 'pty_mouse_handler.dart';
+import 'terminal_more_sheet.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
 /// [closed] is terminal: the pane no longer exists (closed on the host or the
@@ -52,6 +55,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     maxLines: 10000,
     mouseHandler: const PtyMouseHandler(),
   );
+  /// Sticky Ctrl (D6): armed from the more-sheet, consumed by the next single
+  /// character sent. Lives here rather than in the sheet because the sheet
+  /// closes the moment it is armed — and the key row lights `⋯` while it is.
   bool _stickyCtrl = false;
 
   /// Whether the arrow pad is popped open. Static so it stays as you left it
@@ -63,6 +69,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   /// dismiss the soft keyboard: focus is what drives xterm's text-input
   /// connection, and therefore whether the keyboard is up.
   final _termFocus = FocusNode();
+
+  /// Pick → upload → path, shared with the transcript composer (see
+  /// [ImageAttachController]). Here the path is *typed*, so it works for
+  /// whatever is running in the pane rather than only for an agent.
+  final ImageAttachController _attach = ImageAttachController();
 
   BridgeClient? _client;
   WebSocketChannel? _channel;
@@ -94,9 +105,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     // The pad's keyboard key shows which way it will go, so it has to repaint
     // when focus changes by any other route (tapping the buffer, Back).
     _termFocus.addListener(_onFocusChange);
+    // Repaints the upload strip above the key row while an image is going out.
+    _attach.addListener(_onAttachChanged);
   }
 
   void _onFocusChange() {
+    if (mounted) setState(() {});
+  }
+
+  void _onAttachChanged() {
     if (mounted) setState(() {});
   }
 
@@ -115,6 +132,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _disposed = true;
     _termFocus.removeListener(_onFocusChange);
     _termFocus.dispose();
+    _attach.removeListener(_onAttachChanged);
+    _attach.dispose();
     _reconnectTimer?.cancel();
     _resizeDebounce?.cancel();
     _sub?.cancel();
@@ -311,6 +330,38 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     } else {
       _send('${cmd.text}\r');
     }
+  }
+
+  /// Attach a screenshot or photo: pick it, upload it to this pane, and type
+  /// the path the bridge wrote into the terminal.
+  ///
+  /// Typed, not sent over `/send`, so it lands wherever the keyboard lands —
+  /// Claude's prompt box, a shell's command line, a `vim` buffer. The bridge
+  /// resolves the drop directory from the pane itself, so this works on a pane
+  /// with no agent in it too: the result is a path, and a path is just text.
+  Future<void> _attachImage(ImageSource source) => _attach.attach(
+    client: _client,
+    pane: widget.pane,
+    source: source,
+    onPath: _typePath,
+  );
+
+  /// Type [path] into the PTY **without a carriage return**, the same as the
+  /// transcript dropping it into the composer: the user writes the prompt
+  /// around it and submits when they mean to. A trailing space keeps the next
+  /// word off the filename.
+  void _typePath(String path) {
+    if (!mounted) return;
+    if (_conn != _Conn.connected) {
+      // The upload succeeded but there is no stream to type into. Name the file
+      // anyway — it is on disk, and the next thing the user needs is where.
+      _attach.fail('Not connected, so the path was not typed. It is at $path');
+      return;
+    }
+    _send('${attachPathText(path)} ');
+    // The path alone is not a prompt; bring the keyboard up so the sentence
+    // around it can be written straight away.
+    _termFocus.requestFocus();
   }
 
   /// Maps a quick command's key name to the bytes a terminal expects. Falls
@@ -516,15 +567,30 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           ),
           // No point typing into a pane that no longer exists.
           if (_conn != _Conn.closed) ...[
-            _AccessoryKeyRow(
+            // Directly above the bar whose button started the upload, so
+            // progress and the button that caused it read as one thing. Renders
+            // nothing while idle.
+            ImageUploadStatus(controller: _attach),
+            AccessoryKeyRow(
               padOpen: _padOpen,
               onTogglePad: () => setState(() => _padOpen = !_padOpen),
               keyboardOpen: _termFocus.hasFocus,
               onToggleKeyboard: _toggleKeyboard,
-              stickyCtrl: _stickyCtrl,
-              onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
-              onCommand: _handleQuickCommand,
+              // `⋯` stays lit while sticky Ctrl is armed from the sheet — the
+              // only trace of the armed state once the sheet has closed.
+              moreArmed: _stickyCtrl,
+              onMore: () => showTerminalMoreSheet(
+                context,
+                onKey: _send,
+                onCommand: _handleQuickCommand,
+                stickyCtrl: _stickyCtrl,
+                onToggleStickyCtrl: () =>
+                    setState(() => _stickyCtrl = !_stickyCtrl),
+              ),
               onKey: _send,
+              uploading: _attach.uploading,
+              onAttachImage: () =>
+                  showImageSourceSheet(context, onPick: _attachImage),
             ),
           ],
         ],
@@ -600,143 +666,6 @@ class _ClosedOverlay extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// D6: the single bar above the soft keyboard. Left to right: the quick
-/// commands (Interrupt + your own, the same shared list the transcript composer
-/// shows), then the control bytes a soft keyboard lacks — the arrow-pad toggle,
-/// Esc, Ctrl (sticky), Tab, ^C.
-///
-/// One strip of identical [AccessoryButton]s, not two stacked bars: vertical
-/// space is the scarcest thing on a phone terminal, and one vocabulary reads as
-/// one control surface. It centres while everything fits and scrolls as a whole
-/// once your own commands push it past the edge — a uniform strip running off
-/// the edge stays legible, where a chip clipped mid-word beside a pinned button
-/// (an earlier attempt at this) did not.
-///
-/// The arrows themselves are not keys here; they live in the [DirectionPad] the
-/// toggle opens. One home for arrows, and this row never shifts under a thumb.
-class _AccessoryKeyRow extends ConsumerWidget {
-  const _AccessoryKeyRow({
-    required this.padOpen,
-    required this.onTogglePad,
-    required this.keyboardOpen,
-    required this.onToggleKeyboard,
-    required this.stickyCtrl,
-    required this.onToggleCtrl,
-    required this.onCommand,
-    required this.onKey,
-  });
-
-  final bool padOpen;
-  final VoidCallback onTogglePad;
-  final bool keyboardOpen;
-  final VoidCallback onToggleKeyboard;
-  final bool stickyCtrl;
-  final VoidCallback onToggleCtrl;
-  final void Function(QuickCommand) onCommand;
-  final void Function(String bytes) onKey;
-
-  /// Key names this bar already has a button for. A quick command that just
-  /// fires one of them is a duplicate here — the shipped default, "Interrupt",
-  /// sends `esc`, which is precisely the Esc key two slots over. They earn
-  /// their place in the transcript composer, which has no key strip; here they
-  /// would be the same keystroke twice.
-  static const _keysAlreadyInBar = {'esc', 'escape', 'tab', 'ctrl+c', '^c'};
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final commands =
-        (ref.watch(quickCommandsProvider).asData?.value ?? const [])
-            .where(
-              (c) =>
-                  c.key == null ||
-                  !_keysAlreadyInBar.contains(c.key!.toLowerCase().trim()),
-            )
-            .toList();
-
-    return SafeArea(
-      top: false,
-      child: Container(
-        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
-        // one: at one step the buttons and the bar behind them are close enough
-        // to read as a single flat slab.
-        color: scheme.surfaceContainerLow,
-        // Wide side margins: a curved screen's glass falls away at the edge, so
-        // a button sitting 8dp in gets its corner cut off. SafeArea covers a
-        // notch, not a curve — phones don't report a side inset for one in
-        // portrait — so the clearance has to be spent here.
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Seven buttons, so the pad toggle is the middle one — the bar's
-            // centre line, directly under the pad it opens. The keyboard key
-            // earns its place here rather than inside the pad partly for that
-            // count, and partly because it's a screen control, not a keystroke.
-            final buttons = <Widget>[
-              for (final c in commands)
-                AccessoryButton(
-                  label: c.label,
-                  // Marks a command that fires a raw keystroke rather than
-                  // typing text — the same cue the composer's chips use.
-                  leading: c.key != null ? Icons.keyboard_command_key : null,
-                  onTap: () => onCommand(c),
-                  onLongPress: () async {
-                    final all =
-                        ref.read(quickCommandsProvider).asData?.value ??
-                        const <QuickCommand>[];
-                    final i = all.indexOf(c);
-                    if (i < 0) return;
-                    if (await confirmRemoveQuickCommand(context, c.label)) {
-                      await ref
-                          .read(quickCommandsProvider.notifier)
-                          .removeAt(i);
-                    }
-                  },
-                ),
-              AccessoryButton(
-                icon: Icons.add,
-                onTap: () => showAddQuickCommand(context, ref),
-                semanticLabel: 'Add a quick command',
-                tooltip: 'Add a quick command',
-              ),
-              AccessoryButton(label: 'Esc', onTap: () => onKey('\x1b')),
-              AccessoryButton(
-                label: 'Ctrl',
-                active: stickyCtrl,
-                onTap: onToggleCtrl,
-              ),
-              DirectionPadToggle(open: padOpen, onToggle: onTogglePad),
-              AccessoryButton(label: 'Tab', onTap: () => onKey('\t')),
-              AccessoryButton(label: '^C', onTap: () => onKey('\x03')),
-              KeyboardToggle(open: keyboardOpen, onToggle: onToggleKeyboard),
-            ];
-
-            // Spread evenly while it fits; scroll as one strip once the user's
-            // own commands push it past the edge. A fixed 6dp gap in the
-            // scrolling case, because spaceEvenly inside a scroll view has no
-            // free space to distribute.
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    for (var i = 0; i < buttons.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 6),
-                      buttons[i],
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
         ),
       ),
     );

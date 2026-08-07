@@ -57,7 +57,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/approve` | `{agent, seq}` | `{ok:true,applied:bool,reason?}` | idempotent one-tap approval (below) |
 | GET  | `/agent-state` | — (query: `pane`) | parsed agent state JSON | compact card for an **agent** pane (below); carries `permission_mode` for Claude |
 | GET  | `/diff` | — (query: `pane`) | `{branch, files[]}` | an **agent** pane's working-tree changes — branch + one unified diff per file (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
-| POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into an **agent** pane's tree and get the path back, to paste into a prompt (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
+| POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into **any** pane's tree and get the path back, to paste into a prompt or type into the terminal (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
@@ -274,10 +274,11 @@ rather than erroring. Errors: `400` missing `pane` · `401` bad bearer · `404` 
 agent in that pane · `502` herdr command failed.
 
 ## POST /image — attach a screenshot to a prompt
-Upload an image from the phone; the bridge writes it into the target agent's
+Upload an image from the phone; the bridge writes it into the target pane's
 working directory and returns the **absolute path** it wrote. Coding agents read
-an image when handed a path, so that path — pasted into the composer as ordinary
-text — is the whole attachment mechanism. No agent protocol is involved.
+an image when handed a path, so that path — pasted into the composer, or typed
+into the terminal, as ordinary text — is the whole attachment mechanism. No
+agent protocol is involved.
 ```
 POST /image?pane=wN:p2
 Authorization: Bearer <bearer>
@@ -300,16 +301,19 @@ bridge picks the name. `?name=`, `?filename=` and `Content-Disposition` are not
 read at all.
 
 Accepts **png/jpeg/gif/webp** only, capped at **10 MiB** inclusive. Files land in
-`<agent cwd>/.gothalo/images/`, which is self-gitignored on first write and
-pruned on every write (7 days / 40 files). The app inserts `path` into the
-composer and **does not send** — the user writes the prompt around it.
+`<pane cwd>/.gothalo/images/`, which is self-gitignored on first write and
+pruned on every write (7 days / 40 files). The app inserts `path` where the user
+is typing and **does not send** — they write the prompt around it.
 
-**Scoped to agent panes** (a plain shell pane has no `cwd` → `404`), and accepts
-the session-qualified `<session>/<pane>` id form, same as `/diff`.
+**Any pane**: the drop directory is the agent's `cwd` when the pane hosts one and
+the pane's own `cwd` when it doesn't, so the terminal screen can type a path into
+a plain shell too. (`/diff` stays agent-only — it asks a question a pane without
+one can't answer.) Accepts the session-qualified `<session>/<pane>` id form.
 
-Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` no agent in
-that pane · `405` non-POST · `413` over the cap · `415` not an accepted image
-type · `500` the drop directory couldn't be written · `502` herdr command failed.
+Errors: `400` missing `pane` or empty body · `401` bad bearer · `404` unknown
+pane, or one Herdr reports no cwd for · `405` non-POST · `413` over the cap ·
+`415` not an accepted image type · `500` the drop directory couldn't be written ·
+`502` herdr command failed.
 Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
 
 ## GET /commands — slash commands for the composer typeahead

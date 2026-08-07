@@ -49,6 +49,9 @@ type Server struct {
 	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
 	// production, where the agent is fetched from the pane's own session client.
 	agents agentGetter
+	// panes backs paneDropCwd's agentless fallback in tests; nil in production,
+	// where the pane is fetched from its own session client.
+	panes paneGetter
 }
 
 // New constructs a Server. push, bus and tl may be nil.

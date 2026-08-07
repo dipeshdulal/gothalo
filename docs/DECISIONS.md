@@ -38,7 +38,8 @@ becomes "status board first, terminal later."
 Soft keyboards lack Esc/Ctrl/Tab/arrows. Solution is a toolbar above the system
 keyboard whose buttons write control bytes into the same PTY stream (Esc=0x1b,
 Ctrl+C=0x03, arrows=`\e[A`…). A **sticky Ctrl** toggle (`letter & 0x1f`) collapses
-the whole Ctrl-combo space into one button. ~15 lines of UI, not a keyboard
+the whole Ctrl-combo space into one button — it now lives in the more-sheet
+below, but the mechanism is unchanged. ~15 lines of UI, not a keyboard
 extension.
 
 Arrows moved out of that row into an **arrow pad**: ↑ over ← ↓ → over ⌫ beside a
@@ -53,14 +54,21 @@ over the buffer and was draggable to get it out of the way — dragging is a wor
 answer to "it's covering something" than closing is, and having arrows in both
 the pad and the row meant two homes for one key.
 
-The row itself is **one strip of seven small equal buttons spread evenly**:
-`+`, Esc, Ctrl, pad toggle, Tab, ^C, keyboard. Even spacing is what makes it
-read as one control surface rather than a huddle of chips, and seven puts the
-pad toggle on the exact centre line — directly under the pad it opens. The
-**keyboard toggle** lives here rather than in the pad, both for that count and
-because it's a screen control, not a keystroke; without it the soft keyboard
-only ever appeared as a side effect of tapping the buffer, which is also how you
-scroll it.
+The row itself is **one strip of exactly seven small equal buttons spread
+evenly**, and — this is the part that took two goes to get right — **the same
+seven every time**:
+
+```
+Esc   ^C   ⋯   [pad]   Tab   ⌨   🖼
+```
+
+Even spacing is what makes it read as one control surface rather than a huddle
+of chips, and seven puts the pad toggle on the exact centre line, directly under
+the pad it opens. The **keyboard toggle** lives here rather than in the pad,
+both for that count and because it's a screen control, not a keystroke; without
+it the soft keyboard only ever appeared as a side effect of tapping the buffer,
+which is also how you scroll it. **^C** is the one control byte with a place of
+its own: it's the emergency stop and must never cost two taps.
 
 Everything below the buffer is one `AccessoryButton` — same fill, radius, height
 and mono type, width the only variable. Two earlier attempts are worth not
@@ -69,10 +77,59 @@ stadium) stacked above filled mono key blocks read as two unrelated toolbars;
 and packing labelled chips *plus* a pinned toggle *plus* four keys into one row
 needs ~470dp of a ~393dp phone, so something always clipped mid-word.
 
-Quick commands that merely fire a key this bar already has are **filtered out
-here**. The shipped default, "Interrupt", sends `esc` — the same keystroke as
-the Esc button three slots over. It earns its place in the transcript composer,
-which has no key strip; on the terminal it was the same key twice.
+### The row is fixed because a config-shaped row has no centre
+
+An earlier version of this row was seven *by default* and grew from there: it
+prepended one button per saved quick command and carried `+` (add one) and a
+sticky `Ctrl`. That made its width, and therefore its centre, a function of the
+user's config. One saved command was enough to push the pad toggle off the
+centre line; adding the image button pushed the strip past the screen entirely,
+at which point `spaceEvenly` has no free space to distribute, the row
+left-aligns and scrolls, and the toggle sits visibly off-centre under the pad it
+opens. Shipped, spotted on a Pixel-class phone within minutes, and correctly
+called out: the earlier note here claimed appending "moves nothing", which
+confused preserving the *order* with preserving the *centre*. It preserved
+neither for long.
+
+So the variable half moved behind `⋯` into a **more-sheet**, and the row became
+a constant:
+
+- **Control bytes** — `^C ^D ^Z ^L ^R ^U ^W ^A ^E`. Not every combination: the
+  ones that earn a button on a phone. End or detach (`^C ^D ^Z`), redraw a
+  garbled repaint (`^L`), search history instead of typing a long command
+  (`^R` — arguably the most valuable key here), fix a typo without forty
+  backspaces (`^U ^W`), and jump to line start/end (`^A ^E`), which a soft
+  keyboard has no Home/End for.
+- **Sticky Ctrl** — kept, in the sheet. The nine bytes above are a shortlist,
+  not the space; `^K`, `^P`/`^N`, `^B`/`^F`, `^X`, `^G`, `^]` all matter to
+  somebody, and a phone keyboard has no Ctrl key of its own, so dropping this
+  would make them unreachable rather than merely slower. It arms and closes the
+  sheet, and the row's `⋯` **lights while armed** — otherwise the armed state
+  would be invisible and the next letter would come out mangled with no warning.
+- **Quick commands and `+`** — all of them, none pinned in the row. Pinning even
+  one would put the count back under the user's control and the centring would
+  drift again. The old "filter out a command that duplicates a row key" rule
+  goes with them: it existed because a slot in the strip was scarce, and a sheet
+  has room — quietly hiding something the user saved is the worse trade.
+
+Every sheet action closes the sheet, because its result is on the terminal
+behind it; multi-key work is what the arrow pad is for.
+
+**Attaching an image is the seventh button.** It belongs below the buffer rather
+than up in the app bar for the same reason the composer's paperclip sits inside
+the input pill: it acts on what you are typing, not on the session. It types the
+uploaded path into the PTY like any other keystrokes, with no carriage return —
+same insert-don't-send rule as the composer — so it works for whatever is
+running in the pane, and works on a pane with no agent at all. The bridge
+resolves that pane's own cwd for the drop (see `CONTRACT-image.md`); a path is
+just text, and nothing about typing one needs an agent to exist.
+
+Seven buttons plus their gaps measure ~340dp against a 393–412dp phone, so the
+row fits with room to spare and the even spread is real rather than a scroll
+view's left edge. The minimum gap is 4dp, not 6dp, precisely because 6dp put it
+~2dp over on the narrowest common phone — and 2dp of overflow is all it takes to
+lose the property this row exists to hold. Tests pin the count, the toggle's
+index, and that neither moves with the number of saved commands.
 
 **The transcript composer follows the same rules** — the two screens are one
 tap apart doing the same job, so a different toolbar vocabulary on each read as
@@ -81,6 +138,14 @@ an accident. Its actions row is the same evenly-spread `AccessoryButton`s
 the composer pill, where every messaging app puts it and where it belongs, as
 it acts on the message being written rather than on the session; and jump moved
 down from the app bar, which is a stretch away at the top of a phone.
+
+The composer's row **keeps its quick commands inline**, and did not follow them
+into a sheet. Its width is config-shaped in the same way, but nothing there is
+anchored to its centre — no popup opens from it — so a wider row merely scrolls,
+which is the behaviour it was drawn for. And the chips are that row's *reason*:
+the composer has no key strip, so a sheet would cost a tap on the surface where
+quick commands are used most and buy nothing. Same list, same store, same
+long-press-to-remove wherever it is shown.
 
 The agent's "working" state there is now a **bar sweeping the seam** above those
 controls, with no `thinking…` label — the motion says it, and the word cost a

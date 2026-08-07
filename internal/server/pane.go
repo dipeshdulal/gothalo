@@ -47,6 +47,58 @@ func (s *Server) paneCwd(id string) (string, int, error) {
 	return agent.Cwd, http.StatusOK, nil
 }
 
+// paneGetter is the single herdr call paneDropCwd needs when no agent answers.
+// *herdr.Client satisfies it; tests substitute a fake (Server.panes), the same
+// seam shape as agentGetter above.
+type paneGetter interface {
+	GetPane(paneID string) (herdr.Pane, error)
+}
+
+// paneDropCwd resolves a pane id to the directory POST /image writes into: the
+// agent's cwd when the pane hosts one, otherwise the pane's own cwd.
+//
+// Deliberately wider than paneCwd, which stays agent-only for /diff. An image
+// drop needs somewhere the *path it returns* makes sense from, and every pane
+// has that — the terminal screen attaches to plain panes too, and typing a path
+// into a shell (or into a program Herdr doesn't recognise as an agent) is just
+// as useful as typing it into Claude. /diff is a different question: it asks
+// what an agent changed, and a pane with no agent has no answer.
+//
+// The pane's cwd, not its foreground_cwd: the drop directory should stay put
+// while the shell wanders, so retention keeps sweeping one place.
+func (s *Server) paneDropCwd(id string) (string, int, error) {
+	cwd, status, err := s.paneCwd(id)
+	if err == nil {
+		return cwd, status, nil
+	}
+	// Anything other than "no agent in this pane" (an unknown session, a herdr
+	// failure) is the real answer — only fall through for the agentless case.
+	if status != http.StatusNotFound {
+		return "", status, err
+	}
+
+	session, bare := herdr.SplitTarget(id)
+	var g paneGetter = s.panes
+	if g == nil {
+		c, cerr := s.sessions.Client(session)
+		if cerr != nil {
+			return "", herdrStatus(cerr), cerr
+		}
+		g = c
+	}
+	pane, perr := g.GetPane(bare)
+	if perr != nil {
+		return "", herdrStatus(perr), perr
+	}
+	if pane.Cwd == "" {
+		// A pane Herdr knows but reports no directory for: there is nowhere to
+		// put the file, and inventing one (a temp dir, the bridge's own cwd)
+		// would hand back a path nothing in that pane can use.
+		return "", http.StatusNotFound, errors.New("pane has no working directory")
+	}
+	return pane.Cwd, http.StatusOK, nil
+}
+
 // paneAgent is paneCwd's resolution step, returning the whole agent rather than
 // just its cwd — for callers that also need the KIND, like GET /commands, where
 // the kind picks the lister and the cwd says where to look.
