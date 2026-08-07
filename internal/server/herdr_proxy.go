@@ -43,10 +43,19 @@ var herdrProxyAllowlist = map[string]bool{
 	"tab.create":       true, // new tab (+ root pane) in a workspace
 	"tab.close":        true, // DESTRUCTIVE: close a tab (in-app confirm)
 	"tab.focus":        true, // focus a tab
+	"tab.rename":       true, // relabel a tab (the app validates; Herdr accepts "")
 	"pane.split":       true, // split a pane (the app's "new pane")
 	"pane.close":       true, // DESTRUCTIVE: close a pane (in-app confirm)
 	"pane.focus":       true, // focus a pane
 	"agent.focus":      true, // focus an agent's pane
+
+	// `pane.rename` is deliberately absent for now. It works on the socket, but
+	// unlike tab.rename it emits NO event (verified against herdr 0.8.0,
+	// protocol 19: renaming a pane produced nothing on any of the 23 global
+	// subscription kinds), so a rename driven from the app would not reach any
+	// other client until something else moved. The app also does not carry a
+	// pane label yet. Allowlisting it before those two are dealt with would ship
+	// a control whose effect is invisible. See docs/CONTRACT-herdr-proxy.md.
 
 	// Herdr's `agent.view.*` projection is deliberately absent. Herdr stores the
 	// view and reports it active, but as of herdr 0.8.0 (protocol 19) no read

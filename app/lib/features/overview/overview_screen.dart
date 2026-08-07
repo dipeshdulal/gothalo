@@ -266,9 +266,13 @@ class _SpaceTabbedView extends ConsumerWidget {
                 for (final t in tabs)
                   Tab(
                     height: 44,
-                    // Long-press a tab to close it (Herdr parity via /herdr).
+                    // Long-press a tab for its actions (Herdr parity via
+                    // /herdr). This gesture used to close the tab outright —
+                    // it now opens the menu that offers closing, so the
+                    // destructive option is chosen rather than triggered.
                     child: GestureDetector(
-                      onLongPress: () => closeTab(context, ref, t.tabId),
+                      onLongPressStart: (d) =>
+                          _showTabMenu(context, ref, t, d.globalPosition),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -312,6 +316,52 @@ class _SpaceTabbedView extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// The actions for one tab, anchored where it was long-pressed.
+///
+/// A menu rather than two gestures: a tab strip is a row of small targets, and
+/// there is no second gesture left on one that reads as "rename" instead of
+/// "close". Anchoring at the press point keeps the menu next to the tab it
+/// acts on — a tab strip scrolls, so a fixed anchor would routinely open the
+/// menu somewhere the tab is not.
+Future<void> _showTabMenu(
+  BuildContext context,
+  WidgetRef ref,
+  TabInfo tab,
+  Offset at,
+) async {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final scheme = Theme.of(context).colorScheme;
+  final choice = await showMenu<String>(
+    context: context,
+    position: RelativeRect.fromRect(at & Size.zero, Offset.zero & overlay.size),
+    items: [
+      const PopupMenuItem(
+        value: 'rename',
+        child: ListTile(
+          leading: Icon(Icons.drive_file_rename_outline),
+          title: Text('Rename tab'),
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+      PopupMenuItem(
+        value: 'close',
+        child: ListTile(
+          leading: Icon(Icons.close, color: scheme.error),
+          title: const Text('Close tab'),
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+    ],
+  );
+  if (choice == null || !context.mounted) return;
+  switch (choice) {
+    case 'rename':
+      await renameTabDialog(context, ref, tab.tabId, currentLabel: tab.label);
+    case 'close':
+      await closeTab(context, ref, tab.tabId);
   }
 }
 

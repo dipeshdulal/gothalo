@@ -7,8 +7,9 @@ its result (or a normalized error). It gives the app parity with Herdr's command
 surface without a bespoke bridge endpoint per operation; new Herdr methods become
 available by adding them to the allowlist — no other bridge change.
 
-Verified end-to-end against **herdr 0.7.5, protocol 17** on the live socket. Every
-example below is a real captured request/response.
+Verified end-to-end against **herdr 0.7.5, protocol 17** on the live socket
+(`tab.rename` and the `pane.rename` findings against **0.8.0, protocol 19**).
+Every example below is a real captured request/response.
 
 ---
 
@@ -81,10 +82,28 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 | `tab.create` | `{ "workspace_id"?, "cwd"?, "label"?, "env"?, "focus"?=false }` | `tab_created` | new tab + its root pane |
 | `tab.close` | `{ "tab_id": "wN:tM" }` | `ok` | **DESTRUCTIVE** — in-app confirm |
 | `tab.focus` | `{ "tab_id": "wN:tM" }` | `ok` | |
+| `tab.rename` | `{ "tab_id": "wN:tM", "label": string }` | `tab_info` | **the client must validate `label`** — see below |
 | `pane.split` | `{ "direction": "down"\|"right"\|"up"\|"left", "target_pane_id"?, "cwd"?, "ratio"?, "env"?, "workspace_id"?, "focus"?=false }` | `pane_info` | the app's "new pane"; `direction` is **required** |
 | `pane.close` | `{ "pane_id": "wN:pM" }` | `ok` | **DESTRUCTIVE** — in-app confirm; closing a tab's last pane closes the tab |
 | `pane.focus` | `{ "pane_id": "wN:pM" }` | `ok` | |
 | `agent.focus` | `{ "target": "<pane id / agent>" }` | `ok` | focus an agent's pane |
+
+> **`tab.rename` validates nothing.** Herdr accepts any string, including `""`,
+> which blanks the tab's label — verified on the live socket (`tab.rename` with
+> `""` returned `tab_info` with `"label": ""`). Nothing in Herdr or the bridge
+> stops a client leaving a nameless tab behind, so **the label rule belongs to
+> the client**: the app trims, rejects empty, and caps at 60 characters
+> (`normalizeTabLabel` in `app/lib/features/herdr_actions.dart`). An unknown
+> `tab_id` is a proper `tab_not_found`, which the bridge maps to `404`.
+>
+> **`pane.rename` is deliberately not allowlisted (yet).** It exists on the
+> socket and works (`{ "pane_id", "label"? }` → `pane_info`; a null `label`
+> clears it), but unlike `tab.rename` it emits **no event at all** — measured
+> against herdr 0.8.0 / protocol 19 by subscribing to all 23 global kinds the
+> ingester uses and renaming a throwaway pane: nothing was delivered. A rename
+> driven from the phone would therefore not reach any other client until some
+> unrelated change happened to trigger a re-snapshot. The app also does not
+> carry a pane `label` in its snapshot model. Revisit together with those two.
 
 > **`agent.view.set` / `agent.view.clear` are deliberately not allowlisted.**
 > Herdr accepts the projection and reports it active, but as of herdr 0.8.0
@@ -101,7 +120,7 @@ the operator's foreground pane on the host. Pass `"focus": true` to override.
 
 > Confirmed **not** allowlisted (→ `403`): `server.stop`, `server.reload_config`,
 > `pane.send_text`, `pane.send_keys`, `agent.prompt`, `events.subscribe`,
-> `agent.view.set`, `agent.view.clear`, and
+> `agent.view.set`, `agent.view.clear`, `pane.rename`, and
 > every other method not in the table above. The app's existing typed endpoints
 > (`/send`, `/approve`, `/attach`, `/events`, …) remain the path for those.
 
@@ -197,6 +216,37 @@ The new pane is `result.pane.pane_id` (`wZ:p3`), added to the target pane's tab
 
 ← 200
 { "result": { "type": "ok" } }
+```
+
+### `tab.rename`
+
+Captured against herdr 0.8.0 (protocol 19) on a throwaway workspace.
+
+```json
+→ { "method": "tab.rename",
+    "params": { "tab_id": "wZ:t2", "label": "api server" } }
+
+← 200
+{ "result": {
+    "type": "tab_info",
+    "tab": { "tab_id": "wZ:t2", "workspace_id": "wZ", "number": 2,
+             "label": "api server", "focused": false, "pane_count": 1,
+             "agent_status": "unknown" } } }
+```
+
+The result echoes the whole tab, so a client can read the applied label back
+rather than assuming its own string landed. Renaming also emits a
+[`tab_renamed`](../CONTRACT.md) event on `WS /events` —
+`{"type":"tab_renamed","tab_id":"wZ:t2","workspace_id":"wZ","label":"api server"}`
+— so every connected client re-snapshots without being told to.
+
+An unknown tab is a `404`:
+
+```json
+→ { "method": "tab.rename", "params": { "tab_id": "w999:t9", "label": "x" } }
+
+← 404
+{ "error": "herdr: tab_not_found: tab w999:t9 not found" }
 ```
 
 ### `tab.close`

@@ -44,6 +44,8 @@ const (
 	samplerPaneUpdatedAgent  = `{"pane":{"agent":"claude","agent_status":"idle","pane_id":"wN:pB","workspace_id":"wN","tab_id":"wN:t1","revision":6},"type":"pane_updated"}`
 	samplerDottedAgentStatus = `{"agent":"claude","agent_status":"working","pane_id":"wN:pB","workspace_id":"wN"}`
 	samplerPaneAgentDetected = `{"agent":"claude","final_status":"idle","pane_id":"wN:pE","released":true,"type":"pane_agent_detected","workspace_id":"wN"}`
+	// Captured from herdr 0.8.0 (protocol 19) while renaming a throwaway tab.
+	samplerTabRenamed = `{"label":"after","tab_id":"wN:t2","type":"tab_renamed","workspace_id":"wN"}`
 )
 
 func TestForwardsGlobalEventSessionTagged(t *testing.T) {
@@ -288,6 +290,46 @@ func TestLivenessProbeNeedsSilence(t *testing.T) {
 	i.mu.Unlock()
 	if !i.silentFor(probeSilence) {
 		t.Error("a socket quiet for twice the window is not reported silent")
+	}
+}
+
+// TestTabRenamedReachesTheBus: renaming a tab from the phone is only useful if
+// every other client sees the new name without being told to refresh. The app
+// treats any /events frame as a change signal, so the whole live-update path
+// for the feature is "tab.renamed is subscribed AND forwarded" — pinned here
+// because dropping either half breaks the UI silently, with the rename itself
+// still succeeding.
+func TestTabRenamedReachesTheBus(t *testing.T) {
+	var subscribed bool
+	for _, s := range globalSubscriptions {
+		if s.Type == "tab.renamed" {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		t.Error("tab.renamed is not in globalSubscriptions — Herdr will never send it")
+	}
+
+	bus := events.New()
+	sub := bus.Subscribe(4)
+	defer sub.Close()
+	ing := NewIngester(New(), bus)
+
+	ing.handle(context.Background(), msg(events.TypeTabRenamed, samplerTabRenamed))
+
+	e := collect(t, sub, 1)[0]
+	if e.Source != events.SourceHerdr || e.Type != events.TypeTabRenamed {
+		t.Fatalf("got %s/%s, want herdr/tab_renamed", e.Source, e.Type)
+	}
+	var p struct {
+		TabID string `json:"tab_id"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.TabID != "wN:t2" || p.Label != "after" {
+		t.Errorf("payload = %s, want the renamed tab and its new label", e.Payload)
 	}
 }
 
