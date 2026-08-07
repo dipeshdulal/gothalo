@@ -180,6 +180,12 @@ The new workspace is `result.workspace.workspace_id` (`wZ`); its root pane is
 `result.root_pane.pane_id` (`wZ:p1`). Keep the `workspace_id` — it is what
 `worktree.remove` takes.
 
+Keep the **root pane id** too: it is a shell already sitting in the new
+checkout, so it is where an agent for this worktree belongs. The app's
+create-and-launch flow feeds it straight to `POST /agent/start` rather than
+re-listing panes to find it — see
+[`CONTRACT-worktree-launch.md`](./CONTRACT-worktree-launch.md).
+
 ### `tab.create`
 
 ```json

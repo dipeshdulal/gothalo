@@ -402,6 +402,10 @@ there — which is what a client needs to tell "the phone launched this" from
      working directory pre-filled from the space).
    - Overview → a **non-agent** pane's overflow → **Start agent here** (in place;
      no cwd field, since the pane keeps its own).
+   - Overview → *Space actions* → **New worktree**, with *Start an agent in it*
+     switched on — the `pane_id` form against the root pane `worktree.create`
+     just returned. That flow is its own contract:
+     [`CONTRACT-worktree-launch.md`](./CONTRACT-worktree-launch.md).
 2. **The sheet** picks a kind from `GET /agents/available` — never a hardcoded
    list, never a kind that isn't installed — warns when the chosen kind has no
    state reporting, takes the working directory and an optional first message,
