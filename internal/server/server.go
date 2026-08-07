@@ -101,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)
 	mux.HandleFunc("/herdr", s.handleHerdrProxy)
+	mux.HandleFunc("/branch-info", s.handleBranchInfo)
+	mux.HandleFunc("/branch-delete", s.handleBranchDelete)
 	mux.HandleFunc("/register-token", s.handleRegisterToken)
 	mux.HandleFunc("/testpush", s.handleTestPush)
 	mux.HandleFunc("/pair", s.handlePair)
@@ -333,7 +335,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	    answering rather than on this number — an older bridge 404s and the
 //	    composer stays a plain text field — so this records the capability
 //	    without being what unlocks it.
-const BridgeVersion = 5
+//	6 — GET /branch-info + POST /branch-delete: delete a worktree's branch when
+//	    the worktree is removed. The app gates the checkbox on /branch-info
+//	    answering rather than on this number — an older bridge 404s and the
+//	    remove dialog is exactly what it was before — so again this records the
+//	    capability without being what unlocks it.
+const BridgeVersion = 6
 
 // GET /info -> this bridge's identity and capability level.
 //

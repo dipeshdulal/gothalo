@@ -23,6 +23,7 @@ internal/
 ├── agentstate/         parse `herdr agent read` -> compact per-agent state (per-kind)
 ├── transcript/         tail the agent's on-disk transcript -> kind-agnostic chat
 ├── imagedrop/          land an uploaded image in the agent's cwd -> a path it can read
+├── gitbranch/          is a branch safe to delete, and delete it (Herdr has no branches)
 ├── notify/             bus consumer: dismiss stale "blocked" pushes
 └── web/                embedded web-push receiver page (go:embed)
 ```
@@ -50,6 +51,8 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 | GET  | `/agent-transcript` | device bearer or admin (`?token=`) | WS normalized transcript chat + backlog |
 | GET  | `/events` | device bearer or admin (`?token=`) | WS unified event bus (state changes, push lifecycle) |
 | POST | `/herdr` | device bearer or admin | allowlisted Herdr CLI proxy (worktree/tab/pane parity) |
+| GET  | `/branch-info` | device bearer or admin | can this worktree's branch be deleted, and is it merged |
+| POST | `/branch-delete` | device bearer or admin | delete a local git branch (after its worktree is gone) |
 | POST | `/register-token` | device bearer or admin | (re)register a push token |
 | POST | `/testpush` | device bearer or admin | fan a sample push to all devices |
 | POST | `/pair` | one-time code | issue a per-device bearer |
