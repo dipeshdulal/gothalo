@@ -184,9 +184,12 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
     final ctx = _context[file.path];
     // Gaps are only offerable where there is a working-tree file to read them
     // out of: a deleted file's content lives in HEAD alone, and an untracked
-    // file's synthetic diff already contains the whole file.
+    // file's synthetic diff already contains the whole file. `unavailable` is
+    // the same verdict reached the hard way — see [_FileContext].
     final expandable =
-        file.status != 'deleted' && file.status != 'untracked';
+        file.status != 'deleted' &&
+        file.status != 'untracked' &&
+        !(ctx?.unavailable ?? false);
 
     var cursor = 1;
     for (final hunk in diff.hunks) {
@@ -323,9 +326,20 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
       if (got.eof) ctx.eofReached = true;
     } on BridgeException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      // 404 covers every "there is nothing here to expand" answer at once — a
+      // bridge too old to have the endpoint, a file that vanished under us, a
+      // pane whose agent is gone. Retire the affordance for this file rather
+      // than raising an error the user cannot act on: the honest fallback is
+      // the three lines of context git gave us, which is what this screen
+      // showed before /diff/expand existed. Anything else is a real failure and
+      // says so.
+      if (e.statusCode == 404) {
+        ctx.unavailable = true;
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } finally {
       ctx.pending.remove(start);
       if (mounted) _rebuild();
@@ -496,6 +510,11 @@ class _FileContext {
 
   /// Region starts with a request in flight, so a double-tap doesn't fire two.
   final Set<int> pending = {};
+
+  /// The bridge answered 404 — no `/diff/expand` on this bridge, or nothing at
+  /// that path any more. Stop offering the expand rows for this file instead of
+  /// letting every one of them fail the same way.
+  bool unavailable = false;
 }
 
 // ---------------------------------------------------------------------------

@@ -15,12 +15,19 @@ import 'package:gothalo/features/diff/diff_screen.dart';
 /// interesting sequence — load the diff, open a file, tap a collapsed region,
 /// see the fetched lines land in the right place.
 class _FakeBridge implements HttpClientAdapter {
-  _FakeBridge({required this.diff, this.fileLines = const []});
+  _FakeBridge({
+    required this.diff,
+    this.fileLines = const [],
+    this.expandStatus = 200,
+  });
 
   final Map<String, dynamic> diff;
 
   /// The working-tree content `/diff/expand` serves back.
   final List<String> fileLines;
+
+  /// Lets a test stand in for a bridge that predates `/diff/expand` (404).
+  final int expandStatus;
 
   final List<RequestOptions> seen = [];
 
@@ -33,6 +40,9 @@ class _FakeBridge implements HttpClientAdapter {
     seen.add(options);
     if (options.path == '/diff') return _json(diff);
     if (options.path == '/diff/expand') {
+      if (expandStatus != 200) {
+        return ResponseBody.fromString('not found', expandStatus);
+      }
       final start = options.queryParameters['start'] as int;
       final count = options.queryParameters['count'] as int;
       final end = (start - 1 + count).clamp(0, fileLines.length);
@@ -186,6 +196,41 @@ void main() {
     expect(expand.queryParameters['start'], 1);
     expect(expand.queryParameters['count'], 19);
     expect(expand.queryParameters['path'], 'a.go');
+  });
+
+  // A bridge older than /diff/expand should leave the reviewer with the three
+  // lines of context git gives — which is what this screen showed before the
+  // endpoint existed — not an error they can do nothing about.
+  testWidgets('a bridge without /diff/expand retires the affordance', (
+    tester,
+  ) async {
+    final bridge = _FakeBridge(
+      diff: {
+        'branch': 'feat/x',
+        'files': [
+          {
+            'path': 'a.go',
+            'status': 'modified',
+            'additions': 1,
+            'deletions': 1,
+            'diff': '@@ -20,2 +20,2 @@\n-was\n+is\n tail',
+          },
+        ],
+      },
+      expandStatus: 404,
+    );
+
+    await tester.pumpWidget(_app(bridge));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Show 19 unchanged lines'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('unchanged line'), findsNothing);
+    expect(find.text('Show more lines'), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
+    // The diff itself is still there — only the expand rows went away.
+    expect(find.textContaining('tail'), findsOneWidget);
   });
 
   testWidgets('an untracked file offers no expansion affordance', (
