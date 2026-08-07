@@ -513,3 +513,57 @@ repo. Diff lines wrap into a fixed gutter instead of scrolling horizontally,
 which also keeps the whole screen renderable as one lazy list: a horizontally
 scrollable code block has to lay out every line of a file to measure the widest
 one, which is precisely what must not happen on a several-thousand-line diff.
+
+## D29 — One mechanism answers "what can I do with this pane"
+
+`GET /suggestions` is the single surface the app asks what a pane affords, and
+`internal/suggest` is the single place that decides. Dev-server discovery
+(`GET /ports`) was built first and separately, with its own endpoint, its own
+contract and its own chip; it is now one **source** inside that mechanism,
+ranked in the same row as the git-shaped ones. `/ports` survives underneath as
+the raw host-wide scan the source reads — the layer that knows about `lsof`,
+HTTP probes and process trees — and the app no longer calls it.
+
+The two were converging on the same question from different directions. "A
+server is up in this pane, here is a URL" and "this pane's rebase stopped, here
+is the diff" are the same sentence with different nouns, and shipping them as
+two mechanisms would have meant two contracts, two caches, two chip rows, and a
+standing argument about which row a future affordance belongs in. The user
+asking the question does not know or care which subsystem noticed.
+
+**What made it affordable is that the scan is host-wide and cached.** The
+objection to merging was real: a port scan costs an `lsof`, a `ps` and a probe
+per listener, and it is inherently a *host* question that a pane filter narrows
+afterwards — so folding it into a per-pane read looks like making every pane pay
+for a scan. It isn't, because `ports.Cache` is shared and 5s-lived: a row of
+open panes costs one `lsof` between them, not one each. The per-pane suggestion
+cache sits just *past* that TTL (6s) so a miss usually finds the scan warm
+rather than re-triggering one it then ignores.
+
+**Rank is the merge.** Every source now scores itself into one ordering, and
+those numbers live in one block so "which of these matters more" is a single
+reviewable argument rather than one per feature: stuck (30) → serving (25) →
+changed (20) → up but unreachable (15) → empty (10). A source may contribute at
+most two chips, so a microservice stack cannot crowd out the chip that needs a
+person.
+
+**`kind` and `action` stay separate, and that is what makes one mechanism
+extensible.** `kind` says why and only picks the icon; `action` says what and is
+the only field the app branches on. An action a client does not implement — or a
+known one missing its required param — is dropped rather than rendered, so a
+newer bridge can add a source against an older app and the worst case is a
+missing chip. It is also what makes the deferred loopback relay cheap: it
+becomes one more action on an existing chip, not a second mechanism.
+
+**The two endpoints disagree in exactly one place, on purpose.** A failed scan
+is a `502` on `/ports`, because there the scan *is* the response; on
+`/suggestions` it is logged and costs only the dev-server chips, because losing
+`lsof` must not cost a pane its "resolve this conflict" chip.
+
+**What was deliberately not collapsed.** `/ports` is not folded into
+`/suggestions` as a `?host=1` mode: the host-wide list is a different question
+with a different natural cadence, and a per-pane endpoint that sometimes answers
+about the whole machine is worse than two endpoints. The scanning code stays in
+`internal/ports` for the same reason — `internal/suggest` has no dependency
+beyond the standard library, and every source is a pure function of an
+already-collected observation, which is what keeps adding the next one cheap.

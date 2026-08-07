@@ -82,10 +82,22 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
-- 🚧 **Dev-server preview** — `GET /ports` ships (`internal/ports`,
-      `docs/CONTRACT-preview.md`): the host's HTTP listeners, probed so only real
-      servers are listed, each attributed to the pane that spawned it by walking
-      the process tree to a pane's `shell_pid`. App-side chip is not built yet.
+- ✅ **Pane suggestions (incl. dev-server preview)** — `GET /suggestions` plus a
+      chip row above the terminal (`internal/suggest`, `internal/ports`,
+      `app/lib/features/suggestions/`, `docs/CONTRACT-suggestions.md`): the two or
+      three things worth doing to a pane given what is running in it. Five
+      sources — a reachable dev server, a stopped merge/rebase/cherry-pick, an
+      agent tree with uncommitted changes, a dev server bound to localhost, and a
+      plain shell parked at its prompt inside a worktree.
+
+      **One mechanism, not two.** Dev-server discovery was built first as its own
+      endpoint and its own chip; it is now a source inside the suggestion
+      mechanism, ranked in the same row as the git-shaped ones. `GET /ports`
+      survives underneath as the raw host-wide scan the source reads — it is what
+      knows about `lsof`, HTTP probes and process trees — and the app calls only
+      `/suggestions`. What made the merge affordable is that the scan is cached
+      host-wide for 5s, so a row of open panes shares one `lsof` between them
+      rather than each paying for one.
 
       This supersedes the earlier "browser preview in a WebView — low value over
       a tailnet" note, which was half right and half wrong. Right: the **tunnel**
@@ -97,32 +109,21 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       is the real problem — three servers on 5173/5174/5175 and a bare port
       number tells you nothing about whose is whose.
 
-      Loopback-bound servers are reported with no `url` and render as a dimmed
-      "localhost-only" badge. Relaying them (a bridge-side TCP splice, `ssh -L`
-      without the SSH) is deliberately deferred until the badge shows how often
-      that case actually comes up — it would open ports outside the bearer check,
-      so it should be an explicit per-port "Expose" tap rather than automatic.
-- ✅ **Pane suggestions** — `GET /suggestions` plus a chip row above the terminal
-      (`internal/suggest`, `app/lib/features/suggestions/`,
-      `docs/CONTRACT-suggestions.md`): the two or three things worth doing to a
-      pane given what is running in it. Three sources — a stopped
-      merge/rebase/cherry-pick, an agent tree with uncommitted changes, and a
-      plain shell parked at its prompt inside a worktree.
-
-      The generalisation of the dev-server work above, and the shape the two
-      should converge on. **`/ports` is untouched**: a port scan is a *host*
-      question that `?pane=` narrows afterwards, so folding it in would make every
-      per-pane read pay for an `lsof`. Merging belongs on the app side first — one
-      chip row fed by both endpoints, interleaved by `rank` — and only then, if it
-      earns it, as a `dev_server` source reading the already-cached scan. See the
-      contract's convergence section.
+      Loopback-bound servers come back with no `url` and render as a dimmed chip
+      whose tap explains the bind and names `--host`. Relaying them (a bridge-side
+      TCP splice, `ssh -L` without the SSH) is deliberately deferred until that
+      chip shows how often the case actually comes up — it would open ports
+      outside the bearer check, so it should be an explicit per-server "Expose"
+      tap. When it lands it is one more `action` on an existing chip, not a new
+      mechanism, which is the point of having merged the two.
 
       The design constraint that mattered most was **restraint**: the row renders
       nothing at all for a pane with nothing to offer, which on the development
-      host is most of them. A rerun-the-test-runner source was scoped out on
-      purpose — recognising the runner is easy, but a watcher wants a keystroke
-      and a finished run wants the command retyped, and the process list cannot
-      tell the two apart.
+      host is most of them, and one source may contribute at most two chips so a
+      microservice stack cannot crowd out the chip that needs a person. A
+      rerun-the-test-runner source was scoped out on purpose — recognising the
+      runner is easy, but a watcher wants a keystroke and a finished run wants the
+      command retyped, and the process list cannot tell the two apart.
 
 ## Known gaps
 - **Codex transcripts** — `internal/transcript/codex.go` is an honest stub that

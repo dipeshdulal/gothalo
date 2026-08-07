@@ -1,5 +1,10 @@
 // Package ports discovers HTTP servers running on the Herdr host and attributes
-// each one to the pane that spawned it, for GET /ports.
+// each one to the pane that spawned it.
+//
+// Two readers, one scan. GET /ports serves it raw and host-wide; internal/suggest
+// consumes this pane's share of it as the `dev_server` source, which is what the
+// app actually renders (D29). The Cache is what makes that affordable — a row of
+// open panes shares one lsof between them rather than each paying for one.
 //
 // Two things the phone cannot work out for itself. First, *which* ports are
 // serving: `lsof` lists every TCP listener, most of which are databases, the

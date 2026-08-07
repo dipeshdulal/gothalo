@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -8,8 +9,8 @@ import '../agents/start_agent_sheet.dart';
 import '../inbox/inbox_providers.dart';
 import 'suggestions_providers.dart';
 
-/// A single row of context chips for one pane — "Review changes", "Resolve",
-/// "Start an agent" — from `GET /suggestions`.
+/// A single row of context chips for one pane — "Open :5173", "Resolve",
+/// "Review changes", "Start an agent" — from `GET /suggestions`.
 ///
 /// Deliberately quiet. It occupies **no height at all** when the bridge has
 /// nothing to offer, which is most panes most of the time: this is a shortcut
@@ -81,6 +82,37 @@ Future<void> runSuggestion(
           where: _paneLabel(ref, suggestion.pane),
         ),
       );
+    case 'open_url':
+      // Straight to the system browser rather than an in-app WebView. Over a
+      // tailnet the phone reaches the dev server directly, so a WebView would
+      // add nothing and take away the address bar, devtools, and the tab you
+      // want to keep open while you go back to the terminal.
+      final opened = await launchUrl(
+        Uri.parse(suggestion.url),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened && context.mounted) {
+        // The URL came from the bridge's own scan, so a refusal here is the
+        // phone's (no browser registered for http, an enterprise policy) — say
+        // so rather than leaving a tap that visibly did nothing.
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open ${suggestion.url}')),
+        );
+      }
+    case 'show_note':
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(suggestion.label),
+          content: Text(suggestion.note),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     // No default: an unknown action never reaches here (the client drops it),
     // and if one ever did, doing nothing beats guessing.
   }
@@ -118,6 +150,11 @@ class _SuggestionChip extends StatelessWidget {
     'git_conflict' => Icons.merge_type,
     'git_dirty' => Icons.difference_outlined,
     'shell_idle' => Icons.play_arrow_outlined,
+    'dev_server' => Icons.open_in_new,
+    // Not an error icon: the server is up and working. The only thing wrong
+    // with it is where it is bound, and the chip is dimmed rather than red for
+    // exactly that reason.
+    'dev_server_local' => Icons.lan_outlined,
     _ => Icons.bolt,
   };
 
@@ -128,17 +165,22 @@ class _SuggestionChip extends StatelessWidget {
     // the one chip allowed to use the error colour. Everything else stays
     // neutral — a row where every chip shouts is a row you stop reading.
     final urgent = suggestion.kind == 'git_conflict';
+    // A localhost-bound dev server is dimmed: it is real information, but it is
+    // the only chip in the row that cannot take you anywhere, and it should not
+    // compete with the ones that can. Still tappable — the tap is what tells
+    // you how to fix it.
+    final dimmed = suggestion.kind == 'dev_server_local';
+    final fg = urgent
+        ? scheme.error
+        : (dimmed ? scheme.onSurfaceVariant : null);
     return ActionChip(
-      avatar: Icon(_icon, size: 15, color: urgent ? scheme.error : null),
+      avatar: Icon(_icon, size: 15, color: fg),
       visualDensity: VisualDensity.compact,
       onPressed: onTap,
       label: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            suggestion.label,
-            style: TextStyle(color: urgent ? scheme.error : null),
-          ),
+          Text(suggestion.label, style: TextStyle(color: fg)),
           if (suggestion.detail.isNotEmpty) ...[
             const SizedBox(width: 6),
             Text(

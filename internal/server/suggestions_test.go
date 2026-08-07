@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -62,6 +63,19 @@ func dirtyRepo(t *testing.T) string {
 	return dir
 }
 
+// noServers stubs the dev-server half of the observation. Set in every test
+// that does not care about it: the production path shells out to `lsof` and
+// probes every listener on the machine running the tests, which is neither
+// cheap nor deterministic.
+func noServers(*Server) func(context.Context, string) []suggest.Server {
+	return func(context.Context, string) []suggest.Server { return nil }
+}
+
+// stubServers stubs the scan with a fixed set of listeners for the pane.
+func stubServers(list ...suggest.Server) func(context.Context, string) []suggest.Server {
+	return func(context.Context, string) []suggest.Server { return list }
+}
+
 func getSuggestions(t *testing.T, s *Server, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/suggestions"+query, nil)
@@ -113,6 +127,7 @@ func TestSuggestionsForAgentPane(t *testing.T) {
 		ForegroundProcesses:      []herdr.PaneProcess{{PID: 200, Name: "claude", Cwd: dir}},
 	}}
 	s.agents = fakeAgent{agent: herdr.Agent{Kind: "claude", Cwd: dir}}
+	s.serversFor = noServers(s)
 
 	rec := getSuggestions(t, s, "?pane=acme/w1:p1")
 	if rec.Code != http.StatusOK {
@@ -150,6 +165,7 @@ func TestSuggestionsForPlainPane(t *testing.T) {
 		ForegroundProcesses:      []herdr.PaneProcess{{PID: 100, Name: "zsh", Cwd: dir}},
 	}}
 	s.agents = fakeAgent{err: herdr.ErrAgentNotFound}
+	s.serversFor = noServers(s)
 
 	rec := getSuggestions(t, s, "?pane=w1:p2")
 	if rec.Code != http.StatusOK {
@@ -170,6 +186,7 @@ func TestSuggestionsUnknownPane(t *testing.T) {
 	s := newTestServer(t)
 	s.processInfo = &fakeProcessInfo{err: errors.New("pane not found: w9:p9")}
 	s.agents = fakeAgent{err: herdr.ErrAgentNotFound}
+	s.serversFor = noServers(s)
 
 	if rec := getSuggestions(t, s, "?pane=w9:p9"); rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
@@ -189,6 +206,7 @@ func TestSuggestionsAreCached(t *testing.T) {
 	}}
 	s.processInfo = fake
 	s.agents = fakeAgent{agent: herdr.Agent{Kind: "claude", Cwd: dir}}
+	s.serversFor = noServers(s)
 
 	now := time.Now()
 	s.suggestions.now = func() time.Time { return now }
@@ -241,5 +259,75 @@ func TestForegroundCwdPrefersTheGroupLeader(t *testing.T) {
 	}
 	if got := foregroundCwd(herdr.PaneProcessInfo{}); got != "" {
 		t.Errorf("foregroundCwd(zero) = %q, want empty", got)
+	}
+}
+
+// TestSuggestionsIncludeDevServers is the convergence, end to end through the
+// handler: the port scan's attribution for this pane arrives as chips in the
+// same row as the git-shaped ones, ranked against them.
+//
+// This is the behaviour GET /ports used to be the only route to. It has to keep
+// working here, because this is now the endpoint the app asks.
+func TestSuggestionsIncludeDevServers(t *testing.T) {
+	dir := dirtyRepo(t)
+	s := newTestServer(t)
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 200,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 200, Cwd: dir}},
+	}}
+	s.agents = fakeAgent{agent: herdr.Agent{Kind: "claude", Cwd: dir}}
+	s.serversFor = stubServers(
+		suggest.Server{Port: 5173, Proc: "node", URL: "http://100.84.12.3:5173"},
+	)
+
+	rec := getSuggestions(t, s, "?pane=w1:p1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var body suggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Suggestions) != 2 {
+		t.Fatalf("suggestions = %+v, want the server and the diff", body.Suggestions)
+	}
+	first := body.Suggestions[0]
+	if first.Kind != suggest.KindDevServer || first.Action != suggest.ActionOpenURL {
+		t.Errorf("first = %+v, want the dev server ranked above the diff", first)
+	}
+	if first.Params["url"] != "http://100.84.12.3:5173" {
+		t.Errorf("params[url] = %q, want the url the scan built", first.Params["url"])
+	}
+	if body.Suggestions[1].Kind != suggest.KindGitDirty {
+		t.Errorf("second = %+v, want the dirty-tree chip", body.Suggestions[1])
+	}
+}
+
+// TestSuggestionsSurviveAScanFailure: /ports answers 502 when the scan fails,
+// because there the scan IS the response. Here it is one source of several, and
+// a host without `lsof` must not lose its other chips.
+func TestSuggestionsSurviveAScanFailure(t *testing.T) {
+	dir := dirtyRepo(t)
+	s := newTestServer(t)
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 200,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 200, Cwd: dir}},
+	}}
+	s.agents = fakeAgent{agent: herdr.Agent{Kind: "claude", Cwd: dir}}
+	// paneServers swallows the error and returns nothing — this is that shape.
+	s.serversFor = stubServers()
+
+	rec := getSuggestions(t, s, "?pane=w1:p1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 despite the scan failing: %s", rec.Code, rec.Body)
+	}
+	var body suggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Suggestions) != 1 || body.Suggestions[0].Kind != suggest.KindGitDirty {
+		t.Fatalf("suggestions = %+v, want the dirty-tree chip alone", body.Suggestions)
 	}
 }

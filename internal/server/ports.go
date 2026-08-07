@@ -14,10 +14,13 @@ import (
 // GET /ports -> the HTTP servers currently running on the host, each attributed
 // to the pane that spawned it. Optional ?pane=<pane_id> narrows to one pane.
 //
-// Two surfaces read this: the list page shows a chip per pane that has a server
-// up, and the terminal view shows the one belonging to the pane you are looking
-// at. Both come off the same unfiltered scan — the pane filter is applied here
-// rather than by a second endpoint so the scan is shared and cached once.
+// **The raw feed, not the app-facing surface.** The app asks GET /suggestions,
+// which turns this pane's listeners into chips alongside everything else it can
+// offer (see D29 and docs/CONTRACT-suggestions.md). This endpoint stays because
+// it answers the HOST question — what is serving on this machine and whose is
+// it — which a per-pane read cannot, and because it is the layer that knows
+// about lsof, HTTP probes and process trees. It is also the honest way to poke
+// the scan by hand.
 //
 // Deliberately not folded into /snapshot. Snapshot is the hottest read in the
 // bridge and stays a passthrough; a port scan probes every listener and belongs

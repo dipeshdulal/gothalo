@@ -64,6 +64,53 @@ void main() {
       );
     });
 
+    // The dev-server half of the merged mechanism. `open_url` is the action the
+    // old /ports preview chip used to be; it now arrives in the same row as the
+    // rest, and carries its target in params.
+    test('accepts a dev server with a url', () {
+      final s = PaneSuggestion.fromJson(
+        json(
+          kind: 'dev_server',
+          label: 'Open :5173',
+          detail: 'node · serving',
+          action: 'open_url',
+          params: {'pane': 'w1:p2', 'url': 'http://100.84.12.3:5173'},
+        ),
+      );
+      expect(s.isActionable, isTrue);
+      expect(s.url, 'http://100.84.12.3:5173');
+    });
+
+    // A loopback server has no url by construction — the bridge omits it rather
+    // than hand over one that cannot connect. As an `open_url` that is a dead
+    // button, so it must be dropped; the bridge sends it as `show_note`.
+    test('drops an open_url with no url', () {
+      final s = PaneSuggestion.fromJson(
+        json(kind: 'dev_server', action: 'open_url', params: {'pane': 'w1:p2'}),
+      );
+      expect(s.isActionable, isFalse);
+    });
+
+    test('accepts a localhost-only server as a note', () {
+      final s = PaneSuggestion.fromJson(
+        json(
+          kind: 'dev_server_local',
+          label: ':5174 is local-only',
+          action: 'show_note',
+          params: {'pane': 'w1:p2', 'note': 'bound to 127.0.0.1 — use --host'},
+        ),
+      );
+      expect(s.isActionable, isTrue);
+      expect(s.note, contains('--host'));
+    });
+
+    test('drops a show_note with nothing to say', () {
+      final s = PaneSuggestion.fromJson(
+        json(action: 'show_note', params: {'pane': 'w1:p2'}),
+      );
+      expect(s.isActionable, isFalse);
+    });
+
     // Every action operates on a pane, so one without a pane cannot be run —
     // regardless of how well-formed the rest of it looks.
     test('drops a suggestion with no pane in its params', () {

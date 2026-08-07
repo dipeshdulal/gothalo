@@ -183,8 +183,8 @@ func TestNoCwdSuggestsNothing(t *testing.T) {
 // hold when one day it can.
 func TestForIsCappedAndOrdered(t *testing.T) {
 	fixed := func(kind string, rank int) source {
-		return func(Pane) *Suggestion {
-			return &Suggestion{Kind: kind, Action: ActionOpenDiff, Rank: rank}
+		return func(Pane) []Suggestion {
+			return []Suggestion{{Kind: kind, Action: ActionOpenDiff, Rank: rank}}
 		}
 	}
 	restore := sources

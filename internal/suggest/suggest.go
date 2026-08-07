@@ -1,17 +1,23 @@
 // Package suggest turns "what is actually going on in this pane" into a short,
 // ordered list of one-tap actions, for GET /suggestions.
 //
-// The generalisation of internal/ports: that package answers one question (is a
-// dev server up in this pane, and can the phone reach it) from one signal. This
-// one keeps the same bar — a suggestion that appears is a suggestion you can
-// tap — and widens the signals to whatever is cheap to read about a pane: what
-// Herdr says holds the pane's foreground (`pane.process_info`), whether an agent
-// lives there, and a handful of stat() calls on the pane's working directory.
+// This is the one mechanism for "what can I do with this pane". Dev-server
+// discovery (internal/ports) started as a second, parallel answer to the same
+// question and is now folded in as one more source: the port scan is still that
+// package's job, but its result arrives here as [Pane.Servers] and comes out as
+// chips in the same row, ranked against the git-shaped ones. GET /ports remains
+// as the raw host-wide feed behind it — see docs/CONTRACT-suggestions.md.
+//
+// The bar every source has to clear: a suggestion that appears is a suggestion
+// you can tap. The signals are whatever is cheap to know about a pane — what
+// Herdr says holds its foreground (`pane.process_info`), whether an agent lives
+// there, a handful of stat() calls on its working directory, and the listeners
+// already attributed to it.
 //
 // Everything here is a pure function of an already-collected [Pane]. The Herdr
-// round-trips and the caching live in the server package, so a source is a
-// twenty-line function with no I/O beyond the filesystem — which is what makes
-// adding the next one cheap and testable.
+// round-trips, the port scan and the caching all live in the server package, so
+// a source is a twenty-line function with no I/O beyond the filesystem — which
+// is what makes adding the next one cheap and testable.
 package suggest
 
 import (
@@ -29,6 +35,14 @@ const (
 	ActionOpenDiff = "open_diff"
 	// ActionStartAgent opens the start-an-agent sheet targeting this pane.
 	ActionStartAgent = "start_agent"
+	// ActionOpenURL hands params["url"] to the system browser.
+	ActionOpenURL = "open_url"
+	// ActionShowNote shows params["note"] and nothing else. It exists for the
+	// one state that is worth reporting but cannot be acted on remotely — a dev
+	// server bound to loopback — where the note names the fix. Without it that
+	// server would either be hidden (and the user left wondering why there is no
+	// preview chip) or shown as a chip that does nothing when tapped.
+	ActionShowNote = "show_note"
 )
 
 // Kind is WHY a suggestion was offered — the source that produced it. Separate
@@ -39,6 +53,12 @@ const (
 	KindGitConflict = "git_conflict"
 	KindGitDirty    = "git_dirty"
 	KindShellIdle   = "shell_idle"
+	KindDevServer   = "dev_server"
+	// KindDevServerLocal is a server that is up but bound to loopback, so
+	// nothing on the tailnet can reach it. Its own kind rather than a flag on
+	// KindDevServer: the two render differently and do different things on tap,
+	// and a client should not have to infer that from an absent url.
+	KindDevServerLocal = "dev_server_local"
 )
 
 // Suggestion is one offered action.
@@ -68,9 +88,48 @@ type Suggestion struct {
 // the cap is the backstop, not the design.
 const Max = 3
 
+// Ranks, in one block on purpose. Now that dev servers and the git-shaped
+// suggestions share a row, "which of these matters more" is a single argument
+// rather than one per feature, and it is only reviewable if the numbers sit
+// next to each other.
+//
+// The order reads: something is stuck and needs a person; something is serving
+// that you probably came here to look at; something changed that you probably
+// came here to read; something is up but unreachable, which is worth knowing
+// but not urgent; and finally an empty pane you could put an agent in.
+//
+// Gaps of five leave room to slot a source in without renumbering.
+const (
+	RankGitConflict    = 30
+	RankDevServer      = 25
+	RankGitDirty       = 20
+	RankDevServerLocal = 15
+	RankShellIdle      = 10
+)
+
+// Server is one HTTP listener already attributed to this pane by the port scan
+// — the shape internal/ports produces, narrowed to what a chip needs.
+//
+// Declared here rather than imported from internal/ports so this package keeps
+// no dependency beyond the standard library: the sources stay pure functions
+// over plain data, and the one place that knows about `lsof` stays the one
+// place that knows about it. The server package does the mapping.
+type Server struct {
+	Port int
+	// Proc is the executable name ("node", "python3") — the chip's detail line.
+	Proc string
+	// URL is where the phone should point. Empty for a loopback bind, which is
+	// the whole client-side decision: either a working URL or none, never one
+	// that cannot connect.
+	URL string
+	// Loopback reports a bind only the host itself can reach.
+	Loopback bool
+}
+
 // Pane is everything the sources are allowed to look at: the observations the
 // server has already paid for. Collecting it is the caller's job (one
-// `pane.process_info` and one `agent.get`), so the sources stay pure.
+// `pane.process_info`, one `agent.get`, and a read of the cached port scan), so
+// the sources stay pure.
 type Pane struct {
 	// ID is the session-qualified pane id, echoed into every action's params.
 	ID string
@@ -91,10 +150,18 @@ type Pane struct {
 	// would hang off, and it is collected because process_info already carries
 	// it.
 	Foreground string
+	// Servers are the HTTP listeners the port scan attributed to this pane,
+	// sorted by port. Empty when nothing is serving here, when the scan failed,
+	// or when the listener's parent chain never crossed this pane's shell.
+	Servers []Server
 }
 
-// source examines a pane and returns the suggestion it wants to offer, if any.
-type source func(Pane) *Suggestion
+// source examines a pane and returns the suggestions it wants to offer.
+//
+// A slice rather than a single value because one source can legitimately have
+// several things to say: a pane running a dev server and an API on two ports is
+// two chips, not one chip that hides the other.
+type source func(Pane) []Suggestion
 
 // sources is the registry, in no particular order — ordering is by Rank, so a
 // source decides its own weight rather than inheriting one from this list.
@@ -102,6 +169,7 @@ var sources = []source{
 	gitConflict,
 	gitDirty,
 	shellIdle,
+	devServers,
 }
 
 // For returns the suggestions for a pane, best first and capped at [Max].
@@ -112,12 +180,12 @@ var sources = []source{
 func For(p Pane) []Suggestion {
 	out := make([]Suggestion, 0, len(sources))
 	for _, src := range sources {
-		if s := src(p); s != nil {
+		for _, s := range src(p) {
 			if s.Params == nil {
 				s.Params = map[string]string{}
 			}
 			s.Params["pane"] = p.ID
-			out = append(out, *s)
+			out = append(out, s)
 		}
 	}
 	// Stable so two sources at the same rank keep registry order rather than
@@ -140,7 +208,7 @@ func For(p Pane) []Suggestion {
 // Agent panes only, and that is a real limitation rather than a judgement: GET
 // /diff resolves its tree through the pane's agent, so a plain pane taps through
 // to a 404. See CONTRACT-suggestions.md.
-func gitConflict(p Pane) *Suggestion {
+func gitConflict(p Pane) []Suggestion {
 	if !p.HasAgent || p.Cwd == "" {
 		return nil
 	}
@@ -148,13 +216,13 @@ func gitConflict(p Pane) *Suggestion {
 	if !ok {
 		return nil
 	}
-	return &Suggestion{
+	return []Suggestion{{
 		Kind:   KindGitConflict,
 		Label:  "Resolve",
 		Detail: op + " in progress",
 		Action: ActionOpenDiff,
-		Rank:   30,
-	}
+		Rank:   RankGitConflict,
+	}}
 }
 
 // gitDirty offers the diff screen when the agent's tree has pending changes —
@@ -163,7 +231,7 @@ func gitConflict(p Pane) *Suggestion {
 // Suppressed while a merge/rebase is in progress: that tree is dirty too, and
 // two chips onto the same screen is exactly the noise this feature is supposed
 // not to make.
-func gitDirty(p Pane) *Suggestion {
+func gitDirty(p Pane) []Suggestion {
 	if !p.HasAgent || p.Cwd == "" {
 		return nil
 	}
@@ -174,13 +242,13 @@ func gitDirty(p Pane) *Suggestion {
 	if !ok || n == 0 {
 		return nil
 	}
-	return &Suggestion{
+	return []Suggestion{{
 		Kind:   KindGitDirty,
 		Label:  "Review changes",
 		Detail: plural(n, "file") + " changed",
 		Action: ActionOpenDiff,
-		Rank:   20,
-	}
+		Rank:   RankGitDirty,
+	}}
 }
 
 // shellIdle offers to start an agent in a pane that is sitting at a prompt
@@ -191,7 +259,7 @@ func gitDirty(p Pane) *Suggestion {
 // agent; a pane parked in a worktree is a pane someone opened to do work in and
 // then walked away from, which is precisely the thing worth one tap from a
 // phone.
-func shellIdle(p Pane) *Suggestion {
+func shellIdle(p Pane) []Suggestion {
 	if p.HasAgent || !p.AtShellPrompt || p.Cwd == "" {
 		return nil
 	}
@@ -199,13 +267,13 @@ func shellIdle(p Pane) *Suggestion {
 	if !ok {
 		return nil
 	}
-	return &Suggestion{
+	return []Suggestion{{
 		Kind:   KindShellIdle,
 		Label:  "Start an agent",
 		Detail: "idle shell in " + name,
 		Action: ActionStartAgent,
-		Rank:   10,
-	}
+		Rank:   RankShellIdle,
+	}}
 }
 
 // plural renders a count with its noun, for a detail line that reads like a

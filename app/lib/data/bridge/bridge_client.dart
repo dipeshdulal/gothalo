@@ -453,11 +453,22 @@ class PaneSuggestion {
   /// The pane this acts on — the same id `/attach`, `/diff` and `/send` take.
   String get pane => params['pane'] ?? '';
 
-  /// Whether THIS build knows how to perform the action. A chip that cannot do
-  /// anything is worse than a missing chip, so an unknown action is dropped
-  /// rather than rendered as a dead button.
-  bool get isActionable =>
-      pane.isNotEmpty && (action == 'open_diff' || action == 'start_agent');
+  /// The dev server to open, for `open_url`. Empty for every other action.
+  String get url => params['url'] ?? '';
+
+  /// What a `show_note` tap displays. Empty for every other action.
+  String get note => params['note'] ?? '';
+
+  /// Whether THIS build knows how to perform the action, *and* was given what
+  /// that action needs. A chip that cannot do anything is worse than a missing
+  /// chip, so both an unknown action and a known one with a missing argument
+  /// are dropped rather than rendered as a dead button.
+  bool get isActionable => switch (action) {
+        'open_diff' || 'start_agent' => pane.isNotEmpty,
+        'open_url' => url.isNotEmpty,
+        'show_note' => note.isNotEmpty,
+        _ => false,
+      };
 
   factory PaneSuggestion.fromJson(Map<String, dynamic> j) => PaneSuggestion(
         kind: (j['kind'] as String?) ?? '',
