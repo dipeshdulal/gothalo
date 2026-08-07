@@ -389,7 +389,7 @@ class _MultiplexerLayout extends StatelessWidget {
     final needsYou = only != null
         ? const <Agent>[]
         : (snap.agents.where((a) => a.agentStatus.needsAttention).toList()
-          ..sort((a, b) => a.attention.compareTo(b.attention)));
+          ..sort(Agent.byAttentionThenRecency));
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),

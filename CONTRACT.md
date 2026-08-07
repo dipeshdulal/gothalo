@@ -86,6 +86,21 @@ sequence number it is consistent with:
   every surface sorts on the same field, list order and any counts derived from
   it stay consistent. Herdr's own `agent.view` sort projection is **not** used —
   see [`docs/CONTRACT-herdr-proxy.md`](docs/CONTRACT-herdr-proxy.md) for why.
+  It is the **first** of two ordering keys — see `recency_rank`.
+- **`recency_rank`** — gothalo also adds this integer to every agent in
+  `agents[]`. It is the **authoritative** "what did I touch last" ordering,
+  lowest first, and it is the tiebreak **within** an `attention_rank`, not a
+  rival to it. **Sort agents on `(attention_rank, recency_rank)`.** See
+  §2.A for how it is derived and what it does not mean.
+- **`last_activity_ts`** — gothalo also adds this integer (unix milliseconds) to
+  every agent it can date: when that agent last wrote to its own on-disk
+  transcript. It is what lets a client render "blocked 50m" rather than
+  "blocked", and it is the primary input to `recency_rank`. Unlike the two ranks
+  it is **not always present** — it is **absent** for a kind whose sessions
+  share one store (hermes, opencode: that store's newest entry describes *some*
+  agent, not this one, and a confidently wrong age is worse than none) and for
+  an agent that has not spoken yet. **Absent means unknown, never "just now"**:
+  render nothing rather than `0s`.
 
 **Frames 2…N: deltas.** Each is one unified **envelope** (§3). Apply them to the
 store in order.
@@ -94,6 +109,64 @@ The bus subscription is registered **before** the snapshot is taken, so any
 event that occurs while the snapshot is being fetched is queued and delivered as
 a delta right after the snapshot frame (its `seq > baseline`) — nothing is lost
 in the gap.
+
+### 2.A `recency_rank` — the tiebreak within an attention rank
+
+Agent order is **two** authoritative fields, both stamped by gothalo, and a
+client sorts on both:
+
+```
+(attention_rank asc, recency_rank asc)
+```
+
+`attention_rank` alone left the order *within* a rank to whatever the snapshot
+happened to produce, which with a dozen-plus agents put the one you were just
+using wherever herdr listed it. `recency_rank` fixes exactly that and nothing
+else: what needs a human still comes first, unchanged.
+
+**Derivation**, best signal first. The tiers are tiers rather than one number
+because the two signals are on different scales — unix milliseconds and a herdr
+counter — and a rank that averaged them would be quietly wrong:
+
+| Tier | Applies to | Ordered by |
+|---|---|---|
+| 1 | agents with a `last_activity_ts` | that timestamp, **newest first** |
+| 2 | agents without one, but with a `state_change_seq` | that seq, **highest first** |
+| 3 | anything left | `pane_id` ascending |
+
+Ties inside a tier fall through to `pane_id`, which is unique — so the result is
+a **total order** and every agent gets a **distinct** rank, `0` to `N-1`. There
+is nothing left for a client to break ties on, and therefore nothing for two
+surfaces to break them on differently.
+
+Tier 2 exists for the agents `last_activity_ts` cannot date: a kind that keeps
+every session in one shared store (hermes, opencode — the bridge refuses to
+report another agent's age as this one's), and a claude agent that has not
+spoken yet. `state_change_seq` is herdr's single app-wide counter — a global
+total order over every agent transition, **comparable across panes** (see
+[`docs/DESIGN-panestore.md`](docs/DESIGN-panestore.md)) — so it genuinely orders
+"which of these last did something", in transitions rather than seconds. It is
+what keeps a just-started agent, whose transcript does not exist yet, near the
+top where it belongs.
+
+**Undated agents sort below dated ones**, never above, for the same reason
+`last_activity_ts` is omitted rather than set to now: absent means *unknown*,
+never *just now*.
+
+Two things it is **not**:
+
+- **Not stable across snapshots.** It is a position in *this* snapshot's list,
+  so it shifts as agents come and go. Compare it; never cache it, diff it, or
+  treat a change in it as an event.
+- **Not comparable across bridges.** Rank `0` on one server and rank `0` on
+  another say nothing about each other. A list that mixes servers (the app's
+  Priority screen) must fall through to `last_activity_ts`, which is a real
+  clock on every host.
+
+Both fields are **always present**, so a client can sort on them
+unconditionally. Ordering stays the bridge's job for the same reason it always
+was: every surface reading one pair of fields is what keeps the lists, the
+counts and the ordering consistent instead of each screen re-deriving them.
 
 ### Heartbeat frames
 

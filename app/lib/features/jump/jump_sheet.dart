@@ -137,14 +137,14 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
         final c = a.score.compareTo(b.score);
         if (c != 0) return c;
       }
-      // Attention-first (blocked → done → working → idle) on the bridge's
-      // authoritative rank, then most-recent state change (an attention proxy),
-      // then title.
-      final r = a.agent.attention - b.agent.attention;
+      // The same order the Flock list uses: attention first, then recency —
+      // both the bridge's. Jumping is how you get back to the agent you were
+      // just in, so the unqueried sheet is exactly the list that ordering is
+      // for. It replaces a local `state_change_seq` tiebreak, which stood in
+      // for recency before the bridge ranked it: a counter of transitions,
+      // where the question is when the agent last did something.
+      final r = Agent.byAttentionThenRecency(a.agent, b.agent);
       if (r != 0) return r;
-      final s =
-          (b.agent.stateChangeSeq ?? 0).compareTo(a.agent.stateChangeSeq ?? 0);
-      if (s != 0) return s;
       return a.title.toLowerCase().compareTo(b.title.toLowerCase());
     });
 

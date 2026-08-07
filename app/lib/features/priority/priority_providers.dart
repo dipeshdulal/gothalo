@@ -208,7 +208,11 @@ class PriorityHit {
 /// Priority agents across all servers: **automatically** whatever needs
 /// attention (blocked or done), **plus** anything you manually starred. Ordered
 /// blocked → done → working → idle on the bridge's authoritative attention
-/// rank, so what needs you sits on top — and in the same order as the inbox.
+/// rank, so what needs you sits on top — and in the same order as the inbox,
+/// down to the recency tiebreak within a rank. This list spans servers, where
+/// `recency_rank` (an index into one bridge's snapshot) means nothing, so the
+/// comparison falls through to `last_activity_ts` — see
+/// [Agent.byAttentionThenRecency].
 final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
   final stars = ref.watch(starredAgentsProvider).value ?? const {};
   // `.value`, NOT `.asData?.value`: each per-server provider self-invalidates on
@@ -245,7 +249,7 @@ final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
       }
     }
   }
-  hits.sort((a, b) => a.agent.attention - b.agent.attention);
+  hits.sort((a, b) => Agent.byAttentionThenRecency(a.agent, b.agent));
   return hits;
 });
 
