@@ -442,6 +442,19 @@ agent appends it (250 ms poll). Correlate a tool call with its result via
 `tool.id == result.for_id`; `seq` is the **absolute 1-based position** in the whole
 file (stable cursor across pages and the tail — order/de-dupe on it).
 
+**Follows the pane across sessions (protocol `4`).** A pane's agent session
+rotates on `/clear`, `/new`, `/resume` or a restarted agent, and the old
+transcript stops growing. The bridge re-reads `agent_session.value` every 2 s and,
+on a change, re-points the socket at the new session and replays the opening
+sequence in place: `{"type":"session_changed","pane","from","to"}`, then a fresh
+`hello` (new `session_id`) + backlog + `backlog_complete`, then the live tail.
+**A client must discard everything it holds on `session_changed`** — `seq` is
+absolute *within a session* and restarts at 1, so kept entries collide with the
+new ones. A rotation that happens while the socket is down has no
+`session_changed`, so also reset whenever `hello.session_id` differs from the one
+you hold. `hello.subagents` is re-read for the new session. A `?subagent=` stream
+is exempt — a delegated conversation belongs to the session that spawned it.
+
 **Paginated (protocol `2`).** To read older history the client sends a control
 frame `{"type":"load_older","before_seq":<int>,"limit":<int≤500, default 150>}`
 over the same socket; the server replies with that page (`entry` frames,

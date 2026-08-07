@@ -7,13 +7,21 @@
 library;
 
 /// The kinds of frame the server sends, one JSON object per line.
-enum TranscriptFrameType { hello, entry, backlogComplete, pageComplete, unknown }
+enum TranscriptFrameType {
+  hello,
+  entry,
+  backlogComplete,
+  pageComplete,
+  sessionChanged,
+  unknown,
+}
 
 TranscriptFrameType _frameType(String? raw) => switch (raw) {
   'hello' => TranscriptFrameType.hello,
   'entry' => TranscriptFrameType.entry,
   'backlog_complete' => TranscriptFrameType.backlogComplete,
   'page_complete' => TranscriptFrameType.pageComplete,
+  'session_changed' => TranscriptFrameType.sessionChanged,
   _ => TranscriptFrameType.unknown,
 };
 
@@ -29,6 +37,8 @@ class TranscriptFrame {
     this.hasMore = false,
     this.oldestLoadedSeq = 0,
     this.hasOlder = false,
+    this.fromSessionId = '',
+    this.toSessionId = '',
   });
 
   final TranscriptFrameType type;
@@ -49,6 +59,12 @@ class TranscriptFrame {
 
   /// `page_complete.has_older` — whether there's still more history to page up.
   final bool hasOlder;
+
+  /// `session_changed.from` — the session this socket was following.
+  final String fromSessionId;
+
+  /// `session_changed.to` — the session it now follows.
+  final String toSessionId;
 
   factory TranscriptFrame.fromJson(Map<String, dynamic> json) {
     final type = _frameType(json['type'] as String?);
@@ -76,6 +92,11 @@ class TranscriptFrame {
         type: type,
         oldestLoadedSeq: _asInt(json['oldest_loaded_seq']),
         hasOlder: json['has_older'] == true,
+      ),
+      TranscriptFrameType.sessionChanged => TranscriptFrame(
+        type: type,
+        fromSessionId: json['from'] as String? ?? '',
+        toSessionId: json['to'] as String? ?? '',
       ),
       TranscriptFrameType.unknown => TranscriptFrame(type: type),
     };

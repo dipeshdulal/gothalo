@@ -257,13 +257,19 @@ GET ws(s)://<host>/agent-transcript?pane=<pane_id>&token=<bearer>
 | Auth | `?token=<bearer>` — per-device bearer (from `/pair`) or the admin token. **Required in the query** because WS clients can't set headers (mirrors `/attach`). An `Authorization: Bearer` header also works if your client can send one. |
 | Direction | **Mostly server→client**, plus one client control frame: `load_older` (paging up). Prompts/approvals still go through `POST /send` / `POST /approve`. |
 
-Per-connection state is only a byte offset into the file (for the tail) plus the
-running `seq` counter; closing the socket stops the tail. Auth is re-checked on
-connect (not per frame).
+Per-connection state is only a byte offset into the file (for the tail), the
+running `seq` counter, and the id of the session currently being followed;
+closing the socket stops the tail. Auth is re-checked on connect (not per frame).
 
-> **`protocol` is `3`.** `hello` now carries the session's **subagent roster**,
-> and `?subagent=<agent_id>` streams a delegated conversation instead of the
-> session's own. Everything else is unchanged.
+> **`protocol` is `4`.** The socket now **follows the pane across sessions**:
+> when the agent starts a new one (`/clear`, `/new`, `/resume`, a restarted
+> agent), the server re-points at it and replays the opening sequence in place —
+> `session_changed`, then a fresh `hello` + backlog. `hello` is therefore **no
+> longer once per socket**. A `?subagent=` stream is exempt (it never rotates).
+>
+> **`protocol` `3`** put the session's **subagent roster** in `hello`, and
+> `?subagent=<agent_id>` streams a delegated conversation instead of the
+> session's own.
 >
 > **`protocol` `2`** made the backlog **paginated**: connect sends only the
 > newest page (~150), reports the cursor in `hello`, and older history is fetched
@@ -347,10 +353,11 @@ incrementally and back-pressure naturally. Each frame has a `type`:
 
 | `type` | When | Payload |
 |---|---|---|
-| `hello` | once, first | identity + pagination stats |
+| `hello` | first, and again after every `session_changed` | identity + pagination stats |
 | `entry` | newest page, older pages, then live | one normalized entry; `live` is `false` for backlog/older pages, `true` for the tail |
-| `backlog_complete` | once, after the newest page | boundary marker between the newest page and the live tail |
+| `backlog_complete` | after each newest page (connect and rotation) | boundary marker between the newest page and the live tail |
 | `page_complete` | after each `load_older` reply | end-of-page marker + the new cursor |
+| `session_changed` | the pane's agent started a new session | `{from, to}` — **discard everything buffered**; a fresh `hello` + backlog follows |
 
 **Client → server** (the only inbound frame the server acts on):
 
@@ -367,20 +374,67 @@ interleaved with live entries, so an `entry` with `live:false` after
 `seq` is the **absolute 1-based position** of an entry in the whole file's
 normalized stream (the newest entry's `seq` == `total`). It is a stable cursor:
 the same entry always has the same `seq` across the newest page, any older page,
-and the live tail.
+and the live tail — **within one session**. It restarts at 1 on the other side of
+a `session_changed`, which is why that frame requires dropping what you hold.
+
+### `session_changed` — following the pane onto a new session
+
+```json
+{"type":"session_changed","pane":"wN:p1","from":"b0651a43-…","to":"7d2c19f0-…"}
+```
+
+A pane's agent session is not fixed for the life of the pane: `/clear`, `/new`,
+`/resume` and a restarted agent all start a new one, and the old transcript stops
+growing. A socket pinned to the file it resolved at connect would simply go quiet
+— indistinguishable, from the app, from a hung agent.
+
+So the server re-reads the pane's `agent_session.value` every **2s** and, when it
+changes to a session it can open, swaps the stream over and re-sends the opening
+sequence on the same socket:
+
+```
+session_changed          {from, to}
+hello                    now carrying the NEW session_id
+entry (live:false) ×N    the new session's newest page, oldest→newest
+backlog_complete
+entry (live:true) …      the live tail, against the new session
+```
+
+Detection is on the **session id**, not on watching for a `/new` being typed, so
+it fires however the session started — from the app, from the keyboard at the
+machine, or by the agent itself.
+
+Client rules:
+
+- On `session_changed`, **discard all buffered entries, tool results and
+  pagination cursors.** `seq` restarts at 1, so retained entries collide with the
+  new session's and a `seq`-keyed de-dupe will silently drop the new ones.
+- Treat the frames that follow exactly like a fresh connect.
+- **Also compare `hello.session_id` to the one you hold** and reset on a change.
+  A rotation that happens while the socket is down produces no `session_changed`
+  (there is no one to send it to) — the next `hello` is the only signal.
+- A rotation the server cannot yet open (an unresolvable or unsupported new
+  session) sends nothing; the socket keeps streaming the old session and retries
+  on the next tick.
+- `hello.subagents` is re-read for the new session, so the roster you hold is
+  replaced along with the entries — a fresh session has usually delegated nothing.
+- **A `?subagent=` stream never rotates.** A delegated conversation belongs to the
+  session that spawned it and is complete in itself; following the pane would swap
+  the user onto a different conversation than the one they drilled into. To see
+  the new session, reconnect without `?subagent=`.
 
 ### `hello`
 ```json
-{"type":"hello","protocol":3,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true,"subagents":[{"agent_id":"aa4832e5ce82b16f0","tool_use_id":"toolu_01F9bssr6JjRZXjvEumqMwuR","agent_type":"general-purpose","description":"Build recent-activity timeline","spawn_depth":1},{"agent_id":"a9adcab7329a772ac","tool_use_id":"toolu_013gpQcoGTMVRYdciecEq7rZ","agent_type":"Explore","description":"Explore Flutter app conventions","spawn_depth":2}]}
+{"type":"hello","protocol":4,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true,"subagents":[{"agent_id":"aa4832e5ce82b16f0","tool_use_id":"toolu_01F9bssr6JjRZXjvEumqMwuR","agent_type":"general-purpose","description":"Build recent-activity timeline","spawn_depth":1},{"agent_id":"a9adcab7329a772ac","tool_use_id":"toolu_013gpQcoGTMVRYdciecEq7rZ","agent_type":"Explore","description":"Explore Flutter app conventions","spawn_depth":2}]}
 ```
 | Field | Type | Notes |
 |---|---|---|
-| `protocol` | int | Wire version. **`3`** (subagent roster + `?subagent=`). |
+| `protocol` | int | Wire version. **`4`** (session rotation; subagent roster + `?subagent=`). |
 | `subagent` | string | Echoes the `?subagent=` being streamed; absent for the session's own transcript. |
-| `subagents` | array | The session's **flat** subagent roster, every depth. Absent when nothing was delegated. See [Subagents](#subagents). |
+| `subagents` | array | The session's **flat** subagent roster, every depth, **re-read on each rotation**. Absent when nothing was delegated. See [Subagents](#subagents). |
 | `pane` | string | Echoes the requested pane. |
 | `agent_kind` | string | `claude` (later `codex`/`opencode`). |
-| `session_id` | string | The resolved transcript session id (see *Resolution*). |
+| `session_id` | string | The resolved transcript session id (see *Resolution*). **Compare it to the one you hold** — a change means the pane moved to a new session and your buffer is stale. |
 | `backlog_count` | int | How many `entry` frames the newest page will send (≤ 150). |
 | `total` | int | Total normalized entries in the whole file. The newest entry's `seq` == `total`. |
 | `has_more` | bool | `true` ⇒ older entries exist before this page. **Equals `has_older`** (kept for back-compat). |
@@ -604,6 +658,7 @@ empty page rather than tearing down the socket.
 | Diff size | **400 lines / 12000 runes** per diff | Capped; `tool.diff_truncated` or `result.truncated = true`. |
 | Message/thinking body | **20000 runes** | Capped. |
 | Tail poll | **250 ms** | New appended lines surface within ~one poll. |
+| Session poll | **2 s** | A new agent session is picked up within ~one poll (`session_changed` + a fresh `hello`/backlog). |
 
 Backpressure/safety: every page (newest **and** older) is read with a bounded ring
 buffer (the whole file is never held in memory, no matter how deep you page); an
