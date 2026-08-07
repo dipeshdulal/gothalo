@@ -283,3 +283,44 @@ history could only be captured by physically scrolling the pane) no longer holds
 Accepted wart: the seed ends with the current frame, so a few lines can appear both
 in scrollback and on screen. Trimming by the pane's row count would risk cutting
 past the overlap and leaving a silent gap, and a repeated line beats a lost one.
+
+## D23 — The Priority section is capped, but "needs you" is exempt
+Priority is automatic (every `blocked` **and** `done` agent lands in it) plus
+whatever you starred, so with a dozen agents live it grew past the viewport and
+pushed the servers list off the bottom of the home screen — the one screen that
+is supposed to answer "what now" at a glance.
+
+It collapses to **five rows** (`kPriorityVisibleRows`) with a `Show N more`
+expander. Five two-line tiles plus the header and the expander leave two or
+three server tiles visible on a ~390×780dp phone, which is the point: Priority
+is the top of the home surface, not the whole of it.
+
+The cap is **soft in exactly one direction**. An agent that needs you is never
+behind the expander: the cut stretches down the list to cover the last `blocked`
+row, so ten blocked agents render ten rows. More blocked agents than fit *is*
+the case the app exists for, and a screen that hid them to stay tidy would be
+tidy and wrong. Nothing stretches it the other way — `done`, `working`, `idle`
+and starred rows all sit under the cap, so a starred idle agent can be behind
+the expander.
+
+Ordering is untouched. `PriorityOverflow` only ever cuts a **prefix** off the
+list the bridge already ranked by `attention_rank` (see `docs/API.md`); it never
+sorts, and the exemption is defined on the row ("does this one need
+you") rather than on its position, so an older bridge whose ranks arrive via the
+local fallback still can't bury a blocked agent. Starred does **not** promote a
+row above the bridge's rank — that would be a second, client-side priority
+order, which is the thing `attention_rank` exists to prevent.
+
+Collapsed, the footer carries a **tally of the whole section** — `3 need you ·
+5 done · 2 idle`, in each status's own badge colours — not of the hidden part.
+A collapsed section should still say what it is sitting on; "5 hidden" alone
+says only how much you are missing, never whether it matters. Expanded, the
+counts go away (the rows say it) and only `Show less` remains — the control
+outlives its own use, or the tap that opened the list would delete the only way
+to shut it.
+
+Expanded/collapsed is remembered **for the session** (a plain `Notifier`) and
+**shared** by both surfaces that render the section — the home screen and the
+Priority screen. It is one list drawn twice; open in one place and shut in the
+other reads as a bug. A cold start comes back collapsed, which is the state that
+fits the screen.

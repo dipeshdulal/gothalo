@@ -249,6 +249,122 @@ final priorityHitsProvider = Provider<List<PriorityHit>>((ref) {
   return hits;
 });
 
+/// How many priority rows a collapsed section shows before the rest go behind
+/// a "show N more" expander.
+///
+/// Five two-line tiles (~360dp) plus the header and the expander leave room for
+/// two or three server tiles under them on a ~390x780dp phone, which is the
+/// point: Priority is the top of the home surface, not the whole of it. It is a
+/// *soft* cap — see [PriorityOverflow], where anything that needs you is
+/// exempt.
+const kPriorityVisibleRows = 5;
+
+/// Whether the Priority section is expanded past [kPriorityVisibleRows].
+///
+/// Remembered for the session (a plain [Notifier], not autoDispose), so
+/// scrolling away, opening an agent and coming back keeps the choice — but a
+/// cold start comes back collapsed, which is the state that fits the screen.
+/// Deliberately shared by both surfaces that render the section (home and the
+/// Priority screen): it is one list shown twice, and having it open in one
+/// place and shut in the other reads as a bug.
+class PriorityExpanded extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+}
+
+final priorityExpandedProvider = NotifierProvider<PriorityExpanded, bool>(
+  PriorityExpanded.new,
+);
+
+/// The priority list split into the rows a section shows and the rows it holds
+/// back, plus the tally that describes the whole of it while collapsed.
+///
+/// Ordering is never touched: [hits] arrives sorted on the bridge's
+/// authoritative `attention_rank` and this only ever cuts a prefix off it, so
+/// what you see is the top of the same list every other surface shows.
+class PriorityOverflow {
+  const PriorityOverflow._({
+    required this.all,
+    required this.expanded,
+    required this.cap,
+    required this.collapsedRows,
+  });
+
+  /// Split [hits] at [cap].
+  ///
+  /// Expanded, or short enough, shows everything. Collapsed shows the first
+  /// [cap] rows — **except** that an agent which needs you is never hidden: if
+  /// one falls past the cap the cut stretches to cover it. More blocked agents
+  /// than the cap is the one case where a long list is the correct answer, so
+  /// the cap gives way rather than burying the rows the app exists for.
+  ///
+  /// The collapsed cut is computed either way, so an expanded section still
+  /// knows whether collapsing would actually hide anything — which is what
+  /// decides whether it offers a "show less" at all.
+  factory PriorityOverflow.of(
+    List<PriorityHit> hits, {
+    required bool expanded,
+    int cap = kPriorityVisibleRows,
+  }) {
+    var cut = hits.length;
+    if (hits.length > cap) {
+      cut = cap;
+      for (var i = hits.length - 1; i >= cut; i--) {
+        if (hits[i].needsYou) {
+          cut = i + 1;
+          break;
+        }
+      }
+    }
+    return PriorityOverflow._(
+      all: hits,
+      expanded: expanded,
+      cap: cap,
+      collapsedRows: cut,
+    );
+  }
+
+  /// Every priority hit, in bridge order.
+  final List<PriorityHit> all;
+  final bool expanded;
+  final int cap;
+
+  /// How many rows the section shows while collapsed — [cap], stretched down
+  /// the list far enough to cover the last agent that needs you.
+  final int collapsedRows;
+
+  /// The prefix of [all] to render now.
+  List<PriorityHit> get visible => expanded || collapsedRows >= all.length
+      ? all
+      : List.unmodifiable(all.take(collapsedRows));
+
+  /// How many rows the cap is holding back right now — zero while expanded.
+  int get hiddenCount => expanded ? 0 : all.length - collapsedRows;
+
+  /// The cap is in play at all, so the section needs its expander. True while
+  /// expanded as well — otherwise the control that opened the list would
+  /// disappear the moment it was used and there would be no way back.
+  bool get hasOverflow => all.length > collapsedRows;
+
+  /// The cap was overridden to keep every blocked agent on screen. Worth
+  /// saying out loud in the UI — a section that suddenly renders nine rows
+  /// after weeks of five otherwise looks broken.
+  bool get capGaveWay => !expanded && collapsedRows > cap;
+
+  /// Per-status tally over [all], in the order each status first appears —
+  /// which is the bridge's rank order, not a client-side one. Drives the
+  /// collapsed summary ("3 need you · 5 done · 2 idle").
+  List<({AgentStatus status, int count})> get tally {
+    final counts = <AgentStatus, int>{};
+    for (final h in all) {
+      counts.update(h.agent.agentStatus, (n) => n + 1, ifAbsent: () => 1);
+    }
+    return [for (final e in counts.entries) (status: e.key, count: e.value)];
+  }
+}
+
 /// Ask a bridge who it is and remember the answer. Best-effort and fire-and-
 /// forget: it must never delay or fail the row it rides along with, and a
 /// bridge too old to answer just stays unattributed.

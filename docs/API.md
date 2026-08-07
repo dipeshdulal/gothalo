@@ -98,7 +98,10 @@ inbox on it ascending: `blocked` 0, `done` 1, `working` 2, `idle` 3, `unknown` 4
 (an unrecognised status also ranks 4, so it sorts last). It is added by gothalo,
 not herdr, and is always present. Sorting every surface on this one field is
 what keeps list order and the counts derived from it consistent — don't
-re-derive priority per screen. `branch` is likewise gothalo-added; both are
+re-derive priority per screen. A surface that can't show every agent may cut the
+**prefix** of that order (the app's Priority section does — D23), but it must
+not re-sort, and it must not hide a `blocked` agent to stay short.
+`branch` is likewise gothalo-added; both are
 described in full in [`CONTRACT.md`](../CONTRACT.md).
 
 ## Push messages (what your FCM handler receives)

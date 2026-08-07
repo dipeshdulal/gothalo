@@ -11,6 +11,7 @@ import '../inbox/widgets/agent_avatar.dart';
 import '../../core/widgets/agent_age.dart';
 import '../inbox/widgets/status_badge.dart';
 import '../priority/priority_providers.dart';
+import '../priority/widgets/priority_overflow_bar.dart';
 
 /// Home dashboard: your **priority** (starred) agents across every server up
 /// top, then the **servers** list below with live per-server stats. Pick a
@@ -77,6 +78,14 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Widget build(BuildContext context) {
     final servers = ref.watch(serversProvider);
     final hits = ref.watch(priorityHitsProvider);
+    // Priority is the top of this screen, not the whole of it: past a handful
+    // of agents the section grew until the servers list was off the bottom.
+    // Cut it at the cap and put the rest behind an expander — except for the
+    // agents that need you, which the cap is not allowed to hide.
+    final overflow = PriorityOverflow.of(
+      hits,
+      expanded: ref.watch(priorityExpandedProvider),
+    );
     // Live per-server agent stats, keyed by server id — each server watched
     // independently so a reachable one renders immediately instead of waiting
     // on a sleeping one.
@@ -133,12 +142,18 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                   ),
                   if (hits.isEmpty)
                     _PriorityEmpty(onManage: () => context.push('/priority'))
-                  else
-                    for (final h in hits)
+                  else ...[
+                    for (final h in overflow.visible)
                       _PriorityTile(
                         hit: h,
                         onTap: () => _openAgent(h.server, h.agent),
                       ),
+                    PriorityOverflowBar(
+                      overflow: overflow,
+                      onToggle: () =>
+                          ref.read(priorityExpandedProvider.notifier).toggle(),
+                    ),
+                  ],
 
                   const SizedBox(height: 8),
                   const Divider(height: 1),
