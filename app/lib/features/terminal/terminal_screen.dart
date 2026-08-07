@@ -21,9 +21,10 @@ import '../attach/image_attach.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import '../transcript/quick_commands_providers.dart';
-import '../../core/widgets/accessory_button.dart';
+import 'accessory_key_row.dart';
 import 'direction_pad.dart';
 import 'pty_mouse_handler.dart';
+import 'terminal_more_sheet.dart';
 
 /// Where the live-terminal socket is in its lifecycle, for the app-bar dot.
 /// [closed] is terminal: the pane no longer exists (closed on the host or the
@@ -54,6 +55,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     maxLines: 10000,
     mouseHandler: const PtyMouseHandler(),
   );
+  /// Sticky Ctrl (D6): armed from the more-sheet, consumed by the next single
+  /// character sent. Lives here rather than in the sheet because the sheet
+  /// closes the moment it is armed — and the key row lights `⋯` while it is.
   bool _stickyCtrl = false;
 
   /// Whether the arrow pad is popped open. Static so it stays as you left it
@@ -567,14 +571,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             // progress and the button that caused it read as one thing. Renders
             // nothing while idle.
             ImageUploadStatus(controller: _attach),
-            _AccessoryKeyRow(
+            AccessoryKeyRow(
               padOpen: _padOpen,
               onTogglePad: () => setState(() => _padOpen = !_padOpen),
               keyboardOpen: _termFocus.hasFocus,
               onToggleKeyboard: _toggleKeyboard,
-              stickyCtrl: _stickyCtrl,
-              onToggleCtrl: () => setState(() => _stickyCtrl = !_stickyCtrl),
-              onCommand: _handleQuickCommand,
+              // `⋯` stays lit while sticky Ctrl is armed from the sheet — the
+              // only trace of the armed state once the sheet has closed.
+              moreArmed: _stickyCtrl,
+              onMore: () => showTerminalMoreSheet(
+                context,
+                onKey: _send,
+                onCommand: _handleQuickCommand,
+                stickyCtrl: _stickyCtrl,
+                onToggleStickyCtrl: () =>
+                    setState(() => _stickyCtrl = !_stickyCtrl),
+              ),
               onKey: _send,
               uploading: _attach.uploading,
               onAttachImage: () =>
@@ -654,168 +666,6 @@ class _ClosedOverlay extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// D6: the single bar above the soft keyboard. Left to right: the quick
-/// commands (Interrupt + your own, the same shared list the transcript composer
-/// shows), then the control bytes a soft keyboard lacks — the arrow-pad toggle,
-/// Esc, Ctrl (sticky), Tab, ^C — and last, attaching an image: the one button
-/// here that types a whole word rather than a key.
-///
-/// One strip of identical [AccessoryButton]s, not two stacked bars: vertical
-/// space is the scarcest thing on a phone terminal, and one vocabulary reads as
-/// one control surface. It centres while everything fits and scrolls as a whole
-/// once your own commands push it past the edge — a uniform strip running off
-/// the edge stays legible, where a chip clipped mid-word beside a pinned button
-/// (an earlier attempt at this) did not.
-///
-/// The arrows themselves are not keys here; they live in the [DirectionPad] the
-/// toggle opens. One home for arrows, and this row never shifts under a thumb.
-class _AccessoryKeyRow extends ConsumerWidget {
-  const _AccessoryKeyRow({
-    required this.padOpen,
-    required this.onTogglePad,
-    required this.keyboardOpen,
-    required this.onToggleKeyboard,
-    required this.stickyCtrl,
-    required this.onToggleCtrl,
-    required this.onCommand,
-    required this.onKey,
-    required this.uploading,
-    required this.onAttachImage,
-  });
-
-  final bool padOpen;
-  final VoidCallback onTogglePad;
-  final bool keyboardOpen;
-  final VoidCallback onToggleKeyboard;
-  final bool stickyCtrl;
-  final VoidCallback onToggleCtrl;
-  final void Function(QuickCommand) onCommand;
-  final void Function(String bytes) onKey;
-
-  /// Lit while an image is on its way up, and a tap is a no-op then: one upload
-  /// at a time, so the strip above always describes the one being watched.
-  final bool uploading;
-  final VoidCallback onAttachImage;
-
-  /// Key names this bar already has a button for. A quick command that just
-  /// fires one of them is a duplicate here — the shipped default, "Interrupt",
-  /// sends `esc`, which is precisely the Esc key two slots over. They earn
-  /// their place in the transcript composer, which has no key strip; here they
-  /// would be the same keystroke twice.
-  static const _keysAlreadyInBar = {'esc', 'escape', 'tab', 'ctrl+c', '^c'};
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final commands =
-        (ref.watch(quickCommandsProvider).asData?.value ?? const [])
-            .where(
-              (c) =>
-                  c.key == null ||
-                  !_keysAlreadyInBar.contains(c.key!.toLowerCase().trim()),
-            )
-            .toList();
-
-    return SafeArea(
-      top: false,
-      child: Container(
-        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
-        // one: at one step the buttons and the bar behind them are close enough
-        // to read as a single flat slab.
-        color: scheme.surfaceContainerLow,
-        // Wide side margins: a curved screen's glass falls away at the edge, so
-        // a button sitting 8dp in gets its corner cut off. SafeArea covers a
-        // notch, not a curve — phones don't report a side inset for one in
-        // portrait — so the clearance has to be spent here.
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Seven buttons through the keyboard toggle, so the pad toggle is
-            // the middle one — the bar's centre line, directly under the pad it
-            // opens. The keyboard key earns its place here rather than inside
-            // the pad partly for that count, and partly because it's a screen
-            // control, not a keystroke. Image attach is the eighth and hangs off
-            // the end (see below), so it doesn't move that centre line.
-            final buttons = <Widget>[
-              for (final c in commands)
-                AccessoryButton(
-                  label: c.label,
-                  // Marks a command that fires a raw keystroke rather than
-                  // typing text — the same cue the composer's chips use.
-                  leading: c.key != null ? Icons.keyboard_command_key : null,
-                  onTap: () => onCommand(c),
-                  onLongPress: () async {
-                    final all =
-                        ref.read(quickCommandsProvider).asData?.value ??
-                        const <QuickCommand>[];
-                    final i = all.indexOf(c);
-                    if (i < 0) return;
-                    if (await confirmRemoveQuickCommand(context, c.label)) {
-                      await ref
-                          .read(quickCommandsProvider.notifier)
-                          .removeAt(i);
-                    }
-                  },
-                ),
-              AccessoryButton(
-                icon: Icons.add,
-                onTap: () => showAddQuickCommand(context, ref),
-                semanticLabel: 'Add a quick command',
-                tooltip: 'Add a quick command',
-              ),
-              AccessoryButton(label: 'Esc', onTap: () => onKey('\x1b')),
-              AccessoryButton(
-                label: 'Ctrl',
-                active: stickyCtrl,
-                onTap: onToggleCtrl,
-              ),
-              DirectionPadToggle(open: padOpen, onToggle: onTogglePad),
-              AccessoryButton(label: 'Tab', onTap: () => onKey('\t')),
-              AccessoryButton(label: '^C', onTap: () => onKey('\x03')),
-              KeyboardToggle(open: keyboardOpen, onToggle: onToggleKeyboard),
-              // Appended, not slotted in beside `+` where it belongs by kind
-              // (both put something into the pane that isn't a keystroke). The
-              // strip is ~466dp of buttons against a 393–412dp phone, so its
-              // tail is what scrolls out of view: inserting anywhere earlier
-              // would push the keyboard toggle off the edge to make room for a
-              // control you reach for far less often. Appending moves nothing.
-              AccessoryButton(
-                icon: Icons.add_photo_alternate_outlined,
-                // A no-op rather than a disabled look while one is in flight —
-                // the button stays lit, and the strip above it says why.
-                onTap: uploading ? () {} : onAttachImage,
-                active: uploading,
-                semanticLabel: 'Attach an image',
-                tooltip: 'Attach an image',
-              ),
-            ];
-
-            // Spread evenly while it fits; scroll as one strip once the user's
-            // own commands push it past the edge. A fixed 6dp gap in the
-            // scrolling case, because spaceEvenly inside a scroll view has no
-            // free space to distribute.
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    for (var i = 0; i < buttons.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 6),
-                      buttons[i],
-                    ],
-                  ],
-                ),
-              ),
-            );
-          },
         ),
       ),
     );
