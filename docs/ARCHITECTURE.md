@@ -26,7 +26,7 @@ internal/
 ├── imagedrop/          land an uploaded image in the agent's cwd -> a path it can read
 ├── gitbranch/          is a branch safe to delete, and delete it (Herdr has no branches)
 ├── ports/              lsof + probe + process-tree walk -> the host's dev servers, per pane
-├── suggest/            pane observation (incl. those servers) -> one-tap actions (GET /suggestions)
+├── suggest/            pane observation (servers + git + foreground) -> one-tap actions (GET /suggestions)
 ├── notify/             bus consumer: dismiss stale "blocked" pushes
 └── web/                embedded web-push receiver page (go:embed)
 ```
@@ -51,7 +51,7 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 | POST | `/approve` | device bearer or admin | idempotent one-tap approval (D8) |
 | GET  | `/attach` | device bearer or admin (`?token=`) | WS live terminal (PTY-streamed) |
 | GET  | `/agent-state` | device bearer or admin | parsed compact state for one agent pane |
-| GET  | `/diff` | device bearer or admin | an agent pane's working-tree changes (branch + per-file unified diff) |
+| GET  | `/diff` | device bearer or admin | an agent pane's working-tree changes (branch + git context + per-file unified diff); `?context=1` is the git read behind the `create_pr` suggestion |
 | GET  | `/diff/expand` | device bearer or admin | the unchanged lines around a hunk, for the diff viewer's collapsed regions |
 | GET  | `/suggestions` | device bearer or admin | context actions for a pane, from what is running in it |
 | GET  | `/ports` | device bearer or admin | raw dev-server scan behind the `dev_server` suggestion (app reads /suggestions) |

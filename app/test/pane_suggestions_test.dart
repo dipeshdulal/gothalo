@@ -5,6 +5,7 @@ import 'package:gothalo/data/bridge/bridge_client.dart';
 /// `docs/CONTRACT-suggestions.md`.
 Map<String, dynamic> json({
   String kind = 'git_dirty',
+  String performer = 'app',
   String label = 'Review changes',
   String detail = '3 files changed',
   String action = 'open_diff',
@@ -12,6 +13,7 @@ Map<String, dynamic> json({
   int rank = 20,
 }) => {
   'kind': kind,
+  'performer': performer,
   'label': label,
   'detail': detail,
   'action': action,
@@ -109,6 +111,49 @@ void main() {
         json(action: 'show_note', params: {'pane': 'w1:p2'}),
       );
       expect(s.isActionable, isFalse);
+    });
+
+    // The agent-performed action. Its payload is the prompt, and without one
+    // there is nothing to put in front of the user to edit.
+    test('accepts a prompt_agent carrying a prompt', () {
+      final s = PaneSuggestion.fromJson(
+        json(
+          kind: 'create_pr',
+          performer: 'agent',
+          label: 'Create PR',
+          detail: 'feat/x → main · 2 commits ahead',
+          action: 'prompt_agent',
+          params: {'pane': 'w1:p2', 'prompt': 'Open a pull request for…'},
+        ),
+      );
+      expect(s.isActionable, isTrue);
+      expect(s.byAgent, isTrue);
+      expect(s.prompt, 'Open a pull request for…');
+    });
+
+    test('drops a prompt_agent with no prompt', () {
+      final s = PaneSuggestion.fromJson(
+        json(action: 'prompt_agent', performer: 'agent', params: {'pane': 'w1:p2'}),
+      );
+      expect(s.isActionable, isFalse);
+    });
+  });
+
+  group('performer', () {
+    // The distinction the app branches on: an agent action needs its text
+    // confirmed before anything leaves the phone, an app action does not.
+    test('defaults to app for a bridge that predates the field', () {
+      final j = json()..remove('performer');
+      final s = PaneSuggestion.fromJson(j);
+      expect(s.performer, 'app');
+      expect(s.byAgent, isFalse);
+    });
+
+    test('an unrecognised performer is not treated as the agent', () {
+      // Fail closed: whatever "server" would mean, it must not cause a prompt
+      // to be sent into someone\'s pane.
+      final s = PaneSuggestion.fromJson(json(performer: 'server'));
+      expect(s.byAgent, isFalse);
     });
 
     // Every action operates on a pane, so one without a pane cannot be run —

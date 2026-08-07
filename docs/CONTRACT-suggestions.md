@@ -1,16 +1,25 @@
 # CONTRACT — `GET /suggestions` (context actions for a pane)
 
-What the chip row above the terminal is built on: the two or three things that
-are worth doing to **this** pane, given what is actually running in it — a dev
-server you can open, a rebase that stopped on a conflict, changes worth reading,
-an empty shell worth putting an agent in.
+What the chip row above the terminal and the transcript is built on: the two or
+three things that are worth doing to **this** pane, given what is actually
+running in it — a dev server you can open, a rebase that stopped on a conflict,
+changes worth reading, work worth opening a pull request for, an empty shell
+worth putting an agent in.
 
-**This is the one mechanism for "what can I do with this pane."** Dev-server
-discovery was built first and separately (`GET /ports`, originally
-`CONTRACT-preview.md`, now folded into this document); it is one source here now,
-ranked in the same row as everything else. `/ports` survives underneath as the
-raw host-wide feed — it is what knows about `lsof`, HTTP probes and process
-trees — and is documented in full in the appendix below.
+**This is the one mechanism for "what can I do with this pane."** Three features
+arrived at that question separately and are sources here now, ranked in one row:
+
+| Was | Is now |
+|---|---|
+| `GET /ports` + a preview chip (`CONTRACT-preview.md`) | the `dev_server` / `dev_server_local` sources |
+| `GET /diff?context=1` + a "Create PR" button in the composer | the `create_pr` source |
+| — | the `git_conflict` / `git_dirty` / `shell_idle` sources |
+
+The raw feeds survive underneath and each still owns its own reading: `/ports`
+knows about `lsof`, HTTP probes and process trees (appendix below); `/diff`
+knows how to run git against a pane's cwd (`CONTRACT-diff.md`). **There is
+exactly one git read per pane** and one shared host scan; the sources shell out
+for nothing.
 
 Two bars this surface has to clear:
 
@@ -20,6 +29,9 @@ Two bars this surface has to clear:
 2. **The row is empty most of the time.** A suggestion surface that always has
    something to say is a toolbar, and a toolbar is not worth the vertical space
    on a phone.
+
+A third bar applies only to the actions the **agent** performs (see below): they
+are never fired by the tap alone. The text is always shown and editable first.
 
 Verified on **2026-08-06/07** against the live Herdr host this repo is developed
 on: an agent pane mid-task, a plain shell parked in a worktree, a pane running
@@ -53,11 +65,21 @@ reads the cached port scan; it touches no agent process and writes nothing.
   "suggestions": [
     {
       "kind": "dev_server",              // WHY it was offered
+      "performer": "app",                // WHO carries it out
       "label": "Open :5173",             // chip text, rendered verbatim
       "detail": "node · serving",        // one-line justification
-      "action": "open_url",              // WHAT the app does on tap
+      "action": "open_url",              // WHAT happens on tap
       "params": {"pane": "acme/w1:p2", "url": "http://100.84.12.3:5173", "port": "5173"},
       "rank": 25                         // usefulness; already sorted, highest first
+    },
+    {
+      "kind": "create_pr",
+      "performer": "agent",              // the APP does not do this one
+      "label": "Create PR",
+      "detail": "feat/thing → main · 2 commits ahead",
+      "action": "prompt_agent",
+      "params": {"pane": "acme/w1:p2", "prompt": "Open a pull request for the work on feat/thing: …"},
+      "rank": 18
     }
   ]
 }
@@ -66,6 +88,28 @@ reads the cached port scan; it touches no agent process and writes nothing.
 `suggestions` is always present and always an array — never `null` — so a client
 can render it without a null check. It is sorted by `rank` descending and capped
 at **three** (`suggest.Max`).
+
+### `performer` — who actually does it
+
+**The one field here that is not cosmetic.** Most suggestions are things the app
+does: open a screen, open a URL. But the most valuable thing you can do to a
+pane from a phone is often something only the *agent* can do — it holds the
+shell, the credentials and the context. So the mechanism carries both, and says
+which is which, rather than pretending a prompt is a navigation.
+
+| `performer` | Means | Client obligations |
+|---|---|---|
+| `app` | the app performs the action itself | none beyond doing it |
+| `agent` | the app asks the agent in the pane, by sending `params.prompt` | **show the prompt, let it be edited, send only on confirmation** |
+
+An `agent` suggestion is not a command. The agent may do it differently, do part
+of it, or refuse — and every step lands in the transcript where it can be
+watched and interrupted. That is a feature, not a limitation: it is why the
+bridge never runs `git push` or `gh pr create` itself (see D29).
+
+A client that treated an `agent` suggestion as an `app` one would fire an
+irreversible, outward-facing action off a single tap. Absent or unrecognised
+values must therefore read as `app`, never as `agent` — fail closed.
 
 ### `kind` vs `action`, and why both
 
@@ -86,18 +130,24 @@ never composes copy from `kind`.
 
 ### Actions in this version
 
-| `action` | App does | `params` beyond `pane` |
-|---|---|---|
-| `open_url` | hands the URL to the system browser | `url` (required), `port` |
-| `open_diff` | pushes `/diff/<pane>` | — |
-| `show_note` | shows `note` in a dialog and nothing else | `note` (required) |
-| `start_agent` | opens the start-agent sheet targeting the pane | — |
+| `action` | `performer` | Client does | `params` beyond `pane` |
+|---|---|---|---|
+| `open_url` | app | hands the URL to the system browser | `url` (required), `port` |
+| `open_diff` | app | pushes `/diff/<pane>` | — |
+| `show_note` | app | shows `note` in a dialog and nothing else | `note` (required) |
+| `start_agent` | app | opens the start-agent sheet targeting the pane | — |
+| `prompt_agent` | **agent** | shows `prompt` **editable**, sends it to the pane on confirm | `prompt` (required) |
 
 **An unknown `action` must be dropped, not rendered** — and so must a known one
 whose required param is missing. That rule is the whole forward-compatibility
 story: a newer bridge can ship a fifth suggestion source against an older app
 and the worst case is a chip that does not appear. The Flutter client enforces
 both in `PaneSuggestion.isActionable`, before the list reaches any widget.
+
+`prompt_agent` is the only action whose text is a suggestion in the ordinary
+English sense. It is composed on the bridge — one wording, reviewable in one
+place, identical on every client — but it is a *starting* text, not a message.
+The client must not send it unedited-by-default without showing it.
 
 `show_note` deserves its own justification, since an action that only explains
 looks like a placeholder. It exists for exactly one state — a dev server bound
@@ -110,25 +160,32 @@ nothing when tapped, which breaks bar 1. See "the two states" below.
 
 ## The sources
 
-Four today. Each is a short pure function of an already-collected observation
-(`suggest.Pane`), so the interesting part is the predicate, not the plumbing.
+Six today. Each is a short pure function of an already-collected observation
+(`suggest.Pane`) — no I/O, no git, no `lsof` — so the interesting part is the
+predicate, not the plumbing.
 
-| `kind` | Fires when | `rank` | `action` |
-|---|---|---|---|
-| `git_conflict` | an unfinished merge / rebase / cherry-pick / revert in the pane's repo | 30 | `open_diff` |
-| `dev_server` | a reachable HTTP listener attributed to this pane | 25 | `open_url` |
-| `git_dirty` | uncommitted changes in the pane's repo | 20 | `open_diff` |
-| `dev_server_local` | a listener attributed to this pane, bound to loopback | 15 | `show_note` |
-| `shell_idle` | no agent, shell at its prompt, cwd inside a git work tree | 10 | `start_agent` |
+| `kind` | Fires when | `rank` | `action` | by |
+|---|---|---|---|---|
+| `git_conflict` | an unfinished merge / rebase / cherry-pick / revert in the pane's repo | 30 | `open_diff` | app |
+| `dev_server` | a reachable HTTP listener attributed to this pane | 25 | `open_url` | app |
+| `git_dirty` | uncommitted changes in the pane's repo | 20 | `open_diff` | app |
+| `create_pr` | a feature branch with a remote and work on it | 18 | `prompt_agent` | **agent** |
+| `dev_server_local` | a listener attributed to this pane, bound to loopback | 15 | `show_note` | app |
+| `shell_idle` | no agent, shell at its prompt, cwd inside a git work tree | 10 | `start_agent` | app |
 
 The ranks live in one block in `suggest` on purpose. Now that dev servers and
 the git-shaped suggestions share a row, "which of these matters more" is a
 single argument rather than one per feature, and it is only reviewable if the
 numbers sit next to each other. The order reads: something is **stuck** and
 needs a person; something is **serving** that you probably came here to look at;
-something **changed** that you probably came here to read; something is up but
-**unreachable**, worth knowing and not urgent; and finally an **empty** pane you
-could put an agent in.
+something **changed** that you probably came here to read; something is
+**finished enough to ship**; something is up but **unreachable**, worth knowing
+and not urgent; and finally an **empty** pane you could put an agent in.
+
+`create_pr` sits just under `git_dirty` on purpose. When both fire they are the
+two halves of one moment — the agent has finished and you are deciding what to
+do about it — and reading the diff before opening the pull request is the order
+a person actually wants, not the reverse.
 
 **`git_conflict` outranks everything** because it is the one state where the
 agent is stuck on something only a person resolves, and the phone is where you
@@ -146,10 +203,22 @@ host.** A pane parked in `~` is not somewhere you want an agent; a pane parked i
 a worktree is one someone opened to do work in and then walked away from. On the
 development host that is the difference between two chips and eleven.
 
-**Worktrees are handled explicitly.** A `git worktree` checkout has `.git` as a
-*file* containing `gitdir: <repo>/.git/worktrees/<name>`, not a directory.
-Parallel worktrees are the reason this feature exists, so reading that as "not a
-repository" would silence every source in exactly the panes that matter most.
+**Worktrees are handled by asking git.** A `git worktree` checkout has `.git` as
+a *file* pointing at `<repo>/.git/worktrees/<name>`, and the operation markers
+live in that per-worktree directory rather than in the main clone. The git dir
+comes from `git rev-parse --absolute-git-dir` rather than from walking up
+looking for a `.git` directory, which delegates the one case that is easy to get
+wrong. Parallel worktrees are the reason this feature exists.
+
+**`create_pr` is gated in the order the conditions actually disqualify:** an
+agent in the pane (there is nobody to ask otherwise); a git repository, read from
+the host and never inferred from the cwd path (a directory called `feat/x` is not
+evidence of a branch); a branch, not a detached HEAD; a remote, since there is
+otherwise nowhere to push; not the default branch, where a PR means nothing; and
+actual work — commits ahead of the trunk, **or** uncommitted changes to make into
+one, since committing them is step one of what the agent is asked to do. A tree
+mid-rebase is excluded too: "open a PR" during a stopped rebase is the wrong next
+step by a wide margin, and `git_conflict` is already saying the right one.
 
 **The dev-server source contributes at most two chips.** A pane running a
 frontend and an API is two chips and both are worth a tap; a pane running five is
@@ -216,9 +285,16 @@ precisely so it is not competing for the terminal.
 
 ## Cost, and the two caches that keep it down
 
-Per **uncached** call: one `pane.process_info`, one `agent.get`, a few `stat()`s,
-one `git status --porcelain` (only when the tree is a repository with no
-operation in flight), and a read of the port scan.
+Per **uncached** call: one `pane.process_info`, one `agent.get`, **one git read**
+(`gitdiff.ReadContext` — the same call `GET /diff?context=1` answers with), and a
+read of the port scan.
+
+That "one git read" is load-bearing. Before the three features were merged, the
+suggestion sources ran their own `git status` while the app separately polled
+`/diff?context=1` for the PR gate — two implementations of "what is this pane's
+git situation", against the same directory, that could disagree. They now share
+`internal/gitdiff`, which is why the chip that says "9 files changed" and the
+diff screen that lists nine files are reading one number.
 
 | Cache | TTL | Scope | Rebuilt when |
 |---|---|---|---|
@@ -250,10 +326,13 @@ agent status changes in the snapshot the bridge already pushes over `WS /events`
 — which is also *when the answers change*. The TTLs are what make that safe even
 if a future surface is less careful.
 
-`git status` runs with `--untracked-files=normal`, where `/diff` uses `all`: the
-count is only ever rendered as "N files changed", and expanding a fresh
-`node_modules` into its members would cost real time to print a number that says
-nothing.
+There is a second, deliberate git read: the **pre-flight** the app runs when a
+`create_pr` chip is tapped. That is not a duplicate gate — the bridge already
+decided whether to offer the chip — it is a re-check that the answer has not
+changed in the seconds since the chip was drawn, before an action that reaches
+outside the host. An agent that opened the PR while you were reading the screen
+is exactly the case worth catching, and it is one call, on an explicit user
+action, not per render.
 
 ---
 
@@ -270,6 +349,7 @@ nothing.
 | `git` missing or `git status` times out (3s) | That source stays quiet; the others still answer |
 | `lsof` missing or the scan fails | Logged; the pane has no dev-server chips. **Not** a 502 — see below |
 | Bridge too old to have the endpoint | `404` → the app renders no chip row at all |
+| A `create_pr` chip tapped after the situation changed | the sheet says why, and the Send button stays disabled |
 
 The scan failure is the one place this endpoint deliberately disagrees with
 `/ports`, which answers `502`. There the scan *is* the response; here it is one
@@ -283,6 +363,24 @@ cause.
 
 ---
 
+## What the app lost, and why that is the right trade
+
+The "Create PR" button used to live in the transcript composer, drawn whenever
+the pane was in a repository at all, and *disabled with a sentence* for the finer
+conditions: "This pane is on main, the default branch. Move the work onto a
+feature branch first."
+
+As a chip, it simply does not appear in those states. That is a real loss and it
+is named here rather than glossed: standing on `main`, nothing tells you to move
+the work to a feature branch.
+
+It is the right trade because the two surfaces have different jobs. A chip row
+answers *what should I do now* and has to be quiet — the same rule that keeps it
+from showing "no dev server here". A sentence answers *why didn't that work*, and
+the place that question is actually asked is **after a tap**, not before one. The
+pre-flight keeps every one of those sentences for the case where they matter
+most: a chip that has gone stale between being drawn and being tapped.
+
 ## Deliberately not built
 
 - **A "rerun the test runner" source.** `process_info` gives the foreground
@@ -291,8 +389,6 @@ cause.
   run wants the command retyped, and the two are indistinguishable from the
   process list alone. `suggest.Pane.Foreground` is collected and unused, which is
   where that source will hang off when it is worth the flakiness budget.
-- **A push/PR source.** "Branch is ahead of origin → open a PR" needs network and
-  a real action surface, not a chip.
 - **The loopback relay.** See above — an action, not a mechanism, and gated on
   evidence the dimmed state actually comes up.
 - **Event-driven cache invalidation.** The bridge runs an event bus, so pane
@@ -304,7 +400,7 @@ cause.
 
 ## Bridge version
 
-`BridgeVersion` 10. As with `/commands`, the app gates its UI on this endpoint
+`BridgeVersion` 11. As with `/commands`, the app gates its UI on this endpoint
 answering rather than on the number — an older bridge 404s and no chip row
 renders.
 

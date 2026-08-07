@@ -4,33 +4,36 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 
-/// One-tap "open a pull request for this work", done by **instructing the agent
-/// already running in the pane** rather than by the bridge running git itself.
+/// The **agent-performed** half of the suggestion mechanism: a suggestion whose
+/// `performer` is `agent` is not something the app does, it is something the app
+/// asks the agent in the pane to do — by sending it a message.
 ///
-/// The bridge deliberately never runs `git push` or `gh pr create` (see
-/// docs/CONTRACT-diff.md): the agent has the credentials, the repo conventions
-/// and the context to write a real PR body, it works the same for claude /
-/// codex / opencode / anything Herdr can host, and every step of it shows up in
-/// the transcript where it can be watched and interrupted. All this feature
-/// adds is a gate (is a PR even possible here?) and a prompt.
+/// "Create PR" is the one that exists today, and it is why the distinction is
+/// in the payload at all. The bridge deliberately never runs `git push` or
+/// `gh pr create` (D29): the agent has the credentials, the repo conventions and
+/// the context to write a real PR body, it works the same for claude / codex /
+/// opencode / anything Herdr can host, and every step of it shows up in the
+/// transcript where it can be watched and interrupted. The suggestion carries
+/// the gate and the words; the agent does the work.
 ///
-/// The prompt is shown and editable before it is sent. A phone tap that
+/// **The prompt is shown and editable before it is sent.** A phone tap that
 /// silently commits and pushes is the wrong default for an irreversible,
 /// outward-facing action, and the wording is exactly what a person will want to
 /// adjust ("…and mention it supersedes #41").
 
-/// The pane's git situation (`GET /diff?pane=…&context=1`) — the gate's input.
+/// The pane's git situation (`GET /diff?pane=…&context=1`).
 ///
-/// `autoDispose` and refetched each time a transcript screen is built: branch,
-/// ahead-count and dirtiness all change under us while the agent works, and a
-/// stale "3 commits ahead" is exactly the kind of thing that would offer a PR
-/// for work that has already been merged.
+/// Read at **tap time only**, as the pre-flight for the one action that reaches
+/// outside the machine. The per-render gate is the suggestion itself — the
+/// bridge already read this to decide whether to offer the chip — so this is not
+/// a second opinion about whether a PR is possible, it is a re-check that the
+/// answer has not changed in the seconds since the chip was drawn. An agent that
+/// opened the PR while you were reading the screen is exactly the case worth
+/// catching.
 ///
-/// Never surfaces an error: every failure (no connection, non-agent pane, a
-/// bridge too old to send the `git` object) means the same thing to the UI —
-/// we cannot show a PR button — so they all collapse to [GitContext.unknown]
-/// rather than making each caller branch. `context=1` keeps this cheap enough
-/// to run on screen build: it skips the working-tree diff entirely.
+/// Never surfaces an error: every failure (no connection, a bridge too old to
+/// send the `git` object) collapses to [GitContext.unknown], which reads as
+/// "can't tell" and blocks the send rather than guessing.
 final paneGitContextProvider =
     FutureProvider.autoDispose.family<GitContext, String>((ref, pane) async {
       final client = ref.watch(bridgeClientProvider);
@@ -45,10 +48,14 @@ final paneGitContextProvider =
 
 /// Why a pull request can't be opened from this pane, or null when it can.
 ///
+/// Mirrors the bridge's own gate (`suggest.createPR`) — deliberately, because
+/// these are two different jobs on the same conditions. The bridge's version
+/// decides whether to *offer*; this one decides whether to *send*, and unlike
+/// the bridge it has to say why. A chip that has gone stale between being drawn
+/// and being tapped should explain itself, not fail silently.
+///
 /// Ordered from "there is no repository" outwards, so the message names the
 /// first thing that is actually wrong rather than a downstream symptom of it.
-/// Every one of these is a state a person can fix, which is why they are
-/// sentences rather than a disabled button with no explanation.
 String? prBlockReason(GitContext git) {
   if (!git.repo) {
     return "This agent isn't working inside a git repository, so there's "
@@ -74,62 +81,18 @@ String? prBlockReason(GitContext git) {
   return null;
 }
 
-/// A one-line summary of what the PR would be made of, for the sheet header.
-/// Only meaningful once [prBlockReason] has passed.
-String prContextSummary(GitContext git) {
-  final base = git.defaultBranch.isNotEmpty ? git.defaultBranch : 'default';
-  return [
-    '${git.branch} → $base',
-    if (git.ahead > 0) '${git.ahead} commit${git.ahead == 1 ? '' : 's'} ahead',
-    if (git.dirty) 'uncommitted changes',
-    if (git.upstream.isEmpty) 'not pushed yet',
-  ].join(' · ');
-}
-
-/// The default instruction sent to the agent.
+/// Put an agent-performed [suggestion] in front of the user, then send it.
 ///
-/// **One line, deliberately.** `POST /send` pastes the body and then presses
-/// Enter as a separate key event, which is what makes a message with a newline
-/// in it agent-dependent: Claude Code turns on bracketed paste and treats an
-/// embedded newline as a newline, but an agent that doesn't would read it as a
-/// submit and fire the prompt off half-written. A single flowing line is
-/// understood identically by every agent, and it still wraps readably in the
-/// sheet's editor. (Numbered clauses keep the steps distinguishable without
-/// needing the line breaks.)
-///
-/// It names the branch, the remote and the base explicitly rather than leaving
-/// the agent to work them out: the app already knows them, and an agent that
-/// guesses wrong pushes to the wrong place. When git couldn't name a default
-/// branch the base is left out entirely — `gh pr create` resolves the repo's
-/// own default, which is a better answer than a guess.
-String buildPrPrompt(GitContext git) {
-  final branch = git.branch.isNotEmpty ? git.branch : 'the current branch';
-  final remote = git.remote.isNotEmpty ? git.remote : 'origin';
-  final against =
-      git.defaultBranch.isNotEmpty ? ' against ${git.defaultBranch}' : '';
-  final commit = git.dirty
-      ? 'commit everything outstanding with a Conventional Commits message '
-            '(feat:/fix:/docs:/refactor:/test:), '
-      : '';
-  return 'Open a pull request for the work on $branch: $commit'
-      'push the branch with `git push -u $remote $branch`, then open the PR'
-      '$against with `gh pr create`, writing a title and body that say what '
-      'changed and why. Stay on this branch — do not switch, rebase or '
-      'force-push — and reply with the PR URL when it is open.';
-}
-
-/// Open the "Create pull request" sheet for [pane]: the gate's verdict, the
-/// editable prompt, and one button that sends it to the agent.
-///
-/// The sheet is shown even when the action is blocked, carrying the reason.
-/// A button that silently does nothing (or vanishes) teaches the user nothing;
-/// "you're on main, move the work to a feature branch" teaches them the one
-/// thing they need to do next.
-Future<void> showCreatePrSheet(
+/// [preflight] is re-checked at tap time and, when it returns a sentence, that
+/// sentence is shown instead of the editor. Only the pull request supplies one:
+/// it is the single action here that reaches outside the host, so it is the
+/// single one worth a round-trip to re-validate. The others are navigations.
+Future<void> showAgentPromptSheet(
   BuildContext context,
   WidgetRef ref, {
-  required String pane,
+  required PaneSuggestion suggestion,
   String agentKind = 'agent',
+  Future<String?> Function()? preflight,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
   final client = ref.read(bridgeClientProvider);
@@ -138,17 +101,18 @@ Future<void> showCreatePrSheet(
     return;
   }
 
-  // Re-read rather than trusting the value the button was drawn from: the tap
-  // may come minutes after the screen was built, and the agent has very
-  // possibly committed something in between.
-  final git = await ref.refresh(paneGitContextProvider(pane).future);
+  final blocked = preflight == null ? null : await preflight();
   if (!context.mounted) return;
 
   final sent = await showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (_) => _CreatePrSheet(git: git, agentKind: agentKind),
+    builder: (_) => _AgentPromptSheet(
+      suggestion: suggestion,
+      agentKind: agentKind,
+      blocked: blocked,
+    ),
   );
   if (sent == null || sent.isEmpty) return;
 
@@ -156,7 +120,7 @@ Future<void> showCreatePrSheet(
     // Same wire path as the composer: the body is pasted and the trailing \r
     // is delivered as a real Enter, so the agent receives it as one submitted
     // message.
-    await client.sendText(pane, '$sent\r');
+    await client.sendText(suggestion.pane, '$sent\r');
     messenger.showSnackBar(
       SnackBar(
         content: Text('Sent to $agentKind — watch the transcript.'),
@@ -168,28 +132,38 @@ Future<void> showCreatePrSheet(
   }
 }
 
-/// The sheet body: what the PR would be, the prompt to send, and Send/Cancel.
-/// Pops with the (possibly edited) prompt, or null if nothing is to be sent.
-class _CreatePrSheet extends StatefulWidget {
-  const _CreatePrSheet({required this.git, required this.agentKind});
-
-  final GitContext git;
-  final String agentKind;
-
-  @override
-  State<_CreatePrSheet> createState() => _CreatePrSheetState();
+/// The pull request's tap-time pre-flight — a fresh read of the pane's git
+/// situation, and the sentence explaining it if the answer has changed.
+Future<String?> prPreflight(WidgetRef ref, String pane) async {
+  final git = await ref.refresh(paneGitContextProvider(pane).future);
+  return prBlockReason(git);
 }
 
-class _CreatePrSheetState extends State<_CreatePrSheet> {
+/// The sheet body: what is about to be asked, the editable text, and Send.
+/// Pops with the (possibly edited) prompt, or null if nothing is to be sent.
+class _AgentPromptSheet extends StatefulWidget {
+  const _AgentPromptSheet({
+    required this.suggestion,
+    required this.agentKind,
+    required this.blocked,
+  });
+
+  final PaneSuggestion suggestion;
+  final String agentKind;
+  final String? blocked;
+
+  @override
+  State<_AgentPromptSheet> createState() => _AgentPromptSheetState();
+}
+
+class _AgentPromptSheetState extends State<_AgentPromptSheet> {
   late final TextEditingController _prompt;
-  late final String? _blocked;
 
   @override
   void initState() {
     super.initState();
-    _blocked = prBlockReason(widget.git);
     _prompt = TextEditingController(
-      text: _blocked == null ? buildPrPrompt(widget.git) : '',
+      text: widget.blocked == null ? widget.suggestion.prompt : '',
     );
   }
 
@@ -202,7 +176,7 @@ class _CreatePrSheetState extends State<_CreatePrSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final blocked = _blocked;
+    final blocked = widget.blocked;
 
     return Padding(
       // Lift the whole sheet above the keyboard rather than letting it overflow
@@ -221,7 +195,7 @@ class _CreatePrSheetState extends State<_CreatePrSheet> {
                   Icon(Icons.merge_type, size: 20, color: scheme.primary),
                   const SizedBox(width: 8),
                   Text(
-                    'Create pull request',
+                    widget.suggestion.label,
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 16,
@@ -232,9 +206,12 @@ class _CreatePrSheetState extends State<_CreatePrSheet> {
               ),
               const SizedBox(height: 4),
               Text(
+                // The bridge already wrote the one-line summary for the chip;
+                // reusing it means the sheet and the chip cannot disagree about
+                // what is being proposed.
                 blocked == null
-                    ? prContextSummary(widget.git)
-                    : 'Not available for this pane',
+                    ? widget.suggestion.detail
+                    : 'No longer available for this pane',
                 style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
               ),
               const SizedBox(height: 14),

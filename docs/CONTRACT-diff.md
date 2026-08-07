@@ -5,13 +5,18 @@ branch, and one unified diff per changed file — without dropping to the raw
 terminal and running `git diff` by hand. Pairs naturally with the approval
 bar: review what an agent actually did before approving its next action.
 
-It also answers **"what is this pane's git situation?"** — branch, default
-branch, remote, ahead/behind, dirty — as a `git` object on the same response,
-and `?context=1` asks for that object *alone*. That is the read behind the app's
-one-tap "Create PR" action, which must know whether opening a pull request from
-this pane is even possible before it offers to. It lives here rather than on an
-endpoint of its own because it is the same `git` shell-out against the same
-resolved pane cwd; two endpoints would be two answers to one question.
+It also answers **"what is this pane's git situation?"** — root, branch, default
+branch, remote, ahead/behind, dirty, changed count, and any unfinished
+merge/rebase — as a `git` object on the same response, and `?context=1` asks for
+that object *alone*. It lives here rather than on an endpoint of its own because
+it is the same `git` shell-out against the same resolved pane cwd; two endpoints
+would be two answers to one question.
+
+**This is the bridge's single per-pane git read.** `GET /suggestions` calls the
+same `gitdiff.ReadContext` for its `create_pr`, `git_dirty`, `git_conflict` and
+`shell_idle` sources rather than shelling out for git a second time (D29) — which
+is why the chip that says "9 files changed" and the file list below it are the
+same nine. Nothing else in the bridge runs `git status` against a pane.
 
 Captured live against **gothalo itself mid-development** (the `feat/diff-endpoint`
 branch, diffing its own new files) — a real multi-file capture, not a toy
@@ -66,6 +71,7 @@ hosts an agent.
 | Field | Type | Notes |
 |---|---|---|
 | `repo` | bool | The pane's cwd is inside a git work tree (`git rev-parse --is-inside-work-tree`), **detected on the host** — not inferred from the path. False makes every other field meaningless; they are all zero-valued in that case. |
+| `root` | string | The work tree's top level — for a `git worktree`, the worktree itself and not the main clone. Symlinks are resolved (git's own behaviour), so on macOS a `/var` path comes back as `/private/var`: read its base name to identify a checkout, do not treat it as "where this pane is". |
 | `branch` | string | The checked-out branch. `""` on a detached HEAD. An *unborn* branch (fresh `git init`, no commits) still names itself — this is `git symbolic-ref --short HEAD`, not `rev-parse --abbrev-ref`, which would answer the literal `"HEAD"` when detached. |
 | `default_branch` | string | The repo's trunk — what a PR would target. `""` when git can't name one. |
 | `default_ref` | string | The ref `ahead`/`behind` were actually counted against (`refs/remotes/origin/main`, `refs/heads/main`). Reported so a client can say what the comparison meant instead of guessing. |
@@ -74,6 +80,8 @@ hosts an agent.
 | `ahead` | int | Commits on `HEAD` that `default_ref` doesn't have — the work a PR would contain. `0` when there is no `default_ref` to compare against. |
 | `behind` | int | The reverse: commits on `default_ref` that `HEAD` doesn't have. |
 | `dirty` | bool | The working tree has uncommitted changes, **untracked files included** (same `git status` read the file list comes from). |
+| `changed` | int | How many files `dirty` is made of — the length `files[]` would have. `0` whenever `dirty` is false. |
+| `operation` | string \| absent | An unfinished operation holding the tree: `"merge"`, `"rebase"`, `"cherry-pick"`, `"revert"`. Absent the rest of the time. The only field here that means **a person is needed** — everything else describes a tree getting on with it. Read from the marker files git leaves (`MERGE_HEAD`, `rebase-merge/`, …) via `git rev-parse --absolute-git-dir`, not from `git status`, which keeps it reliable on a repository large enough that a status call is not — and gets a worktree's per-checkout git dir right for free. |
 
 **Everything is best-effort and nothing here is an error.** A repo with no
 remote, no commits, or a detached HEAD is an ordinary state; the endpoint
@@ -272,16 +280,24 @@ file should not have to know where it ends before it asks.
 
 ## What consumes the `git` object — and what the bridge will not do
 
-The app's **"Create PR"** action (`app/lib/features/pr/create_pr.dart`, offered
-in the transcript composer's actions row) reads `?context=1` to decide whether
-to show itself at all — `git.repo` — and then, in its sheet, why it can't
-proceed if it can't: detached HEAD, no remote, sitting on the default branch,
-nothing ahead and nothing uncommitted.
+**`GET /suggestions` is the main consumer**, and it does not go over HTTP for it:
+it calls `gitdiff.ReadContext` directly, once per pane, behind its own cache.
+That single read backs four of its six sources. The app does **not** poll
+`?context=1` to decide what to offer — the suggestion is the offer.
 
-When it *can* proceed it sends a prompt to the pane's agent over `POST /send`
-telling it to commit, `git push -u`, and run `gh pr create`. **The bridge never
-runs `git push` or `gh pr create` itself, and this endpoint must not grow a
-`POST` that does.** Three reasons, all deliberate:
+**The app calls `?context=1` in exactly one place**: the pre-flight when a
+"Create PR" chip is tapped (`app/lib/features/pr/create_pr.dart`). That is not a
+second gate; the bridge already decided whether to offer the chip. It is a
+re-check that the answer has not changed in the seconds since the chip was drawn,
+before an action that reaches outside the host — and it is where the *reasons*
+live: detached HEAD, no remote, sitting on the default branch, nothing ahead and
+nothing uncommitted. An agent that opened the PR while you were reading the
+screen is exactly the case worth catching.
+
+When it *can* proceed the app sends the agent the prompt the suggestion carried,
+over `POST /send`, telling it to commit, `git push -u`, and run `gh pr create`.
+**The bridge never runs `git push` or `gh pr create` itself, and this endpoint
+must not grow a `POST` that does.** Three reasons, all deliberate:
 
 - **Agent-agnostic.** Any agent Herdr can host has a shell; nothing about this
   is Claude-specific.
@@ -291,7 +307,8 @@ runs `git push` or `gh pr create` itself, and this endpoint must not grow a
   interrupt it — rather than inside an opaque HTTP call from a phone.
 
 So `/diff` stays a **read**. It answers "what is the situation here?"; the agent
-does the acting.
+does the acting. See D29 for how that distinction is carried in the suggestion
+payload (`performer: "app"` vs `performer: "agent"`).
 
 ---
 

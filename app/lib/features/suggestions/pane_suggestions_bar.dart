@@ -7,10 +7,11 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/start_agent_sheet.dart';
 import '../inbox/inbox_providers.dart';
+import '../pr/create_pr.dart';
 import 'suggestions_providers.dart';
 
 /// A single row of context chips for one pane — "Open :5173", "Resolve",
-/// "Review changes", "Start an agent" — from `GET /suggestions`.
+/// "Review changes", "Create PR", "Start an agent" — from `GET /suggestions`.
 ///
 /// Deliberately quiet. It occupies **no height at all** when the bridge has
 /// nothing to offer, which is most panes most of the time: this is a shortcut
@@ -23,6 +24,12 @@ import 'suggestions_providers.dart';
 /// The bridge decides *what* to offer; this decides only how it looks and what
 /// tapping it does. A suggestion carrying an action this build does not
 /// implement has already been dropped by [BridgeClient.getSuggestions].
+///
+/// Chips come in two kinds and the row does not hide the difference: most are
+/// things the app does (open a screen, open a URL), but a `performer: "agent"`
+/// chip asks the agent in the pane to do something and always opens an editable
+/// prompt first. Those carry a trailing "…" so a tap is never mistaken for the
+/// action itself.
 class PaneSuggestionsBar extends ConsumerWidget {
   const PaneSuggestionsBar({super.key, required this.pane});
 
@@ -99,6 +106,22 @@ Future<void> runSuggestion(
           SnackBar(content: Text('Could not open ${suggestion.url}')),
         );
       }
+    case 'prompt_agent':
+      // The agent-performed branch. Never sends on the tap alone: the sheet
+      // shows the bridge-composed text, lets it be edited, and only then puts
+      // it in the pane. "Create PR" additionally re-reads the pane's git
+      // situation first — it is the one action here that reaches outside the
+      // host, so a chip that has gone stale must explain itself rather than
+      // push a branch nobody asked for.
+      await showAgentPromptSheet(
+        context,
+        ref,
+        suggestion: suggestion,
+        agentKind: _agentKind(ref, suggestion.pane),
+        preflight: suggestion.kind == 'create_pr'
+            ? () => prPreflight(ref, suggestion.pane)
+            : null,
+      );
     case 'show_note':
       await showDialog<void>(
         context: context,
@@ -116,6 +139,17 @@ Future<void> runSuggestion(
     // No default: an unknown action never reaches here (the client drops it),
     // and if one ever did, doing nothing beats guessing.
   }
+}
+
+/// The agent kind running in [pane] ("claude"), for a sheet that says who will
+/// carry the instruction out. Falls back to the generic word rather than
+/// guessing a vendor.
+String _agentKind(WidgetRef ref, String pane) {
+  final snap = ref.read(snapshotControllerProvider).asData?.value;
+  for (final a in snap?.agents ?? const <Agent>[]) {
+    if (a.paneId == pane && a.agent.isNotEmpty) return a.agent;
+  }
+  return 'the agent';
 }
 
 /// A human "where this lands" for the start-agent sheet, so a launch is never a
@@ -155,6 +189,7 @@ class _SuggestionChip extends StatelessWidget {
     // with it is where it is bound, and the chip is dimmed rather than red for
     // exactly that reason.
     'dev_server_local' => Icons.lan_outlined,
+    'create_pr' => Icons.merge_type,
     _ => Icons.bolt,
   };
 
@@ -180,7 +215,13 @@ class _SuggestionChip extends StatelessWidget {
       label: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(suggestion.label, style: TextStyle(color: fg)),
+          // The ellipsis marks an agent-performed chip: tapping it opens an
+          // editable prompt rather than doing the thing. Cheaper than a second
+          // icon, and it reads the way an ellipsis always has on a menu item.
+          Text(
+            suggestion.byAgent ? '${suggestion.label}…' : suggestion.label,
+            style: TextStyle(color: fg),
+          ),
           if (suggestion.detail.isNotEmpty) ...[
             const SizedBox(width: 6),
             Text(

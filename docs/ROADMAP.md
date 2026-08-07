@@ -79,29 +79,36 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       lists what the agent really accepts, read off the host's disk
       (`internal/commands`, `docs/CONTRACT-commands.md`). Plugin commands are a
       recorded gap, not an omission; see the contract.
-- ✅ One-tap **Create PR** — the app asks the pane's own agent to commit, push
-      and `gh pr create`, gated on a host-side git read (`GET /diff?context=1`,
-      `docs/CONTRACT-diff.md`, D26). Agent-agnostic by construction; the bridge
-      runs no git itself. The prompt is editable before it is sent.
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
-- ✅ **Pane suggestions (incl. dev-server preview)** — `GET /suggestions` plus a
-      chip row above the terminal (`internal/suggest`, `internal/ports`,
-      `app/lib/features/suggestions/`, `docs/CONTRACT-suggestions.md`): the two or
-      three things worth doing to a pane given what is running in it. Five
-      sources — a reachable dev server, a stopped merge/rebase/cherry-pick, an
-      agent tree with uncommitted changes, a dev server bound to localhost, and a
-      plain shell parked at its prompt inside a worktree.
+- ✅ **Pane suggestions** — `GET /suggestions` plus a chip row above the terminal
+      and the transcript (`internal/suggest`, `internal/ports`,
+      `internal/gitdiff`, `app/lib/features/suggestions/`,
+      `docs/CONTRACT-suggestions.md`): the two or three things worth doing to a
+      pane given what is running in it. Six sources — a reachable dev server, a
+      stopped merge/rebase/cherry-pick, an agent tree with uncommitted changes, a
+      branch worth opening a pull request for, a dev server bound to localhost,
+      and a plain shell parked at its prompt inside a worktree.
 
-      **One mechanism, not two.** Dev-server discovery was built first as its own
-      endpoint and its own chip; it is now a source inside the suggestion
-      mechanism, ranked in the same row as the git-shaped ones. `GET /ports`
-      survives underneath as the raw host-wide scan the source reads — it is what
-      knows about `lsof`, HTTP probes and process trees — and the app calls only
-      `/suggestions`. What made the merge affordable is that the scan is cached
-      host-wide for 5s, so a row of open panes shares one `lsof` between them
-      rather than each paying for one.
+      **One mechanism, not three.** Dev-server discovery and the one-tap "Create
+      PR" were each built as their own endpoint with their own gate and their own
+      affordance; both are sources inside the suggestion mechanism now, ranked in
+      one row. `GET /ports` and `GET /diff?context=1` survive underneath as the
+      raw feeds — the layers that know about `lsof` and about running git — and
+      the app calls neither. There is **one git read per pane** and one shared
+      host scan; the scan is cached host-wide for 5s, so a row of open panes
+      shares one `lsof` between them rather than each paying for one.
+
+      **The mechanism carries two kinds of action.** Most are things the app does
+      (open a screen, open a URL). "Create PR" is `performer: "agent"`: the app
+      does not open the pull request, it sends the pane's own agent an editable
+      prompt asking it to commit, `git push -u` and `gh pr create`. The bridge
+      runs no git for that by design — the agent has the `gh` auth, the repo's
+      conventions and the context to write a real body, it works for any agent
+      Herdr can host, and every step lands in the transcript where it can be
+      watched and interrupted. The prompt is always shown and editable first: a
+      phone tap that silently commits and pushes is the wrong default.
 
       This supersedes the earlier "browser preview in a WebView — low value over
       a tailnet" note, which was half right and half wrong. Right: the **tunnel**
@@ -124,10 +131,14 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       The design constraint that mattered most was **restraint**: the row renders
       nothing at all for a pane with nothing to offer, which on the development
       host is most of them, and one source may contribute at most two chips so a
-      microservice stack cannot crowd out the chip that needs a person. A
-      rerun-the-test-runner source was scoped out on purpose — recognising the
-      runner is easy, but a watcher wants a keystroke and a finished run wants the
-      command retyped, and the process list cannot tell the two apart.
+      microservice stack cannot crowd out the chip that needs a person. The cost
+      of that restraint is named in the contract: "Create PR" no longer appears
+      greyed-out-with-a-reason when you are standing on `main`. The reason is
+      kept where it is actually asked for — after a tap, when a chip has gone
+      stale. A rerun-the-test-runner source was scoped out on purpose —
+      recognising the runner is easy, but a watcher wants a keystroke and a
+      finished run wants the command retyped, and the process list cannot tell
+      the two apart.
 
 ## Known gaps
 - **Codex transcripts** — `internal/transcript/codex.go` is an honest stub that

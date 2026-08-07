@@ -370,6 +370,16 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
+// resolve follows symlinks the way `git rev-parse --show-toplevel` does.
+func resolve(t *testing.T, path string) string {
+	t.Helper()
+	out, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", path, err)
+	}
+	return out
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -394,4 +404,153 @@ func keys(m map[string]string) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+// ---- Root, Changed and Operation ----
+//
+// These three exist for GET /suggestions, which reads the pane's git situation
+// through this package rather than shelling out for it a second time. They are
+// tested against real git for the same reason the rest of this file is: the
+// interesting cases (a worktree's `.git` file, a stopped rebase) are exactly
+// the ones a hand-built fixture would get wrong.
+
+// TestContextRootIsTheCheckout: Root names the work tree, which for a `git
+// worktree` is the worktree itself and not the main clone. That distinction is
+// the whole point — parallel worktrees of one repo are the normal shape here.
+func TestContextRootIsTheCheckout(t *testing.T) {
+	main := initRepo(t)
+	mustWrite(t, main, "a.txt", "one\n")
+	runGit(t, main, "add", "-A")
+	runGit(t, main, "commit", "-qm", "one")
+
+	// Compared through EvalSymlinks: `rev-parse --show-toplevel` reports the
+	// resolved path, and on macOS every t.TempDir() sits under the /var ->
+	// /private/var symlink. Nothing reads Root but its base name, so the
+	// resolution is harmless — but a test that ignored it would fail on macOS
+	// and pass on Linux, which is worse than either.
+	real := resolve(t, main)
+	if c := ReadContext(main); c.Root != real {
+		t.Errorf("Root = %q, want the repo root %q", c.Root, real)
+	}
+
+	// A subdirectory still reports the root, not itself.
+	sub := filepath.Join(main, "internal", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if c := ReadContext(sub); c.Root != real {
+		t.Errorf("Root from a subdirectory = %q, want %q", c.Root, real)
+	}
+
+	wt := filepath.Join(t.TempDir(), "feat-thing")
+	runGit(t, main, "worktree", "add", "-q", "-b", "feat-thing", wt)
+	c := ReadContext(wt)
+	if !c.Repo {
+		t.Fatal("a worktree checkout was not recognised as a repository")
+	}
+	if want := resolve(t, wt); c.Root != want {
+		t.Errorf("Root = %q, want the worktree itself %q", c.Root, want)
+	}
+	if c.Branch != "feat-thing" {
+		t.Errorf("Branch = %q, want the worktree's branch", c.Branch)
+	}
+}
+
+// TestContextChangedCountsTheSameFilesTheDiffLists is the consistency the
+// unification buys: a chip that says "3 files changed" and a diff screen that
+// lists three of them are reading one number.
+func TestContextChangedCountsTheSameFilesTheDiffLists(t *testing.T) {
+	dir := initRepo(t)
+	mustWrite(t, dir, "a.txt", "one\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-qm", "one")
+
+	if c := ReadContext(dir); c.Changed != 0 || c.Dirty {
+		t.Errorf("clean tree: Changed = %d, Dirty = %v, want 0, false", c.Changed, c.Dirty)
+	}
+
+	mustWrite(t, dir, "a.txt", "two\n")
+	mustWrite(t, dir, "b.txt", "new\n")
+	mustWrite(t, dir, "c.txt", "new\n")
+
+	c := ReadContext(dir)
+	if c.Changed != 3 || !c.Dirty {
+		t.Errorf("Changed = %d, Dirty = %v, want 3, true", c.Changed, c.Dirty)
+	}
+	res, err := Collect(dir)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(res.Files) != c.Changed {
+		t.Errorf("Collect listed %d files but Changed says %d — the two must agree",
+			len(res.Files), c.Changed)
+	}
+	if res.Git.Changed != c.Changed {
+		t.Errorf("Collect's Git.Changed = %d, ReadContext's = %d", res.Git.Changed, c.Changed)
+	}
+}
+
+// TestContextOperationNamesAnUnfinishedOperation pins the marker-file mapping.
+// These are the states where a person is needed, so a wrong name here is a chip
+// that describes the wrong emergency.
+func TestContextOperationNamesAnUnfinishedOperation(t *testing.T) {
+	cases := map[string]string{
+		"MERGE_HEAD":            "merge",
+		"CHERRY_PICK_HEAD":      "cherry-pick",
+		"REVERT_HEAD":           "revert",
+		"rebase-merge/onto":     "rebase",
+		"rebase-apply/original": "rebase",
+	}
+	for marker, want := range cases {
+		t.Run(want+"/"+strings.ReplaceAll(marker, "/", "_"), func(t *testing.T) {
+			dir := initRepo(t)
+			mustWrite(t, dir, "a.txt", "one\n")
+			runGit(t, dir, "add", "-A")
+			runGit(t, dir, "commit", "-qm", "one")
+
+			path := filepath.Join(dir, ".git", marker)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := ReadContext(dir).Operation; got != want {
+				t.Errorf("Operation = %q, want %q", got, want)
+			}
+		})
+	}
+
+	dir := initRepo(t)
+	if got := ReadContext(dir).Operation; got != "" {
+		t.Errorf("Operation on an untouched repo = %q, want none", got)
+	}
+	if got := ReadContext(t.TempDir()).Operation; got != "" {
+		t.Errorf("Operation outside a repo = %q, want none", got)
+	}
+}
+
+// A worktree's markers live in <repo>/.git/worktrees/<name>, not in the main
+// clone — the case that motivated reading the git dir from git itself rather
+// than walking up for a `.git` directory.
+func TestContextOperationInAWorktree(t *testing.T) {
+	main := initRepo(t)
+	mustWrite(t, main, "a.txt", "one\n")
+	runGit(t, main, "add", "-A")
+	runGit(t, main, "commit", "-qm", "one")
+
+	wt := filepath.Join(t.TempDir(), "feat-thing")
+	runGit(t, main, "worktree", "add", "-q", "-b", "feat-thing", wt)
+
+	marker := filepath.Join(main, ".git", "worktrees", "feat-thing", "MERGE_HEAD")
+	if err := os.WriteFile(marker, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("the worktree git dir is not where it was expected: %v", err)
+	}
+	if got := ReadContext(wt).Operation; got != "merge" {
+		t.Errorf("Operation in a worktree = %q, want %q", got, "merge")
+	}
+	// The main checkout is unaffected — the markers are genuinely per-worktree.
+	if got := ReadContext(main).Operation; got != "" {
+		t.Errorf("Operation in the main checkout = %q, want none", got)
+	}
 }

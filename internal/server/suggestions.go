@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/dipeshdulal/gothalo/internal/gitdiff"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/ports"
 	"github.com/dipeshdulal/gothalo/internal/suggest"
@@ -24,22 +25,29 @@ type suggestionsResponse struct {
 // GET /suggestions?pane=<pane_id> -> a short, ordered list of one-tap actions
 // that make sense for what is running in that pane right now.
 //
-// **This is the one endpoint the app asks "what can I do with this pane".** Dev
-// servers used to be a second answer to that question, on GET /ports; they are
-// now one source among several here, ranked in the same row as the git-shaped
-// ones. /ports survives underneath as the raw host-wide feed the source reads —
-// it is the thing that knows about `lsof`, HTTP probes and process trees, and it
-// still answers unfiltered for anything that wants the whole list.
+// **This is the one endpoint the app asks "what can I do with this pane".**
+// Three features arrived at that question separately — dev-server discovery,
+// the git-shaped chips, and the one-tap pull request — and all three are sources
+// here now rather than three surfaces with three gates.
+//
+// The raw feeds survive underneath and each still owns its own reading:
+// GET /ports knows about `lsof`, HTTP probes and process trees; GET /diff (with
+// `?context=1`) knows how to run git against a pane's cwd. Neither is called by
+// the app for this. What this endpoint owns is the judgement — which
+// observations are worth a chip, and how they rank against each other.
 //
 // The bar every source clears: a suggestion returned is one the app can act on.
-// The signals are what Herdr says holds the pane's foreground, whether an agent
-// lives there, a few stat()s on its working directory, and the listeners already
-// attributed to it.
+//
+// A suggestion is performed either by the app (open a screen, open a URL) or by
+// the AGENT in the pane (`performer: "agent"`, an editable prompt the user
+// confirms). Both live in one row because both answer the same question; they
+// are distinguished in the payload because a client must not fire the second
+// kind off a single tap. See docs/CONTRACT-suggestions.md.
 //
 // Costs, all behind a short per-pane cache (see suggestTTL): two Herdr
-// round-trips, at most one `git status`, and a read of the port scan — which is
-// itself cached host-wide for 5s, so a row of open panes shares one `lsof`
-// rather than each paying for one.
+// round-trips, ONE git read of the pane's cwd, and a read of the port scan —
+// which is itself cached host-wide for 5s, so a row of open panes shares one
+// `lsof` rather than each paying for one.
 func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -81,9 +89,15 @@ type processInfoGetter interface {
 // foreground process's for a pane with no agent. Those are the same directory
 // when both exist; the fallback is what makes plain panes work at all.
 //
-// The port scan is a third read and the most tolerant of the three: a host with
-// no `lsof` is a host with no dev-server chips, not a broken endpoint. See
-// paneServers.
+// The port scan and the git read are the third and fourth lookups, and both are
+// the most tolerant of the set: a host with no `lsof` is a host with no
+// dev-server chips, and a cwd that is not a repository is a pane with no
+// git-shaped chips. Neither is a broken endpoint.
+//
+// **There is exactly one git read per pane.** gitdiff.ReadContext is the same
+// call GET /diff?context=1 answers with, against the same resolved cwd — the
+// sources do not shell out for git themselves. That is what stops the chip
+// saying "3 files changed" while the diff screen lists four.
 func (s *Server) observePane(ctx context.Context, pane string) (suggest.Pane, int, error) {
 	session, bare := herdr.SplitTarget(pane)
 
@@ -118,7 +132,38 @@ func (s *Server) observePane(ctx context.Context, pane string) (suggest.Pane, in
 	} else {
 		out.Servers = s.paneServers(ctx, pane)
 	}
+	out.Git = paneGit(out.Cwd)
 	return out, http.StatusOK, nil
+}
+
+// paneGit reads the pane's git situation once, through the package that owns
+// git for this bridge, and narrows it to what the sources are allowed to see.
+//
+// The narrowing is the same bargain paneServers makes with internal/ports:
+// internal/suggest stays a pure function over plain data with no dependency
+// beyond the standard library, and the packages that know how to run `lsof` and
+// `git` stay the only ones that do.
+//
+// ReadContext never errors — a cwd that is not a repository is a zero Context
+// with Repo false, which is a perfectly ordinary pane and simply disables the
+// git-shaped sources.
+func paneGit(cwd string) suggest.Git {
+	if cwd == "" {
+		return suggest.Git{}
+	}
+	c := gitdiff.ReadContext(cwd)
+	return suggest.Git{
+		Repo:          c.Repo,
+		Root:          c.Root,
+		Branch:        c.Branch,
+		DefaultBranch: c.DefaultBranch,
+		Remote:        c.Remote,
+		Upstream:      c.Upstream,
+		Ahead:         c.Ahead,
+		Changed:       c.Changed,
+		Dirty:         c.Dirty,
+		Operation:     c.Operation,
+	}
 }
 
 // paneServers reads the cached host port scan and returns the listeners this
@@ -180,10 +225,11 @@ func foregroundCwd(info herdr.PaneProcessInfo) string {
 //
 // Sized off what the answers are made of rather than off a refresh rate. Every
 // input is something a person changes on a human timescale — an agent starts
-// writing files, a rebase stops on a conflict, a dev server comes up, a shell is
-// left at a prompt — so a few seconds of staleness is invisible, while the cache
-// is what keeps a screen that refetches on focus, on reconnect and on every
-// agent status change from turning into a `git status` per event.
+// writing files, a rebase stops on a conflict, a dev server comes up, a commit
+// lands, a shell is left at a prompt — so a few seconds of staleness is
+// invisible, while the cache is what keeps a screen that refetches on focus, on
+// reconnect and on every agent status change from turning into a fan of git
+// invocations per event.
 //
 // Just past ports.TTL (5s) rather than under it, deliberately: a per-pane entry
 // that outlived its scan would keep re-triggering scans it then ignores. This

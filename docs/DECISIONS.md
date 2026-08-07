@@ -436,6 +436,14 @@ the payload and the UI states it. Pushing a branch deletion from a phone affects
 everyone and reaches outside the host; nothing else on this bridge does that, and
 this does not either.
 
+## D26 — deliberately unused
+Held the one-tap "Create PR" decision while that feature was its own PR (#112).
+When #112 was absorbed into the pane-suggestions work, its reasoning moved into
+**D29** — where it belongs, since "the agent performs this one" is a property of
+the suggestion mechanism rather than a decision standing on its own. The number
+is left vacant rather than recycled: renumbering would silently repoint every
+reference written while #112 was open.
+
 ## D27 — Opening a space from the phone needs a filesystem read, kept as narrow as it can be
 Every creating endpoint the app had needed something already open to hang off:
 `pane.split` needs a pane, `tab.create` needs a workspace, `/agent/start` needs
@@ -517,19 +525,29 @@ one, which is precisely what must not happen on a several-thousand-line diff.
 ## D29 — One mechanism answers "what can I do with this pane"
 
 `GET /suggestions` is the single surface the app asks what a pane affords, and
-`internal/suggest` is the single place that decides. Dev-server discovery
-(`GET /ports`) was built first and separately, with its own endpoint, its own
-contract and its own chip; it is now one **source** inside that mechanism,
-ranked in the same row as the git-shaped ones. `/ports` survives underneath as
-the raw host-wide scan the source reads — the layer that knows about `lsof`,
-HTTP probes and process trees — and the app no longer calls it.
+`internal/suggest` is the single place that decides. **Three** features arrived
+at that question separately, each with its own endpoint, its own gate and its
+own affordance, and all three are now **sources** inside one mechanism, ranked
+in one row:
 
-The two were converging on the same question from different directions. "A
-server is up in this pane, here is a URL" and "this pane's rebase stopped, here
-is the diff" are the same sentence with different nouns, and shipping them as
-two mechanisms would have meant two contracts, two caches, two chip rows, and a
-standing argument about which row a future affordance belongs in. The user
-asking the question does not know or care which subsystem noticed.
+| Was | Is now |
+|---|---|
+| `GET /ports` + a dev-server preview chip | the `dev_server` / `dev_server_local` sources |
+| `GET /diff?context=1` + a "Create PR" button in the composer | the `create_pr` source |
+| — | the `git_conflict` / `git_dirty` / `shell_idle` sources |
+
+The raw feeds survive underneath, and each still owns its own reading: `/ports`
+is the layer that knows about `lsof`, HTTP probes and process trees; `/diff` is
+the layer that knows how to run git against a pane's cwd. The app calls neither
+of them for this.
+
+They were converging on the same question from different directions. "A server
+is up in this pane, here is a URL", "this pane's rebase stopped, here is the
+diff", and "this branch has work on it, shall I open a PR" are the same sentence
+with different nouns. Shipping them separately would have meant three contracts,
+three gates, three chip-or-button surfaces, and a standing argument about which
+one a future affordance belongs in. The person asking does not know or care
+which subsystem noticed.
 
 **What made it affordable is that the scan is host-wide and cached.** The
 objection to merging was real: a port scan costs an `lsof`, a `ps` and a probe
@@ -540,12 +558,25 @@ open panes costs one `lsof` between them, not one each. The per-pane suggestion
 cache sits just *past* that TTL (6s) so a miss usually finds the scan warm
 rather than re-triggering one it then ignores.
 
+**One git read per pane.** The same argument, made twice. Before the merge the
+suggestion sources ran their own `git status` while the app separately polled
+`/diff?context=1` for the PR gate — two implementations of "what is this pane's
+git situation", against the same directory, free to disagree about how many
+files had changed. `internal/gitdiff` owns it now; `internal/suggest` receives
+the answer as data and shells out for nothing. That is why the chip saying "9
+files changed" and the diff screen listing nine files are the same nine.
+
+There is one deliberate second read: the app re-checks git when a `create_pr`
+chip is **tapped**. That is a pre-flight, not a gate — the bridge already decided
+whether to offer it — and it exists because that action reaches outside the host
+and the chip may be seconds stale.
+
 **Rank is the merge.** Every source now scores itself into one ordering, and
 those numbers live in one block so "which of these matters more" is a single
 reviewable argument rather than one per feature: stuck (30) → serving (25) →
-changed (20) → up but unreachable (15) → empty (10). A source may contribute at
-most two chips, so a microservice stack cannot crowd out the chip that needs a
-person.
+changed (20) → shippable (18) → up but unreachable (15) → empty (10). A source
+may contribute at most two chips, so a microservice stack cannot crowd out the
+chip that needs a person.
 
 **`kind` and `action` stay separate, and that is what makes one mechanism
 extensible.** `kind` says why and only picks the icon; `action` says what and is
@@ -555,6 +586,55 @@ newer bridge can add a source against an older app and the worst case is a
 missing chip. It is also what makes the deferred loopback relay cheap: it
 becomes one more action on an existing chip, not a second mechanism.
 
+### The mechanism carries two kinds of action, and says which
+
+Most suggestions are things the **app** does — open a screen, open a URL. The
+pull request is something only the **agent** can do, and folding it in without
+flattening that difference is the substantive part of this decision.
+
+`performer: "agent"` means the app does not perform the action; it sends the
+agent in the pane a message (`params.prompt`) asking for it. The bridge
+deliberately never runs `git push` or `gh pr create` itself. A `POST /pr` that
+shelled out to git and `gh` was the obvious alternative and is rejected on three
+counts:
+
+- **Agent-agnostic by construction (D7).** Every agent Herdr hosts has a shell.
+  Nothing here knows or cares that it is talking to Claude.
+- **The agent is the one with the context.** It holds the `gh` auth, the repo's
+  commit conventions, and enough of the work to write a PR body worth reading. A
+  bridge-side implementation would have to reinvent all three, badly.
+- **It is watchable.** Every step lands in the transcript, where it can be read
+  and interrupted mid-flight — as opposed to an opaque HTTP call from a phone
+  that either worked or didn't.
+
+Two consequences follow, both deliberate:
+
+- **The prompt is shown and editable before it is sent.** Committing and pushing
+  are irreversible and outward-facing; a phone tap that silently does them is
+  the wrong default, and the wording is exactly what a person wants to adjust
+  ("…and mention it supersedes #41"). The chip carries a trailing "…" for the
+  same reason a menu item does.
+- **The prompt is composed on the bridge, not the client.** One wording,
+  reviewable in one place, identical on every client — and it names the branch,
+  the remote and the base explicitly, because the bridge knows them and an agent
+  that guesses pushes to the wrong place. It is one line, because `POST /send`
+  pastes the body and delivers Enter separately, so an embedded newline submits
+  half a message on any agent without bracketed paste.
+
+An absent or unrecognised `performer` must read as `app`. Failing closed is the
+only safe direction: the cost of misreading an app action as an agent action is
+an irreversible push nobody asked for.
+
+**What the app gave up.** The PR button used to be drawn whenever the pane was
+in a repository at all, *disabled with a sentence* for the finer conditions
+("This pane is on main — move the work onto a feature branch first"). As a chip
+it simply does not appear in those states. That is a real loss, and it is the
+right trade: a chip row answers *what should I do now* and has to stay quiet,
+while a sentence answers *why didn't that work* — a question asked after a tap,
+not before one. The tap-time pre-flight keeps every one of those sentences for
+the case that matters most, a chip that went stale between being drawn and being
+tapped.
+
 **The two endpoints disagree in exactly one place, on purpose.** A failed scan
 is a `502` on `/ports`, because there the scan *is* the response; on
 `/suggestions` it is logged and costs only the dev-server chips, because losing
@@ -563,7 +643,9 @@ is a `502` on `/ports`, because there the scan *is* the response; on
 **What was deliberately not collapsed.** `/ports` is not folded into
 `/suggestions` as a `?host=1` mode: the host-wide list is a different question
 with a different natural cadence, and a per-pane endpoint that sometimes answers
-about the whole machine is worse than two endpoints. The scanning code stays in
-`internal/ports` for the same reason — `internal/suggest` has no dependency
-beyond the standard library, and every source is a pure function of an
-already-collected observation, which is what keeps adding the next one cheap.
+about the whole machine is worse than two endpoints. `/diff` keeps its `git`
+object and its `?context=1` mode for the same reason — it is the diff screen's
+own header, and it is the pre-flight's read. The scanning and the git-running
+code stay in `internal/ports` and `internal/gitdiff`: `internal/suggest` has no
+dependency beyond the standard library, and every source is a pure function of
+an already-collected observation, which is what keeps adding the next one cheap.

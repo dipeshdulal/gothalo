@@ -23,7 +23,7 @@ import '../attach/image_attach.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
-import '../pr/create_pr.dart';
+import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
 import 'slash_commands.dart';
 import 'transcript_models.dart';
@@ -938,20 +938,6 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
       null => const <SlashCommand>[],
     };
 
-    // "Create PR" is offered only for a pane the HOST says is inside a git
-    // repository — never inferred from the cwd path, and never shown while we
-    // don't know (still loading, an older bridge, a pane with no agent), since
-    // a button that turns out to be impossible is worse than one that arrives a
-    // moment late. The finer conditions — feature branch, has a remote, has
-    // work — are reported *with their reason* in the sheet; hiding the button
-    // for those would leave "why is there no PR button?" unanswerable.
-    //
-    // Watched here rather than inside the actions row so the git read isn't
-    // redone every time the slash typeahead swaps that row out and back in.
-    final canCreatePr =
-        ref.watch(paneGitContextProvider(widget.pane)).asData?.value.repo ??
-        false;
-
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
@@ -1056,6 +1042,15 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Real approval → an actionable card; just-waiting → a soft cue;
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
+            // Context chips for this pane — "Create PR", "Review changes",
+            // "Resolve", "Open :5173". Renders nothing at all when the bridge
+            // has nothing to offer, which is most of the time.
+            //
+            // The same row the terminal screen carries, off the same endpoint.
+            // It is here because the most valuable suggestion for an agent pane
+            // is the one the AGENT performs, and this is the screen where you
+            // watch it happen.
+            PaneSuggestionsBar(pane: widget.pane),
             // Directly above the toolbar that started the upload, so progress
             // and the button that caused it read as one thing. Renders nothing
             // while idle.
@@ -1079,7 +1074,6 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               _ComposerActionsRow(
                 pane: widget.pane,
                 agentKind: agent?.agent ?? _agentState?.agentKind ?? 'agent',
-                canCreatePr: canCreatePr,
                 modeLabel: _agentState?.permissionMode != null
                     ? _modeLabel(_agentState!.permissionMode!)
                     : null,
@@ -1977,7 +1971,6 @@ class _ComposerActionsRow extends ConsumerWidget {
   const _ComposerActionsRow({
     required this.pane,
     required this.agentKind,
-    required this.canCreatePr,
     required this.modeLabel,
     required this.onCycleMode,
     required this.onOpenTerminal,
@@ -1988,13 +1981,8 @@ class _ComposerActionsRow extends ConsumerWidget {
 
   final String pane;
 
-  /// Names the agent in the PR sheet's copy ("claude runs this itself").
+  /// Names the agent in a sheet's copy ("claude runs this itself").
   final String agentKind;
-
-  /// Whether to offer "Create PR" at all — the host says this pane's cwd is
-  /// inside a git repository. Decided by the screen rather than here so the one
-  /// git read survives the slash typeahead swapping this row out and back in.
-  final bool canCreatePr;
 
   final String? modeLabel;
   final VoidCallback onCycleMode;
@@ -2058,23 +2046,12 @@ class _ComposerActionsRow extends ConsumerWidget {
               semanticLabel: 'Add a quick command',
               tooltip: 'Add a quick command',
             ),
-            // Ship the work: one tap that asks the agent itself to commit,
-            // push and `gh pr create`. It sits with the actions that act on the
-            // conversation rather than with the two below that leave it.
-            if (canCreatePr)
-              AccessoryButton(
-                icon: Icons.merge_type,
-                onTap: enabled
-                    ? () => showCreatePrSheet(
-                        context,
-                        ref,
-                        pane: pane,
-                        agentKind: agentKind,
-                      )
-                    : () {},
-                semanticLabel: 'Create a pull request',
-                tooltip: 'Create a pull request',
-              ),
+            // "Create PR" used to be a button here, with a git read of its own
+            // to decide whether to draw it. It is a suggestion chip now
+            // (PaneSuggestionsBar, above the composer) — same sheet, same
+            // editable prompt, but offered by the one mechanism that also knows
+            // about this pane's dev server and its unread changes, off one git
+            // read rather than a second one. See D29.
             // Jump and Terminal are both "leave this conversation for another
             // view". They live here rather than in the app bar because this is
             // where a thumb already is — the app bar is a stretch away at the

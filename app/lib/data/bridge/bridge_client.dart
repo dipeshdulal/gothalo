@@ -519,15 +519,16 @@ class SlashCommand {
 /// `docs/CONTRACT-suggestions.md`.
 ///
 /// The bridge decides *what* is worth offering (it is the only side that can
-/// see the pane's processes and working tree); the app decides how to render it
-/// and which [action] values it knows how to perform. Anything else is dropped
-/// on the floor — see [isActionable] — which is what lets a newer bridge add a
-/// suggestion kind without breaking an app that predates it.
+/// see the pane's processes, working tree and listeners); the app decides how to
+/// render it and which [action] values it knows how to perform. Anything else is
+/// dropped on the floor — see [isActionable] — which is what lets a newer bridge
+/// add a suggestion kind without breaking an app that predates it.
 class PaneSuggestion {
   const PaneSuggestion({
     required this.kind,
     required this.label,
     required this.action,
+    this.performer = 'app',
     this.detail = '',
     this.params = const {},
     this.rank = 0,
@@ -545,8 +546,14 @@ class PaneSuggestion {
   /// One line of justification under the label. May be empty.
   final String detail;
 
-  /// What to do on tap: `open_diff` | `start_agent`.
+  /// What to do on tap: `open_diff` | `start_agent` | `open_url` | `show_note`
+  /// | `prompt_agent`.
   final String action;
+
+  /// Who carries it out: `app` or `agent` — see [byAgent]. Defaults to `app`
+  /// for a bridge that predates the field, which is the safe reading: an app
+  /// suggestion is never sent anywhere.
+  final String performer;
 
   /// The action's arguments. Always carries `pane` (session-qualified).
   final Map<String, String> params;
@@ -564,6 +571,19 @@ class PaneSuggestion {
   /// What a `show_note` tap displays. Empty for every other action.
   String get note => params['note'] ?? '';
 
+  /// The text a `prompt_agent` tap puts in front of the user. Empty otherwise.
+  ///
+  /// This is a *starting* text, never a message to send on its own: an agent
+  /// action commits, pushes and reaches outside the machine, so it is shown and
+  /// editable before anything leaves the phone.
+  String get prompt => params['prompt'] ?? '';
+
+  /// Whether this asks the AGENT in the pane to do something rather than the
+  /// app. The distinction is load-bearing, not cosmetic: an agent action needs
+  /// its text confirmed first, and it lands in the transcript where it can be
+  /// watched and interrupted.
+  bool get byAgent => performer == 'agent';
+
   /// Whether THIS build knows how to perform the action, *and* was given what
   /// that action needs. A chip that cannot do anything is worse than a missing
   /// chip, so both an unknown action and a known one with a missing argument
@@ -572,11 +592,14 @@ class PaneSuggestion {
         'open_diff' || 'start_agent' => pane.isNotEmpty,
         'open_url' => url.isNotEmpty,
         'show_note' => note.isNotEmpty,
+        // Needs both: something to say, and an agent to say it to.
+        'prompt_agent' => prompt.isNotEmpty && pane.isNotEmpty,
         _ => false,
       };
 
   factory PaneSuggestion.fromJson(Map<String, dynamic> j) => PaneSuggestion(
         kind: (j['kind'] as String?) ?? '',
+        performer: (j['performer'] as String?) ?? 'app',
         label: (j['label'] as String?) ?? '',
         detail: (j['detail'] as String?) ?? '',
         action: (j['action'] as String?) ?? '',

@@ -42,10 +42,11 @@ func devServers(p Pane) []Suggestion {
 		port := ":" + strconv.Itoa(s.Port)
 		if s.Loopback || s.URL == "" {
 			out = append(out, Suggestion{
-				Kind:   KindDevServerLocal,
-				Label:  port + " is local-only",
-				Detail: detail(s.Proc, "bound to localhost"),
-				Action: ActionShowNote,
+				Kind:      KindDevServerLocal,
+				Performer: PerformerApp,
+				Label:     port + " is local-only",
+				Detail:    detail(s.Proc, "bound to localhost"),
+				Action:    ActionShowNote,
 				Params: map[string]string{
 					"port": strconv.Itoa(s.Port),
 					"note": localOnlyNote(s),
@@ -55,10 +56,11 @@ func devServers(p Pane) []Suggestion {
 			continue
 		}
 		out = append(out, Suggestion{
-			Kind:   KindDevServer,
-			Label:  "Open " + port,
-			Detail: detail(s.Proc, "serving"),
-			Action: ActionOpenURL,
+			Kind:      KindDevServer,
+			Performer: PerformerApp,
+			Label:     "Open " + port,
+			Detail:    detail(s.Proc, "serving"),
+			Action:    ActionOpenURL,
 			Params: map[string]string{
 				"url":  s.URL,
 				"port": strconv.Itoa(s.Port),

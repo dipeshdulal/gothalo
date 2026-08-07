@@ -61,6 +61,18 @@ type Context struct {
 	// field meaningless (they are all zero anyway).
 	Repo bool `json:"repo"`
 
+	// Root is the work tree's top level — the checkout directory, which for a
+	// `git worktree` is the worktree itself and not the main clone. It is what
+	// names a pane to a person ("feat/one-tap-pr"), since with several worktrees
+	// of one project checked out at once the remote is identical for all of them
+	// and says nothing.
+	//
+	// Symlinks are resolved (git's own behaviour), so this can differ textually
+	// from the cwd it was read from — on macOS a /var path comes back as
+	// /private/var. Nothing reads it but its base name, so that is harmless; it
+	// is not a path to hand back to a caller as "where this pane is".
+	Root string `json:"root"`
+
 	// Branch is the checked-out branch, "" on a detached HEAD. An unborn
 	// branch (a fresh `git init` with no commits) still names itself here.
 	Branch string `json:"branch"`
@@ -94,6 +106,21 @@ type Context struct {
 	// files). Not disqualifying either: committing them is step one of what the
 	// agent is asked to do.
 	Dirty bool `json:"dirty"`
+
+	// Changed is how many files Dirty is made of, counted the same way the file
+	// list is (`--untracked-files=all`), so "9 files changed" on a chip and nine
+	// rows on the diff screen are the same nine. Zero whenever Dirty is false.
+	Changed int `json:"changed"`
+
+	// Operation names an unfinished git operation holding the tree — "merge",
+	// "rebase", "cherry-pick", "revert" — and is "" the rest of the time. It is
+	// the only field here that means *a person is needed*: everything else
+	// describes a tree that is simply getting on with it.
+	//
+	// Read from the marker files git itself leaves (MERGE_HEAD, rebase-merge/,
+	// …) rather than from `git status`, which is what keeps it reliable on a
+	// repository large enough that a status call is not.
+	Operation string `json:"operation,omitempty"`
 }
 
 // Branch returns the current git branch for cwd, best-effort: "" when cwd
@@ -138,7 +165,8 @@ func ReadContext(cwd string) Context {
 	// Same status read Collect uses, for the same reason — untracked files
 	// count as "there is work here that is not committed yet".
 	if raw, err := gitRaw(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all"); err == nil {
-		c.Dirty = len(parsePorcelain(raw)) > 0
+		c.Changed = len(parsePorcelain(raw))
+		c.Dirty = c.Changed > 0
 	}
 	return c
 }
@@ -162,6 +190,10 @@ func gitContext(cwd string) Context {
 	if b, err := gitString(cwd, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
 		c.Branch = strings.TrimSpace(b)
 	}
+	if root, err := gitString(cwd, "rev-parse", "--show-toplevel"); err == nil {
+		c.Root = strings.TrimSpace(root)
+	}
+	c.Operation = inProgress(cwd)
 	c.Remote = pickRemote(cwd)
 	if u, err := gitString(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil {
 		c.Upstream = strings.TrimSpace(u)
@@ -171,6 +203,46 @@ func gitContext(cwd string) Context {
 		c.Ahead, c.Behind = aheadBehind(cwd, c.DefaultRef)
 	}
 	return c
+}
+
+// midFlight names an operation git leaves a marker for, and the marker it
+// leaves. Order matters: the first match wins, and a rebase that stops on a
+// conflict has both a rebase directory and (during `rebase --merge`) merge
+// state, so the more specific operation is listed first.
+var midFlight = []struct {
+	op     string
+	marker string
+}{
+	{"rebase", "rebase-merge"},
+	{"rebase", "rebase-apply"},
+	{"cherry-pick", "CHERRY_PICK_HEAD"},
+	{"revert", "REVERT_HEAD"},
+	{"merge", "MERGE_HEAD"},
+}
+
+// inProgress reports an unfinished merge/rebase/cherry-pick/revert, or "".
+//
+// The git dir comes from `git rev-parse --absolute-git-dir` rather than from
+// walking up looking for `.git`, which delegates the one case that is easy to
+// get wrong: a `git worktree` checkout has `.git` as a FILE containing
+// `gitdir: <repo>/.git/worktrees/<name>`, and the markers live in that
+// per-worktree directory rather than in the main clone. Parallel worktrees are
+// the normal shape here, so getting it from git is both shorter and righter.
+func inProgress(cwd string) string {
+	dir, err := gitString(cwd, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return ""
+	}
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	for _, m := range midFlight {
+		if _, err := os.Stat(filepath.Join(dir, m.marker)); err == nil {
+			return m.op
+		}
+	}
+	return ""
 }
 
 // pickRemote names the remote a push would go to: "origin" when it exists, else
@@ -273,7 +345,8 @@ func Collect(cwd string) (Result, error) {
 		return Result{Git: gc}, nil
 	}
 	entries := parsePorcelain(statusRaw)
-	gc.Dirty = len(entries) > 0
+	gc.Changed = len(entries)
+	gc.Dirty = gc.Changed > 0
 	if len(entries) == 0 {
 		return Result{Branch: gc.Branch, Git: gc}, nil
 	}

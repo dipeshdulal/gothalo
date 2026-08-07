@@ -94,13 +94,11 @@ func TestDevServerChipsAreCapped(t *testing.T) {
 // two mechanisms created: when a pane is both serving and stuck, the thing that
 // needs a person comes first.
 func TestConflictOutranksDevServer(t *testing.T) {
-	dir := gitRepo(t)
-	write(t, dir, "a.txt", "base\n")
-	commitAll(t, dir)
-	write(t, dir, ".git/MERGE_HEAD", "0000000000000000000000000000000000000000\n")
+	g := repo()
+	g.Operation = "merge"
 
 	got := For(Pane{
-		ID: "w1:p1", HasAgent: true, Cwd: dir,
+		ID: "w1:p1", HasAgent: true, Git: g,
 		Servers: []Server{{Port: 5173, Proc: "node", URL: "http://h:5173"}},
 	})
 	if len(got) != 2 {
@@ -115,13 +113,12 @@ func TestConflictOutranksDevServer(t *testing.T) {
 // diff you came here to read. Both are useful; only one of them is why you
 // opened the pane while it was serving.
 func TestDevServerOutranksDirtyTree(t *testing.T) {
-	dir := gitRepo(t)
-	write(t, dir, "a.txt", "one\n")
-	commitAll(t, dir)
-	write(t, dir, "a.txt", "two\n")
+	g := repo()
+	g.Branch = g.DefaultBranch // keep create_pr out of this comparison
+	g.Ahead, g.Dirty, g.Changed = 0, true, 1
 
 	got := For(Pane{
-		ID: "w1:p1", HasAgent: true, Cwd: dir,
+		ID: "w1:p1", HasAgent: true, Git: g,
 		Servers: []Server{{Port: 5173, Proc: "node", URL: "http://h:5173"}},
 	})
 	if len(got) != 2 || got[0].Kind != KindDevServer || got[1].Kind != KindGitDirty {

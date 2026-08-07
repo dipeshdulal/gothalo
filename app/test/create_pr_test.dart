@@ -116,53 +116,9 @@ void main() {
     });
   });
 
-  group('buildPrPrompt', () {
-    test('names the branch, remote and base explicitly', () {
-      final p = buildPrPrompt(ctx());
-      expect(p, contains('git push -u origin feat/x'));
-      expect(p, contains('against main'));
-      expect(p, contains('gh pr create'));
-    });
-
-    test('asks for a Conventional Commit only when there is something to commit', () {
-      expect(buildPrPrompt(ctx(dirty: true)), contains('Conventional Commits'));
-      expect(
-        buildPrPrompt(ctx(dirty: false)),
-        isNot(contains('Conventional Commits')),
-      );
-    });
-
-    test('omits the base when git could not name a default branch', () {
-      // `gh pr create` resolves the repo's own default, which beats a guess.
-      final p = buildPrPrompt(ctx(defaultBranch: '', defaultRef: ''));
-      expect(p, isNot(contains('against')));
-      expect(p, contains('gh pr create'));
-    });
-
-    test('is a single line, so no agent submits it half-written', () {
-      // POST /send pastes the body and presses Enter separately; an embedded
-      // newline is a submit for any agent without bracketed paste.
-      expect(buildPrPrompt(ctx(dirty: true)), isNot(contains('\n')));
-    });
-
-    test('tells the agent not to rewrite history', () {
-      expect(buildPrPrompt(ctx()), contains('force-push'));
-    });
-  });
-
-  group('prContextSummary', () {
-    test('reads as branch → base plus what the PR is made of', () {
-      expect(
-        prContextSummary(ctx(ahead: 2, dirty: true)),
-        'feat/x → main · 2 commits ahead · uncommitted changes',
-      );
-    });
-
-    test('singularizes one commit and flags a never-pushed branch', () {
-      expect(
-        prContextSummary(ctx(ahead: 1, upstream: '')),
-        'feat/x → main · 1 commit ahead · not pushed yet',
-      );
-    });
-  });
+  // The prompt itself, and the one-line summary, are composed on the BRIDGE
+  // now (internal/suggest.prPrompt / prSummary) and arrive in the suggestion's
+  // params — one wording, reviewable in one place, identical on every client.
+  // They are tested in internal/suggest/createpr_test.go, including the
+  // single-line constraint that keeps /send from submitting half a message.
 }

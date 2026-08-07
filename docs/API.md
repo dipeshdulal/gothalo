@@ -61,7 +61,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into **any** pane's tree and get the path back, to paste into a prompt or type into the terminal (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
 | GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |
-| GET  | `/suggestions` | — (query: `pane`) | `{pane, suggestions[]}` | the two or three one-tap actions worth offering for **any** pane, from what is running in it — open its dev server, review changes, resolve a stopped rebase, start an agent in an idle shell (below; see [`CONTRACT-suggestions.md`](CONTRACT-suggestions.md)) |
+| GET  | `/suggestions` | — (query: `pane`) | `{pane, suggestions[]}` | the two or three one-tap actions worth offering for **any** pane, from what is running in it — open its dev server, review changes, resolve a stopped rebase, open a pull request, start an agent in an idle shell (below; see [`CONTRACT-suggestions.md`](CONTRACT-suggestions.md)) |
 | GET  | `/ports` | — (query: `pane?`) | `{ports[]}` | raw host-wide dev-server scan behind the `dev_server` suggestion — every HTTP listener, attributed to the pane that spawned it. **The app does not call this**; it reads `/suggestions` (appendix of [`CONTRACT-suggestions.md`](CONTRACT-suggestions.md)) |
 | POST | `/agent-mode/cycle` | `{pane}` | `{ok:true,cycled:true,permission_mode?}` | advance a **Claude** pane's Shift+Tab permission mode by one (below) |
 | GET  | `/agents/available` | — | `{agents[],known_kinds[],discovery}` | which agent kinds this host can actually launch (below) |
@@ -370,6 +370,7 @@ GET /suggestions?pane=acme/w1:p2
   "suggestions": [
     {
       "kind": "dev_server",
+      "performer": "app",
       "label": "Open :5173",
       "detail": "node · serving",
       "action": "open_url",
@@ -377,12 +378,13 @@ GET /suggestions?pane=acme/w1:p2
       "rank": 25
     },
     {
-      "kind": "git_dirty",
-      "label": "Review changes",
-      "detail": "9 files changed",
-      "action": "open_diff",
-      "params": {"pane": "acme/w1:p2"},
-      "rank": 20
+      "kind": "create_pr",
+      "performer": "agent",
+      "label": "Create PR",
+      "detail": "feat/thing → main · 2 commits ahead",
+      "action": "prompt_agent",
+      "params": {"pane": "acme/w1:p2", "prompt": "Open a pull request for the work on feat/thing: …"},
+      "rank": 18
     }
   ]
 }
@@ -392,28 +394,36 @@ Sorted by `rank` descending, capped at three, and **empty most of the time** —
 that is the design, not a degraded state. `kind` says *why* (it picks the icon
 and its colour); `action` says *what* and is the only field the app branches on.
 
-Actions: `open_url` (system browser; needs `params.url`), `open_diff`,
-`show_note` (a dialog; needs `params.note`), `start_agent`. An `action` a client
-does not implement — or a known one missing its required param — must be
-**dropped, not rendered**: that is what lets a newer bridge add a source without
-an app release.
+`performer` says **who carries it out**, and it is the one field here that is not
+cosmetic. `app` suggestions the app performs itself. An `agent` suggestion is
+sent to the agent in the pane as `params.prompt`, and the client **must show that
+prompt and let it be edited before sending**. An absent or unrecognised value
+reads as `app` — fail closed, because misreading the other way fires an
+irreversible outward-facing action off one tap.
 
-Five sources today: `git_conflict` (an unfinished merge/rebase/cherry-pick, which
-outranks and suppresses the next), `dev_server` (a reachable listener attributed
-to this pane), `git_dirty` (uncommitted changes), `dev_server_local` (a listener
-bound to loopback — a dimmed chip whose tap explains and names `--host`), and
-`shell_idle` (no agent, shell at its prompt, cwd inside a git work tree). The
-diff-shaped ones require an agent in the pane because `/diff` resolves its tree
-through one; the dev-server ones do not, since a server usually runs in a pane
-split off beside the agent.
+Actions: `open_url` (system browser; needs `params.url`), `open_diff`,
+`show_note` (a dialog; needs `params.note`), `start_agent`, and `prompt_agent`
+(the agent-performed one; needs `params.prompt`). An `action` a client does not
+implement — or a known one missing its required param — must be **dropped, not
+rendered**: that is what lets a newer bridge add a source without an app release.
+
+Six sources today: `git_conflict` (an unfinished merge/rebase/cherry-pick, which
+outranks and suppresses the rest), `dev_server` (a reachable listener attributed
+to this pane), `git_dirty` (uncommitted changes), `create_pr` (a feature branch
+with a remote and work on it — the only agent-performed one), `dev_server_local`
+(a listener bound to loopback — a dimmed chip whose tap explains and names
+`--host`), and `shell_idle` (no agent, shell at its prompt, cwd inside a git work
+tree). The git-shaped ones require an agent in the pane; the dev-server ones do
+not, since a server usually runs in a pane split off beside the agent.
 
 Errors: `400` missing `pane` · `401` bad bearer · `404` no such pane, or a bridge
 predating the endpoint (the app renders no chip row for either) · `502` herdr
 unreachable. A pane with **no agent** is not an error, and neither is a failed
 port scan — it just costs the dev-server chips, not the whole answer. Cached per
-pane for 6s over a host-wide 5s port scan; the app refetches on screen open and
-on the pane's agent-status changes rather than polling. Full details, the cost
-model, and the `/ports` appendix in
+pane for 6s over a host-wide 5s port scan, with **one** git read per pane (the
+same `gitdiff` call `/diff?context=1` answers with); the app refetches on screen
+open and on the pane's agent-status changes rather than polling. Full details,
+the cost model, and the `/ports` appendix in
 [`CONTRACT-suggestions.md`](./CONTRACT-suggestions.md).
 
 ## GET /timeline — recent agent activity

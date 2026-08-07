@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dipeshdulal/gothalo/internal/gitdiff"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/suggest"
 )
@@ -330,4 +333,128 @@ func TestSuggestionsSurviveAScanFailure(t *testing.T) {
 	if len(body.Suggestions) != 1 || body.Suggestions[0].Kind != suggest.KindGitDirty {
 		t.Fatalf("suggestions = %+v, want the dirty-tree chip alone", body.Suggestions)
 	}
+}
+
+// TestSuggestionsIncludeCreatePR is the third feature folded in, end to end:
+// the pane's git situation is read ONCE, by the package that owns git for this
+// bridge, and comes out as an agent-performed chip carrying its prompt.
+func TestSuggestionsIncludeCreatePR(t *testing.T) {
+	dir := branchWithWork(t)
+	s := newTestServer(t)
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 200,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 200, Cwd: dir}},
+	}}
+	s.agents = fakeAgent{agent: herdr.Agent{Kind: "claude", Cwd: dir}}
+	s.serversFor = noServers(s)
+
+	rec := getSuggestions(t, s, "?pane=w1:p1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var body suggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var pr *suggest.Suggestion
+	for i := range body.Suggestions {
+		if body.Suggestions[i].Kind == suggest.KindCreatePR {
+			pr = &body.Suggestions[i]
+		}
+	}
+	if pr == nil {
+		t.Fatalf("suggestions = %+v, want a create_pr", body.Suggestions)
+	}
+	if pr.Performer != suggest.PerformerAgent {
+		t.Errorf("performer = %q — a PR is opened by the agent", pr.Performer)
+	}
+	if pr.Action != suggest.ActionPromptAgent {
+		t.Errorf("action = %q, want %q", pr.Action, suggest.ActionPromptAgent)
+	}
+	// The prompt is the payload; without it the app has nothing to put in front
+	// of the user to edit, which is the step that keeps this reversible.
+	if !strings.Contains(pr.Params["prompt"], "gh pr create") {
+		t.Errorf("prompt = %q, want the PR instruction", pr.Params["prompt"])
+	}
+	if !strings.Contains(pr.Params["prompt"], "feat/thing") {
+		t.Errorf("prompt = %q, want the real branch named", pr.Params["prompt"])
+	}
+}
+
+// TestSuggestionsAgreeWithTheDiffScreen is the point of reading git once. The
+// chip's file count and the diff endpoint's file list are the same number
+// because they are the same read, not two implementations that happen to agree.
+func TestSuggestionsAgreeWithTheDiffScreen(t *testing.T) {
+	dir := branchWithWork(t)
+	for _, name := range []string{"x.txt", "y.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("n\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := newTestServer(t)
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 200,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 200, Cwd: dir}},
+	}}
+	s.agents = fakeAgent{agent: herdr.Agent{Kind: "claude", Cwd: dir}}
+	s.serversFor = noServers(s)
+
+	rec := getSuggestions(t, s, "?pane=w1:p1")
+	var body suggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var detail string
+	for _, sg := range body.Suggestions {
+		if sg.Kind == suggest.KindGitDirty {
+			detail = sg.Detail
+		}
+	}
+	res, err := gitdiff.Collect(dir)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if want := fmt.Sprintf("%d files changed", len(res.Files)); detail != want {
+		t.Errorf("chip says %q, diff screen would list %d files", detail, len(res.Files))
+	}
+}
+
+// branchWithWork is a repo on a feature branch, with a remote and one commit
+// the default branch does not have — the state a pull request is offered from.
+func branchWithWork(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "t")
+	// A remote that need not exist: nothing here pushes, and `git remote add` is
+	// what "there is somewhere to push" means to the gate.
+	run("remote", "add", "origin", "https://example.invalid/x.git")
+	write("a.txt", "one\n")
+	run("add", "-A")
+	run("commit", "-qm", "one")
+	run("checkout", "-qb", "feat/thing")
+	write("b.txt", "two\n")
+	run("add", "-A")
+	run("commit", "-qm", "two")
+	return dir
 }
