@@ -333,6 +333,8 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 	enrichAgentBranches(merged["agents"])
 	enrichAgentAttention(merged["agents"])
 	enrichAgentLastActivity(merged["agents"])
+	// After last-activity: recency ranks the field it stamps.
+	enrichAgentRecency(merged["agents"])
 
 	return json.Marshal(map[string]any{
 		"id":     "gothalo:snapshot",
@@ -463,10 +465,10 @@ func enrichAgentLastActivity(agentsNode any) {
 }
 
 // enrichAgentAttention stamps `attention_rank` on every agent in the snapshot
-// from its `agent_status`. Ordering by this field (then by whatever tiebreak the
-// surface wants) is what makes the app's list authoritative rather than
-// client-sorted. The field is always set, so a client can sort on it
-// unconditionally.
+// from its `agent_status`. Ordering by this field, then by `recency_rank`
+// (enrichAgentRecency), is the bridge's full authoritative list order — what
+// makes the app's list authoritative rather than client-sorted. The field is
+// always set, so a client can sort on it unconditionally.
 func enrichAgentAttention(agentsNode any) {
 	agents, ok := agentsNode.([]any)
 	if !ok {
@@ -485,4 +487,129 @@ func enrichAgentAttention(agentsNode any) {
 		}
 		obj["attention_rank"] = rank
 	}
+}
+
+// Recency tiers: which clock (if any) could date an agent's last activity.
+// They are tiers rather than one number because the two signals are on
+// different scales — unix milliseconds and a herdr counter — and averaging
+// incomparable units is how a list starts lying. A tier only ever falls back
+// to the next one, never mixes.
+const (
+	recencyDated      = 0 // last_activity_ts: a real wall clock
+	recencyTransition = 1 // state_change_seq: herdr's global transition order
+	recencyUndatable  = 2 // nothing at all
+)
+
+// recencyKey is one agent's position in the "what did I touch last" order.
+// Fields are compared in declaration order; paneID is the last resort and is
+// unique, so the comparison is a total order and the resulting rank is stable
+// between snapshots for an unchanged set of agents.
+type recencyKey struct {
+	tier   int
+	ts     int64  // unix ms, newest first (tier recencyDated)
+	seq    int64  // state_change_seq, highest first (tier recencyTransition)
+	paneID string // ascending
+}
+
+func (k recencyKey) less(o recencyKey) bool {
+	if k.tier != o.tier {
+		return k.tier < o.tier
+	}
+	if k.ts != o.ts {
+		return k.ts > o.ts
+	}
+	if k.seq != o.seq {
+		return k.seq > o.seq
+	}
+	return k.paneID < o.paneID
+}
+
+// enrichAgentRecency stamps `recency_rank` on every agent in the snapshot: 0 is
+// the most recently active, and every agent gets a distinct rank, so
+// (attention_rank, recency_rank) is a *complete* order with nothing left for a
+// client to break ties on — and therefore nothing for two surfaces to break
+// them on differently.
+//
+// It is the tiebreak *within* an attention rank, not a rival to it. What needs
+// a human still comes first; this only decides the order among agents that need
+// you equally, where the snapshot's own order previously decided it — i.e.
+// arbitrarily. With a dozen-plus agents that put the one you were just using
+// wherever herdr happened to list it, usually well down the page.
+//
+// Three tiers, in order:
+//
+//  1. `last_activity_ts` (from enrichAgentLastActivity), newest first. A real
+//     clock, and the one that matches what "I was just using it" means.
+//  2. `state_change_seq`, highest first — for an agent with no transcript to
+//     date: another kind entirely (hermes/opencode share one store, so the
+//     bridge refuses to date them), or a claude agent that has not spoken yet.
+//     This is herdr's single app-wide counter, a global total order over every
+//     agent transition and comparable across panes (`app/actions.rs`, recorded
+//     in docs/DESIGN-panestore.md; confirmed live — 25 agents on one host carry
+//     interleaved values from one sequence). So it genuinely orders "which of
+//     these last did something", just in transitions rather than seconds.
+//  3. Whatever is left, by `pane_id`.
+//
+// Undated agents sort *below* dated ones rather than being guessed into the
+// middle, for the same reason enrichAgentLastActivity omits the field instead
+// of stamping now(): absent means unknown, never "just now". A just-started
+// agent is the case that costs — it has no transcript yet — but tier 2 catches
+// it, since starting an agent is itself a fresh transition.
+//
+// `recency_rank` is positional, not an identity: it is an index into this
+// snapshot's list, so it shifts when agents come and go. Compare it, don't
+// cache it or diff it across snapshots.
+func enrichAgentRecency(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok {
+		return
+	}
+	type entry struct {
+		obj map[string]any
+		key recencyKey
+	}
+	ordered := make([]entry, 0, len(agents))
+	for _, it := range agents {
+		obj, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		ordered = append(ordered, entry{obj: obj, key: recencyKeyFor(obj)})
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].key.less(ordered[j].key)
+	})
+	for i, e := range ordered {
+		e.obj["recency_rank"] = i
+	}
+}
+
+// recencyKeyFor reads one agent's recency signals and picks its tier.
+func recencyKeyFor(obj map[string]any) recencyKey {
+	paneID, _ := obj["pane_id"].(string)
+	if ts, ok := jsonInt(obj["last_activity_ts"]); ok && ts > 0 {
+		return recencyKey{tier: recencyDated, ts: ts, paneID: paneID}
+	}
+	if seq, ok := jsonInt(obj["state_change_seq"]); ok {
+		return recencyKey{tier: recencyTransition, seq: seq, paneID: paneID}
+	}
+	return recencyKey{tier: recencyUndatable, paneID: paneID}
+}
+
+// jsonInt reads an integer that may have arrived as any of the shapes a decoded
+// snapshot mixes: float64 for anything herdr sent through encoding/json, and a
+// native int64 for a field the bridge stamped itself (last_activity_ts).
+func jsonInt(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	}
+	return 0, false
 }

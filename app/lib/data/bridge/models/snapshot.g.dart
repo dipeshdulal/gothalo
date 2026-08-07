@@ -28,6 +28,7 @@ _Agent _$AgentFromJson(Map<String, dynamic> json) => _Agent(
       : AgentSession.fromJson(json['agent_session'] as Map<String, dynamic>),
   stateChangeSeq: (json['state_change_seq'] as num?)?.toInt(),
   attentionRank: (json['attention_rank'] as num?)?.toInt(),
+  recencyRank: (json['recency_rank'] as num?)?.toInt(),
   lastActivityTs: (json['last_activity_ts'] as num?)?.toInt(),
 );
 
@@ -45,6 +46,7 @@ Map<String, dynamic> _$AgentToJson(_Agent instance) => <String, dynamic>{
   'agent_session': instance.session,
   'state_change_seq': instance.stateChangeSeq,
   'attention_rank': instance.attentionRank,
+  'recency_rank': instance.recencyRank,
   'last_activity_ts': instance.lastActivityTs,
 };
 

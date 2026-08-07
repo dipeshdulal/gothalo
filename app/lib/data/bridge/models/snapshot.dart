@@ -76,6 +76,18 @@ sealed class Agent with _$Agent {
     /// falls back to the local [AgentStatus.rank].
     @JsonKey(name: 'attention_rank') int? attentionRank,
 
+    /// The bridge's authoritative "what did I touch last" rank, lowest first
+    /// and unique within a snapshot. It is the tiebreak *within* an
+    /// [attentionRank], not a rival to it: what needs you still comes first,
+    /// this only decides the order among agents that need you equally — which
+    /// the snapshot's own arrival order used to decide, i.e. arbitrarily.
+    ///
+    /// It is a **position in this snapshot's list**, not an identity: it shifts
+    /// as agents come and go. Compare it; never cache or diff it across
+    /// snapshots. Null on an older bridge — see [Agent.byAttentionThenRecency],
+    /// which falls back to [lastActivityTs].
+    @JsonKey(name: 'recency_rank') int? recencyRank,
+
     /// When this agent last wrote to its transcript, in unix milliseconds —
     /// the bridge's answer to "how long has it been like this".
     ///
@@ -119,6 +131,49 @@ sealed class Agent with _$Agent {
   /// [AgentStatus.rank]. The two agree by construction — the fallback only
   /// exists so an older bridge still sorts sensibly.
   int get attention => attentionRank ?? agentStatus.rank;
+
+  /// **The** order agents are listed in, anywhere they are listed: what needs a
+  /// human first ([attention]), then what you touched last ([recencyRank]),
+  /// then title as a last resort.
+  ///
+  /// It is one function rather than a comparator copied into each screen
+  /// because the way these surfaces drift is one of them quietly keeping an
+  /// older tiebreak, and two lists of the same agents in two different orders
+  /// is worse for finding an agent than either order is good.
+  ///
+  /// Both keys come from the bridge, which is what makes the order
+  /// authoritative rather than re-derived per screen (see `CONTRACT.md`). The
+  /// fallbacks below only exist for a bridge too old to send them.
+  static int byAttentionThenRecency(Agent a, Agent b) {
+    final r = a.attention - b.attention;
+    if (r != 0) return r;
+    final c = _compareRecency(a, b);
+    if (c != 0) return c;
+    return a.displayTitle.toLowerCase().compareTo(b.displayTitle.toLowerCase());
+  }
+
+  /// Most-recently-active first. Reproduces the bridge's `recency_rank` order
+  /// exactly for agents out of one snapshot, and stays meaningful for a list
+  /// that mixes servers (Priority does) — which the rank alone cannot, being an
+  /// index into one bridge's snapshot.
+  ///
+  /// 1. Both dated → the wall clock. Comparable across snapshots and across
+  ///    servers, and within one snapshot it agrees with the bridge's rank by
+  ///    construction, since the rank is built from it.
+  /// 2. One dated → the dated one first. An agent with no timestamp sorts
+  ///    **last**, never first: absent means unknown, not "just now" — the same
+  ///    rule [sinceLastActivity] follows.
+  /// 3. Neither dated → the bridge's rank, which also orders the agents it
+  ///    could not put a clock on (by their last herdr transition).
+  static int _compareRecency(Agent a, Agent b) {
+    final ta = a.lastActivityTs, tb = b.lastActivityTs;
+    final da = ta != null && ta > 0, db = tb != null && tb > 0;
+    if (da && db) return tb.compareTo(ta);
+    if (da != db) return da ? -1 : 1;
+    final ra = a.recencyRank, rb = b.recencyRank;
+    if (ra != null && rb != null) return ra.compareTo(rb);
+    return 0;
+  }
 
   /// Best-effort git context derived from [cwd]. Herdr worktrees live under
   /// `…/.herdr/worktrees/<project>/<worktree>`, where `<worktree>` is
@@ -327,28 +382,28 @@ sealed class Snapshot with _$Snapshot {
   Set<String> get agentPaneIds => {for (final a in agents) a.paneId};
 
   /// All agents as one flat list for the "Agents" tab, ordered attention-first
-  /// (blocked → done → working → idle → unknown), then by title.
+  /// (blocked → done → working → idle → unknown) and, within a rank,
+  /// most-recently-active first.
   ///
-  /// The primary key is the bridge's authoritative [Agent.attention] rank, so
-  /// this list and everything counted off it stay consistent with every other
-  /// surface rather than each screen re-deriving priority.
-  List<Agent> get agentsSorted {
-    final list = [...agents];
-    list.sort((x, y) {
-      final r = x.attention - y.attention;
-      if (r != 0) return r;
-      return x.displayTitle.toLowerCase().compareTo(
-        y.displayTitle.toLowerCase(),
-      );
-    });
-    return list;
-  }
+  /// Both keys are the bridge's ([Agent.byAttentionThenRecency]), so this list
+  /// and everything counted off it stay consistent with every other surface
+  /// rather than each screen re-deriving priority. Recency is the key that
+  /// makes a long list usable: with a dozen-plus agents the one you were just
+  /// in used to land wherever herdr happened to list it, which for an idle
+  /// agent meant scrolling to the end to find it.
+  List<Agent> get agentsSorted =>
+      [...agents]..sort(Agent.byAttentionThenRecency);
 
   /// Agents grouped by **project** (the repo folder from `cwd`), which merges a
   /// project's main checkout with its worktrees under one heading — far more
   /// meaningful than Herdr's internal `w5`/`w8` workspace ids. Groups with an
   /// attention-needing agent float up; within a group, attention first, then
-  /// the main checkout before worktrees, then by title.
+  /// the main checkout before worktrees, then most-recently-active first.
+  ///
+  /// The main-checkout-before-worktrees rule outranks recency deliberately:
+  /// it is structure, not priority — a worktree row reads as belonging under
+  /// the checkout above it, and letting recency interleave them would lose
+  /// that. Everything below it defers to the shared order.
   List<MapEntry<String, List<Agent>>> get byProject {
     final groups = <String, List<Agent>>{};
     for (final a in agents) {
@@ -362,9 +417,7 @@ sealed class Snapshot with _$Snapshot {
         final wx = x.isWorktree ? 1 : 0;
         final wy = y.isWorktree ? 1 : 0;
         if (wx != wy) return wx - wy;
-        return x.displayTitle.toLowerCase().compareTo(
-          y.displayTitle.toLowerCase(),
-        );
+        return Agent.byAttentionThenRecency(x, y);
       });
     }
     final entries = groups.entries.toList();
@@ -379,7 +432,7 @@ sealed class Snapshot with _$Snapshot {
 
   /// Agents grouped by `workspace_id`, ordered so workspaces with an agent that
   /// [AgentStatus.needsAttention] float to the top, then alphabetically. Within
-  /// a group, attention-needing agents come first.
+  /// a group, attention-needing agents come first, then the shared order.
   List<MapEntry<String, List<Agent>>> get byWorkspace {
     final groups = <String, List<Agent>>{};
     for (final a in agents) {
@@ -390,9 +443,7 @@ sealed class Snapshot with _$Snapshot {
         final ax = x.agentStatus.needsAttention ? 0 : 1;
         final ay = y.agentStatus.needsAttention ? 0 : 1;
         if (ax != ay) return ax - ay;
-        return x.displayTitle.toLowerCase().compareTo(
-          y.displayTitle.toLowerCase(),
-        );
+        return Agent.byAttentionThenRecency(x, y);
       });
     }
     final entries = groups.entries.toList();
