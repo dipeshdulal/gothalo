@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/theme.dart';
+import '../../../core/tokens.dart';
 import '../../../data/bridge/models/snapshot.dart';
 
 /// A compact pill showing an agent's [AgentStatus] — icon + label, colored per
@@ -18,7 +19,7 @@ class StatusBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: c.bg,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: Radii.smAll,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

@@ -279,80 +279,99 @@ class _SpaceTile extends StatelessWidget {
     // a plain project name stays in the UI font — all-mono everywhere read as
     // too much.
     final nameColor = isWt ? scheme.primary : scheme.onSurface;
-    return ListTile(
+    return InkWell(
       onTap: () => context
           .push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
-      contentPadding: EdgeInsets.only(left: isWt ? 28 : 16, right: 12),
-      leading: Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: space.focused
-              ? scheme.primary.withValues(alpha: 0.18)
-              : scheme.surfaceContainerHighest,
-          shape: BoxShape.circle,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: isWt ? 28 : 16,
+          right: 16,
+          top: 10,
+          bottom: 10,
         ),
-        child: Icon(
-          isWt ? Icons.call_split : Icons.folder_outlined,
-          size: 18,
-          color: space.focused
-              ? scheme.primary
-              : (isWt ? scheme.primary : scheme.onSurfaceVariant),
-        ),
-      ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                // Mono only for a worktree name — it's literally a branch, and
-                // the teal-mono pairing reads as "this is a git ref". A project
-                // name is just a directory label, so it stays in the UI font;
-                // all-mono everywhere felt off. Weight is the lighter fix for
-                // the "too bold" complaint, not the font.
-                fontFamily: isWt ? AppTheme.monoFamily : null,
-                fontWeight: FontWeight.w500,
-                fontSize: isWt ? 14.5 : 15,
-                color: nameColor,
-              ),
-            ),
-          ),
-          // The focused space on the host — the "you are here" marker, matching
-          // the overview's own focused indicator.
-          if (space.focused) ...[
-            const SizedBox(width: 8),
-            Icon(Icons.my_location, size: 13, color: scheme.primary),
-          ],
-          if (blocked) ...[
-            const SizedBox(width: 8),
+        child: Row(
+          children: [
             Container(
-              width: 8,
-              height: 8,
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: scheme.error,
+                color: space.focused
+                    ? scheme.primary.withValues(alpha: 0.18)
+                    : scheme.surfaceContainerHighest,
                 shape: BoxShape.circle,
               ),
+              child: Icon(
+                isWt ? Icons.call_split : Icons.folder_outlined,
+                size: 18,
+                color: space.focused
+                    ? scheme.primary
+                    : (isWt ? scheme.primary : scheme.onSurfaceVariant),
+              ),
             ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            // Mono only for a worktree name — it's literally a
+                            // branch, and the teal-mono pairing reads as "this
+                            // is a git ref". A project name is just a directory
+                            // label, so it stays in the UI font; all-mono
+                            // everywhere felt off. Weight is the lighter fix
+                            // for the "too bold" complaint, not the font.
+                            fontFamily: isWt ? AppTheme.monoFamily : null,
+                            fontWeight: FontWeight.w500,
+                            fontSize: isWt ? 14.5 : 15,
+                            color: nameColor,
+                          ),
+                        ),
+                      ),
+                      // The focused space on the host — the "you are here"
+                      // marker, matching the overview's own focused indicator.
+                      if (space.focused) ...[
+                        const SizedBox(width: 8),
+                        Icon(Icons.my_location, size: 13, color: scheme.primary),
+                      ],
+                      if (blocked) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: scheme.error,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'} · ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
           ],
-        ],
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Text(
-          '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'} · ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 12.5,
-            color: scheme.onSurfaceVariant,
-          ),
         ),
       ),
-      trailing: Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
     );
   }
 }

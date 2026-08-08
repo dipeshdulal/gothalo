@@ -10,6 +10,7 @@ import 'package:gothalo/core/widgets/flat_app_bar.dart';
 import 'package:gothalo/core/widgets/panel_row.dart';
 import 'package:gothalo/core/widgets/status_mark.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
+import 'package:gothalo/features/inbox/widgets/status_badge.dart';
 
 /// The shared design layer, exercised without a bridge or a device.
 ///
@@ -172,9 +173,32 @@ void main() {
     expect(find.byType(PanelRow), findsNWidgets(3));
     expect(find.byType(Card), findsNothing);
     expect(find.byType(FilterChip), findsNothing);
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byType(ActionChip), findsNothing);
     expect(find.byType(Chip), findsNothing);
+    expect(find.byType(ListTile), findsNothing);
     expect(find.byType(BackdropFilter), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the status badge is a tight pill, not a stadium', (tester) async {
+    await tester.pumpWidget(host(const StatusBadge(AgentStatus.working)));
+
+    final deco = tester
+        .widget<DecoratedBox>(
+          find
+              .descendant(
+                of: find.byType(StatusBadge),
+                matching: find.byType(DecoratedBox),
+              )
+              .first,
+        )
+        .decoration as BoxDecoration;
+    final radius = (deco.borderRadius as BorderRadius).topLeft.x;
+    // Radius language: nothing past 8. A 999 corner is the Material tell this
+    // design removes from status too.
+    expect(radius, lessThanOrEqualTo(Radii.md));
+    expect(deco.boxShadow, isNull);
   });
 
   testWidgets('an entering row ends fully opaque and in place', (tester) async {

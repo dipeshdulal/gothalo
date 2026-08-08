@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/inbox_providers.dart';
@@ -458,7 +459,7 @@ class _Elapsed extends StatelessWidget {
           color: blocked
               ? scheme.error.withValues(alpha: 0.16)
               : scheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(999),
+          borderRadius: Radii.smAll,
         ),
         child: Text(
           label,

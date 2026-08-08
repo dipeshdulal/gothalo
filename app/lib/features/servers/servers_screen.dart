@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/widgets/agent_avatar.dart';
@@ -226,45 +227,56 @@ class _PriorityTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
+    return InkWell(
       onTap: onTap,
-      // ListTile reserves a fixed 40dp leading slot and then adds a separate
-      // 16dp horizontalTitleGap, so shrinking the avatar only grows the empty
-      // space inside the slot — the text never moves closer. Both have to come
-      // down together, and identically on every tile in this list.
-      minLeadingWidth: 36,
-      horizontalTitleGap: 10,
-      leading: AgentAvatar(agent: hit.agent.agent, radius: 18),
-      title: Text(
-        hit.agent.displayTitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        '${hit.server.name}  ·  ${hit.agent.gitLabel}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: scheme.onSurfaceVariant),
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (hit.starred)
-            const Padding(
-              padding: EdgeInsets.only(right: 6),
-              child: Icon(Icons.star, size: 15, color: Color(0xFFF5C043)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            AgentAvatar(agent: hit.agent.agent, radius: 18),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    hit.agent.displayTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${hit.server.name}  ·  ${hit.agent.gitLabel}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
             ),
-          // How long it has been like this. "Done" is a state; "Done · 4m" is a
-          // decision. This is the first screen you see, so the number belongs
-          // here more than anywhere.
-          AgentAge(
-            hit.agent.sinceLastActivity,
-            emphasize: hit.agent.agentStatus == AgentStatus.blocked,
-          ),
-          const SizedBox(width: 8),
-          StatusBadge(hit.agent.agentStatus),
-        ],
+            const SizedBox(width: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (hit.starred)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 6),
+                    child: Icon(Icons.star, size: 15, color: Color(0xFFF5C043)),
+                  ),
+                // How long it has been like this. "Done" is a state; "Done · 4m"
+                // is a decision. This is the first screen you see, so the number
+                // belongs here more than anywhere.
+                AgentAge(
+                  hit.agent.sinceLastActivity,
+                  emphasize: hit.agent.agentStatus == AgentStatus.blocked,
+                ),
+                const SizedBox(width: 8),
+                StatusBadge(hit.agent.agentStatus),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -277,15 +289,32 @@ class _PriorityEmpty extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
+    return InkWell(
       onTap: onManage,
-      leading: Icon(Icons.check_circle_outline, color: scheme.primary),
-      title: const Text('Nothing needs you'),
-      subtitle: Text(
-        'Blocked agents show up here automatically. Tap to star more.',
-        style: TextStyle(color: scheme.onSurfaceVariant),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(Icons.check_circle_outline, color: scheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Nothing needs you'),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Blocked agents show up here automatically. Tap to star more.',
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
       ),
-      trailing: const Icon(Icons.chevron_right),
     );
   }
 }
@@ -315,68 +344,75 @@ class _ServerTile extends StatelessWidget {
             .length ??
         0;
 
-    return ListTile(
+    return InkWell(
       onTap: onTap,
-      // Radius 18 to match AgentAvatar in the Priority rows above; the leading
-      // slot and title gap match for the same reason — the two sections read as
-      // one list, so they share a grid.
-      minLeadingWidth: 36,
-      horizontalTitleGap: 10,
-      leading: CircleAvatar(
-        radius: 18,
-        backgroundColor: server.isActive
-            ? scheme.primary
-            : scheme.surfaceContainerHighest,
-        child: Icon(
-          Icons.dns_outlined,
-          size: 20,
-          color: server.isActive ? scheme.onPrimary : scheme.onSurfaceVariant,
-        ),
-      ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              server.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: server.isActive
+                  ? scheme.primary
+                  : scheme.surfaceContainerHighest,
+              child: Icon(
+                Icons.dns_outlined,
+                size: 20,
+                color: server.isActive ? scheme.onPrimary : scheme.onSurfaceVariant,
+              ),
             ),
-          ),
-          if (server.isActive) ...[
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          server.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (server.isActive) ...[
+                        const SizedBox(width: 8),
+                        _ActivePill(scheme: scheme),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _hostLabel(server.baseUrl),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontFamily: AppTheme.monoFamily,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  _StatsLine(
+                    summary: summary,
+                    attention: attention,
+                    needsUpgrade: server.needsUpgrade,
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(width: 8),
-            _ActivePill(scheme: scheme),
-          ],
-        ],
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            _hostLabel(server.baseUrl),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontFamily: AppTheme.monoFamily,
-              fontSize: 12.5,
+            PopupMenuButton<String>(
+              onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'edit', child: Text('Edit')),
+                PopupMenuItem(value: 'delete', child: Text('Remove')),
+              ],
             ),
-          ),
-          const SizedBox(height: 2),
-          _StatsLine(
-            summary: summary,
-            attention: attention,
-            needsUpgrade: server.needsUpgrade,
-          ),
-        ],
-      ),
-      isThreeLine: true,
-      trailing: PopupMenuButton<String>(
-        onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'edit', child: Text('Edit')),
-          PopupMenuItem(value: 'delete', child: Text('Remove')),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -493,7 +529,7 @@ class _ActivePill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: scheme.primary.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: Radii.smAll,
       ),
       child: Text(
         'Active',

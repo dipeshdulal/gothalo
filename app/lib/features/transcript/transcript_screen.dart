@@ -13,6 +13,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
 import '../../core/widgets/accessory_button.dart';
 import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/pane_title.dart';
@@ -998,21 +999,25 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             itemBuilder: (ctx) => [
               const PopupMenuItem(
                 value: _AgentLifecycleAction.restart,
-                child: ListTile(
-                  leading: Icon(Icons.restart_alt),
-                  title: Text('Restart agent'),
-                  contentPadding: EdgeInsets.zero,
+                child: Row(
+                  children: [
+                    Icon(Icons.restart_alt),
+                    SizedBox(width: 12),
+                    Text('Restart agent'),
+                  ],
                 ),
               ),
               PopupMenuItem(
                 value: _AgentLifecycleAction.stop,
-                child: ListTile(
-                  leading: Icon(
-                    Icons.stop_circle_outlined,
-                    color: Theme.of(ctx).colorScheme.error,
-                  ),
-                  title: const Text('Stop agent'),
-                  contentPadding: EdgeInsets.zero,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.stop_circle_outlined,
+                      color: Theme.of(ctx).colorScheme.error,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('Stop agent'),
+                  ],
                 ),
               ),
             ],
@@ -1553,9 +1558,9 @@ class _OpenOptionsButton extends StatelessWidget {
     final accent = danger ? scheme.error : scheme.primary;
     return Material(
       color: accent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: Radii.smAll),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -1777,7 +1782,7 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
                         isDense: true,
                         hintText: 'Or type your answer…',
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: Radii.smAll,
                         ),
                       ),
                     ),
@@ -1828,13 +1833,13 @@ class _OptionRow extends StatelessWidget {
     return Material(
       color: bg,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
         side: primary
             ? BorderSide.none
             : BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -2126,7 +2131,6 @@ class _ComposerBar extends StatefulWidget {
 }
 
 class _ComposerBarState extends State<_ComposerBar> {
-  static const _green = Color(0xFF00C853);
   final FocusNode _focus = FocusNode();
   bool _hasText = false;
 
@@ -2176,10 +2180,10 @@ class _ComposerBarState extends State<_ComposerBar> {
               padding: const EdgeInsets.fromLTRB(4, 0, 16, 0),
               decoration: BoxDecoration(
                 color: scheme.surface,
-                borderRadius: BorderRadius.circular(26),
+                borderRadius: Radii.mdAll,
                 border: Border.all(
                   color: focused
-                      ? _green.withValues(alpha: 0.7)
+                      ? scheme.primary.withValues(alpha: 0.7)
                       : scheme.outlineVariant.withValues(alpha: 0.5),
                   width: focused ? 1.5 : 1,
                 ),
@@ -2222,7 +2226,7 @@ class _ComposerBarState extends State<_ComposerBar> {
             ),
           ),
           const SizedBox(width: 8),
-          // Prominent green paper-plane send.
+          // Prominent primary paper-plane send.
           _SendButton(
             enabled: enabled,
             active: _hasText,
@@ -2271,9 +2275,9 @@ class _AttachButton extends StatelessWidget {
   }
 }
 
-/// The circular green paper-plane send button. Full green when there's text to
-/// send, softer when the field is empty (a bare send is still valid — it accepts
-/// a blocked agent's default), muted when the composer is disabled.
+/// The circular primary paper-plane send button. Full accent when there's text
+/// to send, softer when the field is empty (a bare send is still valid — it
+/// accepts a blocked agent's default), muted when the composer is disabled.
 class _SendButton extends StatelessWidget {
   const _SendButton({
     required this.enabled,
@@ -2281,7 +2285,6 @@ class _SendButton extends StatelessWidget {
     required this.onTap,
   });
 
-  static const _green = Color(0xFF00C853);
   final bool enabled;
   final bool active;
   final Future<void> Function()? onTap;
@@ -2291,9 +2294,9 @@ class _SendButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final Color bg = !enabled
         ? scheme.surfaceContainerHighest
-        : (active ? _green : _green.withValues(alpha: 0.65));
+        : (active ? scheme.primary : scheme.primary.withValues(alpha: 0.65));
     final Color fg = enabled
-        ? Colors.white
+        ? scheme.onPrimary
         : scheme.onSurfaceVariant.withValues(alpha: 0.6);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 150),
@@ -3099,7 +3102,7 @@ class _AttachmentChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: Radii.smAll,
           border: Border.all(
             color: scheme.outlineVariant.withValues(alpha: 0.5),
           ),
@@ -3139,7 +3142,7 @@ class _RawEntry extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
