@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
+import '../../core/widgets/action_chip.dart';
+import '../../core/widgets/app_search_field.dart';
+import '../agents/widgets/agent_row.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../approvals/approve_action.dart';
@@ -21,8 +25,9 @@ class JumpFollowHost extends Notifier<bool> {
   void set(bool value) => state = value;
 }
 
-final jumpFollowHostProvider =
-    NotifierProvider<JumpFollowHost, bool>(JumpFollowHost.new);
+final jumpFollowHostProvider = NotifierProvider<JumpFollowHost, bool>(
+  JumpFollowHost.new,
+);
 
 /// The scopes of the Jump switcher's segmented control.
 enum _JumpScope { all, needsMe, working }
@@ -37,20 +42,96 @@ Future<void> showJumpSheet(BuildContext context, {String? currentPane}) {
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-    ),
-    builder: (_) => _JumpSheet(currentPane: currentPane, navContext: context),
+    // No shape override: the theme's bottomSheetTheme owns the radius, and the
+    // literal 18 that was here disagreed with it.
+    builder: (_) =>
+        _JumpSheetHost(navContext: context, currentPane: currentPane),
   );
 }
 
+/// Owns the sheet's [DraggableScrollableController].
+///
+/// It has to sit *above* the `DraggableScrollableSheet` to be attached to it,
+/// and the content below needs it too — focusing the search field resizes the
+/// sheet, which is not a drag. Holding it in the content, where it started,
+/// left it unattached and the resize silently did nothing.
+class _JumpSheetHost extends StatefulWidget {
+  const _JumpSheetHost({required this.navContext, this.currentPane});
+
+  final BuildContext navContext;
+  final String? currentPane;
+
+  @override
+  State<_JumpSheetHost> createState() => _JumpSheetHostState();
+}
+
+class _JumpSheetHostState extends State<_JumpSheetHost> {
+  final DraggableScrollableController _sheet =
+      DraggableScrollableController();
+
+  @override
+  void dispose() {
+    _sheet.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      controller: _sheet,
+      // Half the screen at rest. It used to open at 92% — near-full for a sheet
+      // you dismiss more often than you scroll. Now that the keyboard no longer
+      // takes over on open, half is enough to see the top results and decide,
+      // and the list itself is how you ask for more.
+      initialChildSize: kJumpRestingSize,
+      minChildSize: kJumpRestingSize,
+      maxChildSize: 1,
+      // Snap points, not free-floating: resting, most of the screen for
+      // browsing, and full.
+      snap: true,
+      snapSizes: const [kJumpBrowsingSize],
+      // Dragging below the resting size dismisses, which is the gesture people
+      // already use on every other sheet in the app.
+      shouldCloseOnMinExtent: true,
+      expand: false,
+      builder: (_, scrollController) => _JumpSheet(
+        currentPane: widget.currentPane,
+        navContext: widget.navContext,
+        scrollController: scrollController,
+        sheet: _sheet,
+      ),
+    );
+  }
+}
+
+/// Where the Jump sheet rests, as a fraction of the screen.
+const double kJumpRestingSize = 0.55;
+
+/// The stop between resting and full — "I am browsing now".
+const double kJumpBrowsingSize = 0.85;
+
 class _JumpSheet extends ConsumerStatefulWidget {
-  const _JumpSheet({required this.navContext, this.currentPane});
+  const _JumpSheet({
+    required this.navContext,
+    required this.scrollController,
+    required this.sheet,
+    this.currentPane,
+  });
+
+  /// The sheet's size controller, owned by [_JumpSheetHost] so it is actually
+  /// attached. Used to grow the sheet when the field takes focus.
+  final DraggableScrollableController sheet;
 
   /// The context of the screen that opened the sheet — used to navigate after
   /// the sheet pops (its own context is defunct by then).
   final BuildContext navContext;
+
+  /// The sheet's own controller. The results list **must** scroll on this one:
+  /// it is what makes dragging the list past its top grow the sheet instead of
+  /// doing nothing. Only the results take it — the search field and the filters
+  /// stay pinned above it.
+  final ScrollController scrollController;
+
   final String? currentPane;
 
   @override
@@ -63,8 +144,25 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
   _JumpScope _scope = _JumpScope.all;
   String _query = '';
 
+  /// Drives the sheet when something other than a drag should resize it.
+  @override
+  void initState() {
+    super.initState();
+    // Focusing the field raises the keyboard, which eats the bottom half of a
+    // half-height sheet and leaves the results in a sliver. Typing is the one
+    // time you want the sheet at full height, so it goes there itself.
+    _searchFocus.addListener(_onFocus);
+  }
+
+  void _onFocus() {
+    if (!_searchFocus.hasFocus || !widget.sheet.isAttached) return;
+    if (widget.sheet.size >= kJumpBrowsingSize) return;
+    widget.sheet.animateTo(1, duration: Motion.medium, curve: Motion.curve);
+  }
+
   @override
   void dispose() {
+    _searchFocus.removeListener(_onFocus);
     _search.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -83,10 +181,9 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
       if (client != null) {
         // Best-effort host focus — never blocks or fails the navigation.
         unawaited(
-          client.herdrCommand('pane.focus', {'pane_id': a.paneId}).then(
-            (_) {},
-            onError: (_) {},
-          ),
+          client
+              .herdrCommand('pane.focus', {'pane_id': a.paneId})
+              .then((_) {}, onError: (_) {}),
         );
       }
     }
@@ -100,22 +197,27 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
     final snap = ref.watch(snapshotControllerProvider).asData?.value;
     final agents = snap?.agents ?? const <Agent>[];
 
-    final wsById = {for (final w in snap?.workspaces ?? const []) w.workspaceId: w};
+    final wsById = {
+      for (final w in snap?.workspaces ?? const []) w.workspaceId: w,
+    };
     final tabById = {for (final t in snap?.tabs ?? const []) t.tabId: t};
 
     final items = [
       for (final a in agents)
         _JumpItem.from(a, wsById[a.workspaceId], tabById[a.tabId]),
     ];
-    final waiting =
-        agents.where((a) => a.agentStatus == AgentStatus.blocked).length;
+    final waiting = agents
+        .where((a) => a.agentStatus == AgentStatus.blocked)
+        .length;
 
     final scoped = switch (_scope) {
       _JumpScope.all => items,
-      _JumpScope.needsMe =>
-        items.where((i) => i.agent.agentStatus == AgentStatus.blocked),
-      _JumpScope.working =>
-        items.where((i) => i.agent.agentStatus == AgentStatus.working),
+      _JumpScope.needsMe => items.where(
+        (i) => i.agent.agentStatus == AgentStatus.blocked,
+      ),
+      _JumpScope.working => items.where(
+        (i) => i.agent.agentStatus == AgentStatus.working,
+      ),
     };
 
     final q = _query.trim();
@@ -150,39 +252,51 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: FractionallySizedBox(
-        heightFactor: 0.92,
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(2),
-              ),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(2),
             ),
-            _header(scheme, waiting),
-            _searchField(scheme),
-            _scopeBar(scheme),
-            _followRow(scheme),
-            const Divider(height: 1),
-            Expanded(
-              child: results.isEmpty
-                  ? _empty(scheme, q)
-                  : ListView.separated(
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      itemCount: results.length,
-                      separatorBuilder: (_, _) =>
-                          const Divider(height: 1, indent: 64),
-                      itemBuilder: (_, i) => _row(results[i]),
+          ),
+          _header(scheme, waiting),
+          _searchField(scheme),
+          _controls(scheme),
+          const SizedBox(height: Space.sm),
+          Expanded(
+            child: results.isEmpty
+                // Scrollable even when empty, so the sheet can still be
+                // dragged from the middle of it.
+                ? LayoutBuilder(
+                    builder: (_, box) => ListView(
+                      controller: widget.scrollController,
+                      children: [
+                        SizedBox(
+                          height: box.maxHeight,
+                          child: _empty(scheme, q),
+                        ),
+                      ],
                     ),
-            ),
-          ],
-        ),
+                  )
+                : ListView.builder(
+                    // The sheet's controller, not one of our own: this is the
+                    // wire that turns "scroll the list past its top" into
+                    // "grow the sheet".
+                    controller: widget.scrollController,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.symmetric(vertical: Space.sm),
+                    itemCount: results.length,
+                    // No separators: each row is a panel held by its own
+                    // hairline, like every other agent list in the app.
+                    itemBuilder: (_, i) => _row(results[i]),
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -222,28 +336,47 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
     );
   }
 
-  /// The opt-in "also focus this pane on the host" toggle, on its own line so a
-  /// long label can never crowd the header on a narrow phone.
-  Widget _followRow(ColorScheme scheme) {
+  /// The filters, plus the opt-in "also focus this pane on the host" toggle —
+  /// one scrollable line of the app's own chips.
+  ///
+  /// The filters were a Material `SegmentedButton` (an outlined pill with a
+  /// filled selection) and Follow was an outlined `FilterChip`: two Material
+  /// components in a sheet where everything else is a flat hairline-edged chip.
+  /// They are the shared [AppActionChip] now, selection marked by an accent
+  /// edge rather than a fill, so colour stays on status. Follow sits after the
+  /// filters and reads as what it is — a mode, not a fourth filter — because it
+  /// keeps its own glyph.
+  Widget _controls(ColorScheme scheme) {
     final follow = ref.watch(jumpFollowHostProvider);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Row(
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: Space.xl),
         children: [
-          const Spacer(),
-          FilterChip(
-            selected: follow,
-            showCheckmark: false,
-            visualDensity: VisualDensity.compact,
-            avatar: Icon(
-              Icons.desktop_windows_outlined,
-              size: 16,
-              color:
-                  follow ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
+          for (final (scope, label) in const [
+            (_JumpScope.all, 'All'),
+            (_JumpScope.needsMe, 'Needs me'),
+            (_JumpScope.working, 'Working'),
+          ]) ...[
+            Center(
+              child: _SelectableChip(
+                label: label,
+                selected: _scope == scope,
+                onTap: () => setState(() => _scope = scope),
+              ),
             ),
-            label: const Text('Follow on host'),
-            labelStyle: const TextStyle(fontSize: 12),
-            onSelected: (v) => ref.read(jumpFollowHostProvider.notifier).set(v),
+            const SizedBox(width: Space.sm),
+          ],
+          const SizedBox(width: Space.md),
+          Center(
+            child: _SelectableChip(
+              icon: Icons.desktop_windows_outlined,
+              label: 'Follow on host',
+              selected: follow,
+              onTap: () =>
+                  ref.read(jumpFollowHostProvider.notifier).set(!follow),
+            ),
           ),
         ],
       ),
@@ -253,149 +386,39 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
   Widget _searchField(ColorScheme scheme) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: TextField(
+      // The shared field. It was this screen's own decoration, and the look was
+      // good enough that it became the app's — so it now lives in the theme and
+      // in [AppSearchField], and this call site declares nothing about it.
+      //
+      // Not autofocused: opening the sheet used to raise the keyboard
+      // immediately, covering about half the screen and leaving three and a
+      // half results visible. Jump is mostly for *scanning*, so it opens with
+      // the list at full height and tapping the field is how you get a keyboard.
+      child: AppSearchField(
         controller: _search,
         focusNode: _searchFocus,
-        autofocus: true,
-        textInputAction: TextInputAction.search,
+        hintText: 'Search agents, files, projects…',
         onChanged: (v) => setState(() => _query = v),
-        decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: scheme.surfaceContainerHighest,
-          hintText: 'Search agents, files, workspaces…',
-          prefixIcon: const Icon(Icons.search, size: 20),
-          suffixIcon: _query.isEmpty
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.clear, size: 18),
-                  onPressed: () {
-                    _search.clear();
-                    setState(() => _query = '');
-                    _searchFocus.requestFocus();
-                  },
-                ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-        ),
       ),
     );
   }
 
-  Widget _scopeBar(ColorScheme scheme) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      child: SizedBox(
-        width: double.infinity,
-        child: SegmentedButton<_JumpScope>(
-          showSelectedIcon: false,
-          style: const ButtonStyle(
-            visualDensity: VisualDensity.compact,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          segments: const [
-            ButtonSegment(value: _JumpScope.all, label: Text('All')),
-            ButtonSegment(value: _JumpScope.needsMe, label: Text('Needs me')),
-            ButtonSegment(value: _JumpScope.working, label: Text('Working')),
-          ],
-          selected: {_scope},
-          onSelectionChanged: (s) => setState(() => _scope = s.first),
-        ),
-      ),
-    );
-  }
-
+  /// One result — the shared [AgentRow], not a fifth agent row.
+  ///
+  /// This was the last screen carrying its own: an avatar with an overlaid
+  /// status dot, a trailing chevron, no status mark, and a context line that
+  /// truncated to a bare "· 1". Jump's own additions ride as flags: the
+  /// [AgentRow.trailing] slot marks the agent you are already in, and a blocked
+  /// agent keeps the quick-approve it always had.
   Widget _row(_JumpItem item) {
-    final scheme = Theme.of(context).colorScheme;
     final a = item.agent;
     final isCurrent = a.paneId == widget.currentPane;
-
-    return InkWell(
+    return AgentRow(
+      agent: a,
       onTap: () => _jumpTo(item),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: [
-            _AvatarWithDot(agent: a.agent, status: a.agentStatus),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14.5,
-                    ),
-                  ),
-                  if (item.contextLine.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      item.contextLine,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.onSurfaceVariant,
-                        fontFamily: AppTheme.monoFamily,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            _trailing(item, isCurrent, scheme),
-          ],
-        ),
-      ),
+      trailing: isCurrent ? const _CurrentMark() : null,
+      onApprove: isCurrent ? null : () => approveAgent(context, ref, a),
     );
-  }
-
-  Widget _trailing(_JumpItem item, bool isCurrent, ColorScheme scheme) {
-    if (isCurrent) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: scheme.primaryContainer,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.my_location, size: 13, color: scheme.onPrimaryContainer),
-            const SizedBox(width: 4),
-            Text(
-              'Current',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: scheme.onPrimaryContainer,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    if (item.agent.agentStatus == AgentStatus.blocked) {
-      // Quick-approve without leaving the sheet.
-      return FilledButton.tonal(
-        style: FilledButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          minimumSize: const Size(0, 34),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-        onPressed: () => approveAgent(context, ref, item.agent),
-        child: const Text('Approve'),
-      );
-    }
-    return Icon(Icons.chevron_right, color: scheme.onSurfaceVariant);
   }
 
   Widget _empty(ColorScheme scheme, String q) {
@@ -444,11 +467,11 @@ class _JumpItem {
     if (git.project.isNotEmpty) parts.add(git.project);
     final branch = a.branchName;
     if (branch != null && branch.isNotEmpty) parts.add(branch);
-    if (tabLabel.isNotEmpty) {
-      parts.add(tabLabel);
-    } else if (tab != null && tab.number > 0) {
-      parts.add('tab ${tab.number}');
-    }
+    // A tab the user has *named* is a name they chose, so it earns a place on
+    // the context line. An unnamed one used to fall back to "tab 3", which named
+    // Herdr's container rather than anything about the agent — dropped, not
+    // renamed: there is nothing to say there.
+    if (tabLabel.isNotEmpty) parts.add(tabLabel);
     if (!a.isDefaultSession) parts.add(a.sessionName);
 
     final hay = [
@@ -514,37 +537,93 @@ int? _fuzzyScore(String q, String t) {
 /// The agent avatar with a live status dot in the corner — the dot's colour is
 /// driven by the snapshot (which is live off `WS /events`), so it updates as the
 /// agent's state changes.
-class _AvatarWithDot extends StatelessWidget {
-  const _AvatarWithDot({required this.agent, required this.status});
 
-  final String agent;
-  final AgentStatus status;
+/// "You are already here" — the marker on the row for [_JumpSheet.currentPane].
+///
+/// A small mono tag in the [AgentRow.trailing] slot rather than a filled
+/// primary-container pill, which was the last stadium shape in this sheet.
+class _CurrentMark extends StatelessWidget {
+  const _CurrentMark();
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dot = status.colors(scheme).fg;
-    return SizedBox(
-      width: 40,
-      height: 40,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          AgentAvatar(agent: agent, radius: 18),
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: dot,
-                shape: BoxShape.circle,
-                border: Border.all(color: scheme.surface, width: 2),
-              ),
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.my_location, size: 12, color: scheme.primary),
+        const SizedBox(width: 4),
+        Text(
+          'HERE',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8,
+            color: scheme.primary,
+          ).mono,
+        ),
+      ],
+    );
+  }
+}
+
+/// A chip that is on or off, for Jump's filters and its host-follow toggle.
+///
+/// [AppActionChip] with a selected state: the accent goes on the edge and the
+/// label, never the fill, so colour still means status everywhere else.
+class _SelectableChip extends StatelessWidget {
+  const _SelectableChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (!selected) {
+      return AppActionChip(
+        icon: icon ?? Icons.filter_list,
+        label: label,
+        onTap: onTap,
+      );
+    }
+    return Material(
+      type: MaterialType.transparency,
+      borderRadius: Radii.smAll,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 32),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: scheme.panelFillRaised,
+            borderRadius: Radii.smAll,
+            border: Border.all(color: scheme.primary),
           ),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon ?? Icons.check, size: 15, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: scheme.primary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

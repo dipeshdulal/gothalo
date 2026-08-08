@@ -4,22 +4,33 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
+import '../../core/naming.dart';
 import '../../core/theme.dart';
-import '../../core/widgets/live_activity_line.dart';
+import '../../core/tokens.dart';
+import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../../core/widgets/action_chip.dart';
+import '../agents/agent_groups.dart';
+import '../agents/start_agent_sheet.dart';
+import '../agents/widgets/agent_sections.dart';
 import '../approvals/approve_action.dart';
 import '../jump/jump_sheet.dart';
+import '../herdr_actions.dart';
+import '../overview/overview_screen.dart' show spaceCwdOf;
 import '../push/enable_push_banner.dart';
+import '../worktrees/new_worktree_sheet.dart';
+import '../servers/add_edit_server_sheet.dart';
 import '../spaces/open_space_sheet.dart';
 import 'inbox_providers.dart';
-import 'widgets/agent_avatar.dart';
-import 'widgets/status_badge.dart';
 
-/// The inbox for the active server, structured like Herdr's sidebar: an
-/// **Agents** tab (every agent, attention-first) and a **Spaces** tab (agents
-/// grouped by workspace). Pull to refresh on either. Tapping a row opens its
-/// (stubbed) terminal.
+/// The flock for the active server: an **Agents** tab (every agent,
+/// attention-first) and a **Projects** tab (what is checked out on this
+/// machine, one row per repo/branch). Pull to refresh on either. Tapping an
+/// agent opens its chat; tapping a project opens it.
+///
+/// Herdr calls the second thing a workspace, or a space. The app does not —
+/// see `lib/core/naming.dart` for the whole of that mapping.
 class InboxScreen extends ConsumerWidget {
   const InboxScreen({super.key});
 
@@ -27,6 +38,15 @@ class InboxScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final snapshot = ref.watch(snapshotControllerProvider);
     final connection = ref.watch(activeConnectionProvider).asData?.value;
+    // The shared agent list is written against a (server, agent) pair, because
+    // home's spans several servers. Here there is exactly one, so it is lifted
+    // from the active connection rather than looked up again.
+    final summary = ServerSummary(
+      id: connection?.id ?? '',
+      name: connection?.name ?? '',
+      baseUrl: connection?.baseUrl ?? '',
+      isActive: true,
+    );
 
     return AppBackground(
       asset: Backgrounds.flock,
@@ -73,29 +93,18 @@ class InboxScreen extends ConsumerWidget {
                   _FlockMenuAction.timeline => context.push('/timeline'),
                   _FlockMenuAction.editServer => connection == null
                       ? null
-                      : context.push('/servers/${connection.id}/edit'),
+                      : showEditServerSheet(context, connection.id),
                 },
+                // Only what the chip row above does not already carry — the
+                // end state is chips for the frequent things and a short menu
+                // for the rest, not both holding the same list.
                 itemBuilder: (context) => [
-                  // Also reachable from the empty state, which is where it
-                  // matters most; here so it does not disappear the moment the
-                  // server has one space open.
-                  const PopupMenuItem(
-                    value: _FlockMenuAction.openSpace,
-                    child: _MenuRow(
-                      icon: Icons.create_new_folder_outlined,
-                      label: 'Open a project',
-                    ),
-                  ),
                   const PopupMenuItem(
                     value: _FlockMenuAction.overview,
                     child: _MenuRow(
                       icon: Icons.dashboard_outlined,
-                      label: 'Overview',
+                      label: 'All projects',
                     ),
-                  ),
-                  const PopupMenuItem(
-                    value: _FlockMenuAction.timeline,
-                    child: _MenuRow(icon: Icons.history, label: 'Activity'),
                   ),
                   if (connection != null)
                     const PopupMenuItem(
@@ -116,7 +125,7 @@ class InboxScreen extends ConsumerWidget {
                 ),
                 Tab(
                   text:
-                      'Spaces${_countSuffix(snapshot, (s) => s.workspaces.length)}',
+                      'Projects${_countSuffix(snapshot, (s) => s.workspaces.length)}',
                 ),
               ],
             ),
@@ -124,6 +133,7 @@ class InboxScreen extends ConsumerWidget {
           body: Column(
             children: [
               const EnablePushBanner(),
+              _QuickActions(snapshot: snapshot),
               Expanded(
                 child: snapshot.when(
                   skipLoadingOnRefresh: true,
@@ -135,11 +145,11 @@ class InboxScreen extends ConsumerWidget {
                     children: [
                       _Refreshable(
                         ref: ref,
-                        child: _AgentsTab(snap: snap),
+                        child: _AgentsTab(snap: snap, server: summary),
                       ),
                       _Refreshable(
                         ref: ref,
-                        child: _SpacesTab(snap: snap),
+                        child: _ProjectsTab(snap: snap),
                       ),
                     ],
                   ),
@@ -155,6 +165,115 @@ class InboxScreen extends ConsumerWidget {
   String _countSuffix(AsyncValue<Snapshot> snap, int Function(Snapshot) count) {
     final s = snap.asData?.value;
     return s == null ? '' : '  ${count(s)}';
+  }
+}
+
+/// The frequent actions, as a single scrollable line of chips above the tabs.
+///
+/// They were all in the ⋮ overflow and the project screen's + menu, which is
+/// the same complaint the whole rework is about: the useful thing is two taps
+/// and a hunt away. Nothing here is new — every chip is an action this screen
+/// or its project pages already offered.
+///
+/// **A chip that cannot act is not shown**, which is the rule the suggestions
+/// bar already follows. "Start an agent" and "New terminal" need a project to
+/// put them in, so they appear only once Herdr has one focused; with nothing
+/// open the row is just "Open a project", which is the only thing there is to
+/// do. It renders the shared [AppActionChip] rather than a second chip style.
+class _QuickActions extends ConsumerWidget {
+  const _QuickActions({required this.snapshot});
+
+  final AsyncValue<Snapshot> snapshot;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final snap = snapshot.asData?.value;
+    // The project actions need a target. Herdr focuses one workspace; that is
+    // the one "here" means on a screen that is not scoped to a project.
+    WorkspaceInfo? focused;
+    for (final w in snap?.workspaces ?? const <WorkspaceInfo>[]) {
+      if (w.focused) {
+        focused = w;
+        break;
+      }
+    }
+    focused ??= (snap?.workspaces.length == 1)
+        ? snap!.workspaces.first
+        : null;
+
+    final panes = focused == null
+        ? const <Pane>[]
+        : (snap?.panes.where((p) => p.workspaceId == focused!.workspaceId)
+                  .toList() ??
+              const <Pane>[]);
+    final cwd = focused == null ? '' : spaceCwdOf(focused, panes);
+    final project = focused == null
+        ? ''
+        : projectOf(focused, cwd).project;
+
+    final chips = <Widget>[
+      if (focused != null)
+        AppActionChip(
+          icon: Icons.rocket_launch_outlined,
+          label: 'Start agent',
+          // Named on purpose. This screen covers every project on the server,
+          // so a bare "Start agent" would silently pick one of eleven. The chip
+          // acts on the project Herdr has focused, and says which.
+          detail: 'in $project',
+          onTap: () => showStartAgentSheet(
+            context,
+            ref,
+            target: StartAgentTarget(
+              placement: StartAgentPlacement.newTab,
+              id: focused!.workspaceId,
+              where: 'A new tab in $project',
+              defaultCwd: cwd,
+            ),
+          ),
+        ),
+      if (focused != null)
+        AppActionChip(
+          icon: Icons.terminal,
+          label: 'New terminal',
+          onTap: () => newTerminal(context, ref, focused!.workspaceId),
+        ),
+      // Needs a checkout to branch from, so it is absent for a project that is
+      // not a git repo.
+      if (focused != null && cwd.isNotEmpty)
+        AppActionChip(
+          icon: Icons.call_split,
+          label: 'Start new work',
+          onTap: () => showNewWorktreeSheet(
+            context,
+            ref,
+            cwd: cwd,
+            repoLabel: project,
+          ),
+        ),
+      AppActionChip(
+        icon: Icons.create_new_folder_outlined,
+        label: 'Open a project',
+        onTap: () => showOpenSpaceSheet(context),
+      ),
+      AppActionChip(
+        icon: Icons.history,
+        label: 'Activity',
+        onTap: () => context.push('/timeline'),
+      ),
+    ];
+
+    return SizedBox(
+      // One line, never two: this round is spent compacting rows, and a chip
+      // row that wraps gives the saving straight back.
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+        itemCount: chips.length,
+        separatorBuilder: (_, _) => const SizedBox(width: Space.sm),
+        itemBuilder: (_, i) => Center(child: chips[i]),
+      ),
+    );
   }
 }
 
@@ -195,39 +314,66 @@ class _Refreshable extends StatelessWidget {
   }
 }
 
-/// Flat, attention-first list of every agent.
-class _AgentsTab extends StatelessWidget {
-  const _AgentsTab({required this.snap});
+/// This server's agents, under the same state headings home uses.
+///
+/// It used to be a flat list with its own tile, so the same agent looked like a
+/// different thing depending on whether you got here from home or from the
+/// server. It now calls [buildAgentSections] — the identical grouping, the
+/// identical rows, the identical idle compaction — with the server name left
+/// off, since every row here is on the server named in the header.
+///
+/// Ordering is unchanged: the groups are in attention order and each group is
+/// sorted by `Agent.byAttentionThenRecency`, which is the bridge's
+/// `attention_rank` first and `recency_rank`/`last_activity_ts` within it.
+class _AgentsTab extends ConsumerWidget {
+  const _AgentsTab({required this.snap, required this.server});
+
   final Snapshot snap;
 
+  /// The server every agent here belongs to. Carried so the shared row and the
+  /// shared grouping get the same shape they get on home.
+  final ServerSummary server;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (snap.agents.isEmpty) {
-      return _EmptyState(spacesOpen: snap.workspaces.isNotEmpty);
+      return _EmptyState(projectsOpen: snap.workspaces.isNotEmpty);
     }
-    final agents = snap.agentsSorted;
-    return ListView.separated(
+    final groups = groupAgents([
+      for (final a in snap.agents) ServerAgentHit(server, a),
+    ]);
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: agents.length,
-      separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-      itemBuilder: (context, i) => _AgentTile(agent: agents[i]),
+      padding: const EdgeInsets.only(bottom: Space.xl),
+      children: buildAgentSections(
+        context,
+        ref,
+        groups: groups,
+        // Implied by the screen — this is one server's flock.
+        showServer: false,
+        showActivity: true,
+        onApprove: (hit) => approveAgent(context, ref, hit.agent),
+        onOpen: (hit) => context.push(
+          '/transcript/${Uri.encodeComponent(hit.agent.paneId)}',
+        ),
+      ),
     );
   }
 }
 
-/// Agents grouped by project (repo folder), merging a project's main checkout
-/// with its worktrees. Herdr's raw `w5`/`w8` workspace ids are demoted to a
-/// subtle per-row detail.
-class _SpacesTab extends StatelessWidget {
-  const _SpacesTab({required this.snap});
+/// The server's projects — one row per Herdr workspace, named for the repo it
+/// is checked out at and the branch it is on. A project's main checkout sorts
+/// above its worktrees, which reads as the worktrees belonging under it.
+/// Herdr's raw `w5`/`w8` workspace ids never appear.
+class _ProjectsTab extends StatelessWidget {
+  const _ProjectsTab({required this.snap});
   final Snapshot snap;
 
   @override
   Widget build(BuildContext context) {
-    if (snap.workspaces.isEmpty) return const _EmptyState(spacesOpen: false);
+    if (snap.workspaces.isEmpty) return const _EmptyState(projectsOpen: false);
     // Representative cwd per workspace (from its first pane) → git context, so
-    // worktrees sort right under their parent project.
+    // worktrees can be gathered under the repo they belong to.
     final cwdByWs = <String, String>{};
     for (final p in snap.panes) {
       cwdByWs.putIfAbsent(p.workspaceId, () => p.cwd);
@@ -235,309 +381,397 @@ class _SpacesTab extends StatelessWidget {
     ({String project, String? worktree}) git(WorkspaceInfo w) =>
         gitContextForCwd(cwdByWs[w.workspaceId] ?? '');
 
-    final spaces = [...snap.workspaces]
-      ..sort((a, b) {
-        final ca = git(a), cb = git(b);
-        final p = ca.project.toLowerCase().compareTo(cb.project.toLowerCase());
-        if (p != 0) return p;
-        final wa = ca.worktree == null ? 0 : 1;
-        final wb = cb.worktree == null ? 0 : 1;
-        if (wa != wb) return wa - wb; // main checkout before its worktrees
+    // How many agents and how many terminals each project holds — the two
+    // things it is actually made of, in place of the pane/tab counts, which
+    // named Herdr's containers rather than their contents.
+    final agentPanes = snap.agentPaneIds;
+    final agents = <String, int>{};
+    final terminals = <String, int>{};
+    for (final p in snap.panes) {
+      final bucket = agentPanes.contains(p.paneId) ? agents : terminals;
+      bucket.update(p.workspaceId, (n) => n + 1, ifAbsent: () => 1);
+    }
+
+    // Grouped by repo, not listed flat. A repo and its worktrees were siblings
+    // separated by a 12dp indent, which read as a flat list with odd spacing
+    // rather than as "this project, and three branches of it". Now the group is
+    // the unit: one panel, the checkout as its header, the branches on a rail
+    // beneath it.
+    final groups = <String, List<WorkspaceInfo>>{};
+    for (final w in snap.workspaces) {
+      groups.putIfAbsent(git(w).project, () => []).add(w);
+    }
+    final repos = groups.keys.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    for (final list in groups.values) {
+      list.sort((a, b) {
+        // The main checkout heads its own group; worktrees follow in order.
+        final wa = git(a).worktree == null ? 0 : 1;
+        final wb = git(b).worktree == null ? 0 : 1;
+        if (wa != wb) return wa - wb;
         return a.number.compareTo(b.number);
       });
+    }
 
-    return ListView.separated(
+    // One panel for the whole list, not one per project. Ten outlined boxes
+    // stacked (plus an eleventh nested round the group) is the border-density
+    // problem again: the edge is right, there were too many of them. A repo's
+    // group is now a *region* inside the single panel, marked by the rail down
+    // its children rather than by a box of its own.
+    final rows = <Widget>[];
+    // Only the boundary between one project and the next gets a line. Inside a
+    // group the rail does the work — a full-bleed separator cutting across it
+    // was two systems claiming the same space, which is what read as odd.
+    final boundaries = <int>{};
+    for (final repo in repos) {
+      final members = groups[repo]!;
+      if (rows.isNotEmpty) boundaries.add(rows.length);
+      final name = repo.isEmpty ? 'Untitled' : repo;
+      final hasCheckout = members.any((w) => git(w).worktree == null);
+      if (!hasCheckout) rows.add(_RepoHeader(repo: name));
+      for (var i = 0; i < members.length; i++) {
+        final w = members[i];
+        rows.add(
+          _ProjectTile(
+            repo: name,
+            space: w,
+            branch: git(w).worktree,
+            agents: agents[w.workspaceId] ?? 0,
+            terminals: terminals[w.workspaceId] ?? 0,
+            child: git(w).worktree != null,
+            last: i == members.length - 1,
+          ),
+        );
+      }
+    }
+
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: spaces.length,
-      separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-      itemBuilder: (context, i) =>
-          _SpaceTile(space: spaces[i], git: git(spaces[i])),
-    );
-  }
-}
-
-/// One space (workspace). Worktree spaces are marked with a branch icon and
-/// indented under their parent project. Tapping opens the space's overview.
-class _SpaceTile extends StatelessWidget {
-  const _SpaceTile({required this.space, required this.git});
-  final WorkspaceInfo space;
-  final ({String project, String? worktree}) git;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final isWt = git.worktree != null;
-    final label = isWt
-        ? git.worktree!
-        : (space.label.isNotEmpty
-              ? space.label
-              : (space.workspaceId.isEmpty ? 'Ungrouped' : space.workspaceId));
-    final blocked = space.agentStatus == AgentStatus.blocked;
-    // The old list was over-bold (w600); dropping to w500 is the real fix for
-    // that. A worktree name additionally gets teal + mono (it's a branch ref);
-    // a plain project name stays in the UI font — all-mono everywhere read as
-    // too much.
-    final nameColor = isWt ? scheme.primary : scheme.onSurface;
-    return ListTile(
-      onTap: () => context
-          .push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
-      contentPadding: EdgeInsets.only(left: isWt ? 28 : 16, right: 12),
-      leading: Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: space.focused
-              ? scheme.primary.withValues(alpha: 0.18)
-              : scheme.surfaceContainerHighest,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          isWt ? Icons.call_split : Icons.folder_outlined,
-          size: 18,
-          color: space.focused
-              ? scheme.primary
-              : (isWt ? scheme.primary : scheme.onSurfaceVariant),
-        ),
-      ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                // Mono only for a worktree name — it's literally a branch, and
-                // the teal-mono pairing reads as "this is a git ref". A project
-                // name is just a directory label, so it stays in the UI font;
-                // all-mono everywhere felt off. Weight is the lighter fix for
-                // the "too bold" complaint, not the font.
-                fontFamily: isWt ? AppTheme.monoFamily : null,
-                fontWeight: FontWeight.w500,
-                fontSize: isWt ? 14.5 : 15,
-                color: nameColor,
-              ),
-            ),
-          ),
-          // The focused space on the host — the "you are here" marker, matching
-          // the overview's own focused indicator.
-          if (space.focused) ...[
-            const SizedBox(width: 8),
-            Icon(Icons.my_location, size: 13, color: scheme.primary),
-          ],
-          if (blocked) ...[
-            const SizedBox(width: 8),
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: scheme.error,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ],
-        ],
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Text(
-          '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'} · ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 12.5,
-            color: scheme.onSurfaceVariant,
-          ),
-        ),
-      ),
-      trailing: Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
-    );
-  }
-}
-
-class _AgentTile extends ConsumerWidget {
-  const _AgentTile({required this.agent});
-
-  final Agent agent;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final hasBranch = agent.hasBranch;
-    final dim = scheme.onSurfaceVariant;
-    final showFolder = agent.gitContext.project.isNotEmpty;
-
-    return InkWell(
-      onTap: () =>
-          context.push('/transcript/${Uri.encodeComponent(agent.paneId)}'),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AgentAvatar(agent: agent.agent),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // The task itself — the star of the row. Up to two lines so
-                      // long Herdr titles stay readable instead of hard-truncating.
-                      Text(
-                        agent.displayTitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                          height: 1.25,
-                        ),
-                      ),
-                      // Project folder + branch/worktree (teal) each on their own
-                      // full-width line so long names ellipsize instead of
-                      // overflowing. Internal ids (pane, workspace) are not shown —
-                      // the pane id is still used under the hood for navigation.
-                      if (showFolder) ...[
-                        const SizedBox(height: 6),
-                        _GitLine(
-                          icon: Icons.folder_outlined,
-                          text: agent.gitContext.project,
-                          color: dim,
-                        ),
-                      ],
-                      if (hasBranch) ...[
-                        SizedBox(height: showFolder ? 3 : 6),
-                        _GitLine(
-                          icon: Icons.call_split,
-                          text: agent.branchName ?? '',
-                          color: scheme.primary,
-                          bold: true,
-                        ),
-                      ],
-                      // Which Herdr session hosts this agent; the default session
-                      // is implied and not shown.
-                      if (!agent.isDefaultSession) ...[
-                        SizedBox(height: (showFolder || hasBranch) ? 3 : 6),
-                        _GitLine(
-                          icon: Icons.layers_outlined,
-                          text: agent.sessionName,
-                          color: dim,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    const SizedBox(height: 2),
-                    StatusBadge(agent.agentStatus),
-                    // One-tap approve for a blocked agent (D7/D8). The bridge picks
-                    // the confirm keystroke and no-ops a stale tap.
-                    if (agent.agentStatus == AgentStatus.blocked) ...[
-                      const SizedBox(height: 8),
-                      FilledButton.tonal(
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          minimumSize: const Size(0, 32),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        onPressed: () => approveAgent(context, ref, agent),
-                        child: const Text('Approve'),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-            // "What's it doing right now" — only for a working agent; an
-            // idle/blocked/done one has nothing that changes to poll for.
-            // On its own row below the title/status Row (not squeezed beside
-            // the status badge, which can be wide enough to truncate it to
-            // nothing), but indented to line up under the title text rather
-            // than running back under the avatar — the avatar column is the
-            // row's visual gutter, so this reads as "part of this agent" only
-            // when it aligns with the agent's text, not the artwork.
-            // No extra top gap here — LiveActivityLine carries its own small
-            // top padding, so a SizedBox on top of that just double-spaced it.
-            // Shown for every status, not just working: a settled agent's last
-            // message is the most useful thing a tile can carry, and the line
-            // is now served from the agent's transcript rather than a costly
-            // scrollback read. LiveActivityLine polls only while working.
-            Padding(
-              // avatar diameter (radius 20 * 2) + the 12px gap to the title.
-              padding: const EdgeInsets.only(left: 52),
-              child: LiveActivityLine(
-                paneId: agent.paneId,
-                status: agent.agentStatus,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A full-width monospace metadata line (leading icon + text), used for the
-/// project folder and branch on an agent row. The text takes the remaining
-/// width and ellipsizes, so a long branch name never overflows the row.
-class _GitLine extends StatelessWidget {
-  const _GitLine({
-    required this.icon,
-    required this.text,
-    required this.color,
-    this.bold = false,
-  });
-
-  final IconData icon;
-  final String text;
-  final Color color;
-  final bool bold;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
+      padding: const EdgeInsets.symmetric(vertical: Space.md),
       children: [
-        Icon(icon, size: 13, color: color),
-        const SizedBox(width: 5),
-        Expanded(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: color,
-              fontFamily: AppTheme.monoFamily,
-              fontSize: 12,
-              fontWeight: bold ? FontWeight.w500 : FontWeight.w400,
-            ),
-          ),
-        ),
+        PanelList(rows: rows, dividerBefore: boundaries.contains),
       ],
     );
   }
 }
 
+/// The repo's name when its own checkout is not open — a label, not a row you
+/// can tap, because there is nothing behind it to open.
+class _RepoHeader extends StatelessWidget {
+  const _RepoHeader({required this.repo});
+
+  final String repo;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(11, 9, 11, 7),
+      child: Row(
+        children: [
+          Icon(
+            Icons.folder_outlined,
+            size: 15,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: Space.md),
+          Flexible(
+            child: Text(
+              repo,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 13.5,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One checkout — the repo itself, or one of its worktrees.
+///
+/// A child is **indented** and the rail runs down the gutter that indent
+/// creates, with a short elbow into the branch glyph. Before, the child's
+/// content started at nearly the parent's own x and only the glyph hinted at
+/// subordination; the rail also overlapped the text rather than living beside
+/// it. Now the offset and the drawn line say the same thing, and the rail stops
+/// at the last child rather than dangling past it.
+class _ProjectTile extends StatelessWidget {
+  const _ProjectTile({
+    required this.repo,
+    required this.space,
+    required this.branch,
+    required this.agents,
+    required this.terminals,
+    required this.child,
+    required this.last,
+  });
+
+  final String repo;
+  final WorkspaceInfo space;
+
+  /// The branch this checkout is on, or null for the repo's own checkout.
+  final String? branch;
+  final int agents;
+  final int terminals;
+
+  /// Drawn as a worktree hanging off the repo above it.
+  final bool child;
+
+  /// The last row of its group — the rail stops halfway rather than running on
+  /// into the next project.
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final blocked = space.agentStatus == AgentStatus.blocked;
+
+    return InkWell(
+      onTap: () =>
+          context.push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
+      child: Container(
+        // The repo's own checkout is the group's head, so it carries the raised
+        // fill; its branches sit on the resting one. Fill, weight, indent and
+        // rail all say the same thing at once — any one alone was not carrying
+        // it, which is why two earlier rounds of "indent it more" did not read.
+        color: child ? null : scheme.panelFillRaised,
+        // Children sit tighter than their parent. A group has to look denser
+        // than the list it is part of, or it reads as three peers that happen
+        // to share a name — which is what the rail alone was not fixing.
+        padding: EdgeInsets.fromLTRB(child ? 0 : 11, child ? 5 : 9, 8,
+            child ? 5 : 9),
+        child: Row(
+          children: [
+            if (child)
+              // The gutter: the rail lives here, beside the content rather than
+              // under it.
+              SizedBox(
+                width: _railGutter,
+                height: 18,
+                child: CustomPaint(
+                  painter: _RailPainter(
+                    color: scheme.hairlineStrong,
+                    last: last,
+                  ),
+                ),
+              ),
+            Icon(
+              child ? Icons.call_split : Icons.folder_outlined,
+              size: child ? 13 : 15,
+              color: child ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            SizedBox(width: child ? 6 : Space.md),
+            // The identifier takes every pixel the counts do not need, and is
+            // the last thing to truncate — it is what tells one row from
+            // another.
+            Expanded(
+              child: Text(
+                child ? branch! : repo,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: child
+                    ? TextStyle(
+                        fontSize: 12.5,
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w500,
+                      ).mono
+                    : const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5,
+                      ),
+              ),
+            ),
+            // The focused project on the host — the "you are here" marker.
+            if (space.focused) ...[
+              const SizedBox(width: Space.md),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary,
+                ),
+              ),
+            ],
+            if (blocked) ...[
+              const SizedBox(width: Space.md),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.error,
+                ),
+              ),
+            ],
+            const SizedBox(width: Space.md),
+            // Fixed width, right-aligned: the column is a straight edge rather
+            // than a function of how much happens to be open in each project.
+            SizedBox(
+              width: _countColumn,
+              child: _Contents(agents: agents, terminals: terminals),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// How much a worktree row is indented, and therefore how much room the rail
+/// has to live in without touching the text.
+const double _railGutter = 30;
+
+/// The rail down a group's children, and the elbow into each one.
+class _RailPainter extends CustomPainter {
+  const _RailPainter({required this.color, required this.last});
+
+  final Color color;
+
+  /// The last child: the vertical stops at the elbow instead of carrying on
+  /// into whatever follows the group.
+  final bool last;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    const x = 18.0;
+    final mid = size.height / 2;
+    // Up past the top of this row, so the line joins the row above with no gap
+    // — there are no separators inside a group for it to collide with.
+    canvas.drawLine(Offset(x, -14), Offset(x, last ? mid : size.height + 14), paint);
+    // ...and a short elbow out to the branch glyph.
+    canvas.drawLine(Offset(x, mid), Offset(size.width, mid), paint);
+  }
+
+  @override
+  bool shouldRepaint(_RailPainter old) => old.color != color || old.last != last;
+}
+
+/// What a project contains, as glyph + number rather than words.
+///
+/// It was spelled out — "1 agent · 7 terminals" — which cost twenty characters
+/// on every row and repeated the same two nouns eleven times down the page,
+/// while the row's actual *identifier* was being truncated to `gothalo
+/// permissi…` to make room. The branch is the only thing telling one worktree
+/// row from another, so the words go and the space goes to the name.
+///
+/// The terminal glyph is the one that marks a non-agent pane everywhere else,
+/// so a terminal looks like a terminal on every screen. The agent glyph is
+/// **not** the chat bubble it started as: a bubble reads as "messages", and
+/// chat is already a distinct affordance in this app — the shortcut into an
+/// agent's transcript. The per-kind [AgentAvatar] would be the most honest mark
+/// but cannot stand for a count that mixes kinds, so this is a neutral agent
+/// glyph instead. The numbers are set in JetBrains Mono, which is monospaced,
+/// so 1 and 11 occupy the same column instead of jittering.
+///
+/// A zero is omitted rather than shown: a project with only terminals shows
+/// only the terminal pair.
+class _Contents extends StatelessWidget {
+  const _Contents({required this.agents, required this.terminals});
+
+  final int agents;
+  final int terminals;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (agents == 0 && terminals == 0) {
+      return Text(
+        'empty',
+        textAlign: TextAlign.right,
+        style: TextStyle(fontSize: 10.5, color: scheme.onSurfaceVariant).mono,
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        if (agents > 0)
+          _CountPair(
+            icon: Icons.smart_toy_outlined,
+            count: agents,
+            semantics: '$agents agent${agents == 1 ? '' : 's'}',
+          ),
+        if (agents > 0 && terminals > 0) const SizedBox(width: Space.md),
+        if (terminals > 0)
+          _CountPair(
+            icon: Icons.terminal,
+            count: terminals,
+            semantics: '$terminals terminal${terminals == 1 ? '' : 's'}',
+          ),
+      ],
+    );
+  }
+}
+
+/// One glyph and its number. [semantics] carries the words the glyph replaced,
+/// so a screen reader still hears "4 agents".
+class _CountPair extends StatelessWidget {
+  const _CountPair({
+    required this.icon,
+    required this.count,
+    required this.semantics,
+  });
+
+  final IconData icon;
+  final int count;
+  final String semantics;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      // Its own node, not merged into the row's: a screen reader should hear
+      // "4 agents" as a fact about the project, not have it run together with
+      // the repo name into one sentence.
+      container: true,
+      label: semantics,
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 3),
+          Text(
+            '$count',
+            style: TextStyle(
+              fontSize: 10.5,
+              color: scheme.onSurfaceVariant,
+            ).mono,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The width every project row reserves for its counts, so the column is a
+/// straight edge rather than a function of how much is open in each project.
+const double _countColumn = 62;
+
 /// The nothing-here state, in its two meaningfully different flavours.
 ///
-/// With spaces open, "no agents" is a normal lull — the operator starts one and
-/// pulls to refresh. With **nothing** open the phone previously had nothing to
-/// offer at all: no space means no pane to split and no directory to inherit, so
-/// the only route back in was walking to the desktop. That is the case that
-/// gets the call to action.
+/// With a project open, "no agents" is a normal lull — the operator starts one
+/// and pulls to refresh. With **nothing** open the phone previously had nothing
+/// to offer at all: no project means no terminal to split and no directory to
+/// inherit, so the only route back in was walking to the desktop. That is the
+/// case that gets the call to action.
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.spacesOpen});
+  const _EmptyState({required this.projectsOpen});
 
-  /// Whether the server has any workspace at all. False is the empty-session
+  /// Whether the server has any project open at all. False is the empty-session
   /// case the "Open a project" flow exists for.
-  final bool spacesOpen;
+  final bool projectsOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -547,14 +781,14 @@ class _EmptyState extends StatelessWidget {
       children: [
         SizedBox(height: MediaQuery.of(context).size.height * 0.22),
         Icon(
-          spacesOpen ? Icons.inbox_outlined : Icons.folder_off_outlined,
+          projectsOpen ? Icons.inbox_outlined : Icons.folder_off_outlined,
           size: 56,
           color: scheme.onSurfaceVariant,
         ),
         const SizedBox(height: 12),
         Center(
           child: Text(
-            spacesOpen ? 'No agents right now' : 'Nothing open on this server',
+            projectsOpen ? 'No agents right now' : 'Nothing open on this server',
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
@@ -563,10 +797,10 @@ class _EmptyState extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 32),
             child: Text(
-              spacesOpen
+              projectsOpen
                   ? 'Start an agent in Herdr, then pull to refresh.'
-                  : 'Herdr has no spaces open. Pick a project on the host and '
-                      'open it as a space — you can start an agent in it from '
+                  : 'Nothing is open on this machine yet. Pick a project on '
+                      'the host to open it — you can start an agent in it from '
                       'here afterwards.',
               textAlign: TextAlign.center,
               style: Theme.of(
@@ -575,7 +809,7 @@ class _EmptyState extends StatelessWidget {
             ),
           ),
         ),
-        if (!spacesOpen) ...[
+        if (!projectsOpen) ...[
           const SizedBox(height: 20),
           Center(
             child: FilledButton.icon(

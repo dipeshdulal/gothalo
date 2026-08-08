@@ -205,7 +205,6 @@ class _LiveActivityLineState extends ConsumerState<LiveActivityLine> {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 12,
-                  fontStyle: FontStyle.italic,
                   color: scheme.onSurfaceVariant,
                 ),
               ),

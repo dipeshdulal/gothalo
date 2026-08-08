@@ -6,7 +6,6 @@ import '../features/inbox/inbox_screen.dart';
 import '../features/overview/overview_screen.dart';
 import '../features/pairing/pairing_screen.dart';
 import '../features/priority/priority_screen.dart';
-import '../features/servers/add_edit_server_screen.dart';
 import '../features/servers/servers_screen.dart';
 import '../features/terminal/terminal_screen.dart';
 import '../features/timeline/timeline_screen.dart';
@@ -14,8 +13,10 @@ import '../features/transcript/transcript_screen.dart';
 
 /// App routes.
 ///
-/// Home is the **servers list**; opening a server activates it and pushes the
-/// inbox. Declarative URLs are also what let an FCM push deep-link straight to a
+/// Home is the **agent list**; opening a server activates it and pushes its
+/// flock. Adding and editing a server are not routes — they are bottom sheets
+/// (`showAddServerSheet` / `showEditServerSheet`), like every other small form
+/// in the app. Declarative URLs are also what let an FCM push deep-link straight to a
 /// blocked agent's terminal (`/terminal/<pane>`) once push handling lands.
 final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -26,17 +27,8 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ServersScreen(),
       ),
       GoRoute(
-        path: '/servers/add',
-        builder: (context, state) => const AddEditServerScreen(),
-      ),
-      GoRoute(
         path: '/pair',
         builder: (context, state) => const PairingScreen(),
-      ),
-      GoRoute(
-        path: '/servers/:id/edit',
-        builder: (context, state) =>
-            AddEditServerScreen(serverId: state.pathParameters['id']),
       ),
       GoRoute(
         path: '/inbox',

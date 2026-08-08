@@ -718,3 +718,89 @@ own header, and it is the pre-flight's read. The scanning and the git-running
 code stay in `internal/ports` and `internal/gitdiff`: `internal/suggest` has no
 dependency beyond the standard library, and every source is a pure function of
 an already-collected observation, which is what keeps adding the next one cheap.
+
+## D30 — The app speaks projects and agents; Herdr's spaces, tabs and panes are plumbing
+
+Herdr's model is a multiplexer's: sessions hold workspaces, workspaces hold tabs,
+tabs hold panes, and a pane may or may not have a coding agent in it. That model
+is correct, and the app still navigates by it — `pane_id` is the address `/send`,
+`/attach` and `/agent-transcript` are keyed by, `workspace_id` is what
+`worktree.remove` takes. It is simply not the model the person holding the phone
+has. Theirs is: my projects, my agents, what needs me. The terminal screen was
+literally titled `w1N:p3`.
+
+So the ids stay on the wire and the vocabulary changes on the screen:
+
+| Herdr | what the app says |
+|---|---|
+| workspace / space | **project** — repo + branch |
+| pane running an agent | **the agent** |
+| pane with no agent | **a terminal**, belonging to a project |
+| tab | nothing; a grouping detail |
+| `w1N:p3` | never shown |
+| `worktree.create` | **start new work on a branch** |
+| `worktree.remove` (+ branch delete) | **finish this work** |
+
+Three things this arrangement is deliberate about.
+
+**The mapping is a set of pure functions, in `app/lib/core/naming.dart`.** Every
+label a screen shows is derived there, so the naming can be pinned by tests
+without a bridge. The way an arrangement like this fails is always the same — an
+id leaks into a label — and that is invisible in review and obvious on a phone,
+so `test/vocabulary_test.dart` and `test/project_view_test.dart` assert not only
+what the labels say but that no pane, tab or workspace id appears anywhere on
+the rendered screen.
+
+**A capability is never dropped to make the vocabulary tidy; it is re-subjected.**
+Tab rename is the sharp case: it renames a concept the app is hiding. It is now
+offered as "Rename…" on a terminal, and *only* when that terminal's tab holds
+exactly one pane — which is what everything the app creates looks like — because
+then renaming the tab is precisely renaming that terminal, and the subject is
+one the user can see. On a split tab it is not offered, since it would silently
+rename the siblings too and there is no honest label for that. `tab.close`
+survives the same way, as "Close all in this split". The one thing genuinely
+removed is the `tab.create` wrapper: it backed a "New tab" menu item sitting next
+to "New terminal", which was the same action twice with Herdr's vocabulary
+leaking in to explain the difference. `createPane(workspaceId:)` does the same
+thing and also navigates you into what it made.
+
+**Where "worktree" survives, it is because it is the precise noun.** The
+affordances are phrased as starting and finishing work, but the branch-delete
+copy still names the branch, whether it is merged, and the sha a forced delete
+leaves behind. Those are the words that let someone get the work back, and
+softening them would be a worse trade than the jargon costs.
+
+## D31 — "Recently opened" is the device's own navigation history, and cannot come from the bridge
+
+`recency_rank` (D-era: the snapshot's own ordering key) answers "which agent
+last *did* something". Home's Recent section answers "which agent did *I* last
+look at". Those sound alike and are not: an agent you opened two minutes ago
+belongs at the top of Recent even if it has been silent for an hour, and one
+working furiously that you have never opened does not belong in it at all. No
+server can know the second one — it is per device, and the bridge never sees a
+navigation.
+
+**Only four fields are stored: server id, pane id, which view, when.** Nothing
+about the agent is cached. The title, the project, the status and the age are
+read from live snapshot data at render, which is what stops a Recent row
+disagreeing with the same agent's row three sections up — and it is also what
+makes the drop-out rule fall out for free: an entry with nothing live behind it
+resolves to nothing. A worktree removed, a pane closed, a server unpaired or
+merely asleep all produce the same silent shortening. There is no dead row and
+no error; an unreachable laptop coming back restores its rows on the next poll.
+
+**It persists in secure storage, next to the starred set** (`StarredAgents`),
+for the same reason that does: there is no schema to migrate, so it stays clear
+of the drift database. The stored history is deeper (24) than the visible cap
+(4), because entries drop out — a history exactly as long as the cap would show
+three rows the moment one worktree was removed, with nothing to backfill from.
+
+**The recording hook lives in the screen's `State`, not at the tap sites.** The
+honest definition of "opened" is *a screen for this agent came into existence*.
+There are seven places that push one, so hooking the taps means a new one is a
+new place to forget; hooking `build` unguarded would count a streaming transcript
+hundreds of times a minute; hooking a snapshot refresh records the bridge
+talking, not the user. A `State` is created once per navigation and destroyed on
+pop, so a per-instance latch is exactly one visit — and re-pushing the same agent
+builds a new `State` and records again, which is correct, because that *is* a
+second visit. See `app/lib/features/recents/record_open.dart`.

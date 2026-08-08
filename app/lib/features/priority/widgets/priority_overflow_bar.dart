@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/theme.dart';
+import '../../../core/tokens.dart';
 import '../../../data/bridge/models/snapshot.dart';
 import '../priority_providers.dart';
 
@@ -62,7 +63,7 @@ class PriorityOverflowBar extends StatelessWidget {
             ),
             AnimatedRotation(
               turns: expanded ? 0.5 : 0,
-              duration: const Duration(milliseconds: 150),
+              duration: Motion.fast,
               child: Icon(Icons.expand_more, size: 20, color: scheme.primary),
             ),
           ],
@@ -72,9 +73,10 @@ class PriorityOverflowBar extends StatelessWidget {
   }
 }
 
-/// One `N need you` pill, in that status's own colors so the summary reads in
-/// the same palette as the badges on the rows above it (and works in both
-/// themes for free).
+/// One `N need you` flat chip, in that status's own colours so the summary
+/// reads in the same palette as the dots on the rows above it (and works in
+/// both themes for free). A low-alpha status tint is the one place colour
+/// other than the accent is allowed — it is status.
 class _CountChip extends StatelessWidget {
   const _CountChip({required this.status, required this.count});
 
@@ -85,19 +87,31 @@ class _CountChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = status.colors(Theme.of(context).colorScheme);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
         color: c.bg,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: Radii.xsAll,
+        border: Border.all(color: c.fg.withValues(alpha: 0.30)),
       ),
-      child: Text(
-        _label(status, count),
-        style: TextStyle(
-          color: c.fg,
-          fontSize: 11.5,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.1,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: c.fg),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            _label(status, count),
+            style: TextStyle(
+              color: c.fg,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ],
       ),
     );
   }

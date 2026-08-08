@@ -13,6 +13,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
 import '../../core/widgets/accessory_button.dart';
 import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/pane_title.dart';
@@ -23,6 +24,8 @@ import '../attach/image_attach.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../recents/record_open.dart';
+import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
 import 'slash_commands.dart';
@@ -64,7 +67,8 @@ class TranscriptScreen extends ConsumerStatefulWidget {
   ConsumerState<TranscriptScreen> createState() => _TranscriptScreenState();
 }
 
-class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
+class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
+    with RecentOpenRecorder {
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
 
@@ -924,6 +928,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         break;
       }
     }
+    // "I was just in this agent's chat" — the fact the home screen's Recent
+    // section is built from. Once per visit; see [RecentOpenRecorder].
+    recordRecentOpen(agent, view: OpenedView.transcript);
 
     // The slash typeahead's matches, or empty when it should not show — no
     // active `/…` token, the fetch has not landed, or nothing matches what was
@@ -998,21 +1005,25 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             itemBuilder: (ctx) => [
               const PopupMenuItem(
                 value: _AgentLifecycleAction.restart,
-                child: ListTile(
-                  leading: Icon(Icons.restart_alt),
-                  title: Text('Restart agent'),
-                  contentPadding: EdgeInsets.zero,
+                child: Row(
+                  children: [
+                    Icon(Icons.restart_alt),
+                    SizedBox(width: 12),
+                    Text('Restart agent'),
+                  ],
                 ),
               ),
               PopupMenuItem(
                 value: _AgentLifecycleAction.stop,
-                child: ListTile(
-                  leading: Icon(
-                    Icons.stop_circle_outlined,
-                    color: Theme.of(ctx).colorScheme.error,
-                  ),
-                  title: const Text('Stop agent'),
-                  contentPadding: EdgeInsets.zero,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.stop_circle_outlined,
+                      color: Theme.of(ctx).colorScheme.error,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('Stop agent'),
+                  ],
                 ),
               ),
             ],
@@ -1123,7 +1134,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (_conn == _Conn.closed) {
       return _CenteredNotice(
         icon: Icons.tab_unselected,
-        title: 'This pane was closed',
+        title: 'This agent is gone',
         message:
             'It was closed on the host or the agent finished. The conversation '
             'above is the last we received.',
@@ -1553,9 +1564,9 @@ class _OpenOptionsButton extends StatelessWidget {
     final accent = danger ? scheme.error : scheme.primary;
     return Material(
       color: accent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: Radii.smAll),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -1777,7 +1788,7 @@ class _BlockedOptionsSheetState extends State<_BlockedOptionsSheet> {
                         isDense: true,
                         hintText: 'Or type your answer…',
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: Radii.smAll,
                         ),
                       ),
                     ),
@@ -1828,13 +1839,13 @@ class _OptionRow extends StatelessWidget {
     return Material(
       color: bg,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
         side: primary
             ? BorderSide.none
             : BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -2126,7 +2137,6 @@ class _ComposerBar extends StatefulWidget {
 }
 
 class _ComposerBarState extends State<_ComposerBar> {
-  static const _green = Color(0xFF00C853);
   final FocusNode _focus = FocusNode();
   bool _hasText = false;
 
@@ -2161,82 +2171,87 @@ class _ComposerBarState extends State<_ComposerBar> {
 
     return Container(
       // One tone with the actions row above, so the two read as a single block
-      // of controls rather than two stacked bars. The input pill's own darker
-      // `surface` then reads as a well sunk into it.
+      // of controls rather than two stacked bars. The composer's own fill then
+      // reads as a well sunk into it.
       color: scheme.surfaceContainerLow,
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // The input pill: the message text field.
-          Expanded(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              curve: Curves.easeOut,
-              padding: const EdgeInsets.fromLTRB(4, 0, 16, 0),
-              decoration: BoxDecoration(
-                color: scheme.surface,
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(
-                  color: focused
-                      ? _green.withValues(alpha: 0.7)
-                      : scheme.outlineVariant.withValues(alpha: 0.5),
-                  width: focused ? 1.5 : 1,
+      // **One** bordered container holding all three controls: attach, the
+      // field, send. Send used to be a filled circle floating outside the
+      // field's right edge, which read as a different object sitting next to
+      // the composer rather than part of it — and in this language a filled
+      // stadium is the Material tell the rest of the app has removed. The edge
+      // now goes round the whole thing and send lives inside it.
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: scheme.panelFill,
+          borderRadius: Radii.mdAll,
+          border: Border.all(
+            color: focused ? scheme.primary : scheme.hairline,
+            width: 1,
+          ),
+        ),
+        // Bottom-aligned so that as the field grows to five lines the attach
+        // and send controls stay on the last line with the caret, instead of
+        // being pushed off or floating in the middle of a tall box.
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            _AttachButton(
+              onTap: enabled ? widget.onAttachImage : null,
+              scheme: scheme,
+            ),
+            Expanded(
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focus,
+                enabled: enabled,
+                minLines: 1,
+                maxLines: 5,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                style: const TextStyle(fontSize: 15, height: 1.3),
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  // **`filled: false`.** The theme fills every field, and this
+                  // one is already inside a container that provides the
+                  // surface — so the text area was painting its own shade over
+                  // the middle of the composer while attach and send sat on the
+                  // container's. That is what read as three surfaces stitched
+                  // together, and as "the icons have their own backgrounds":
+                  // it was the field's fill, not the icons'.
+                  filled: false,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                  hintText: !enabled
+                      ? 'Unavailable'
+                      : (widget.hintText ?? 'Message the agent…'),
+                  hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  // The border belongs to the container, which wraps the
+                  // controls too — the whole point of the composer being one
+                  // bordered thing rather than a field with buttons beside it.
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
                 ),
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _AttachButton(
-                    onTap: enabled ? widget.onAttachImage : null,
-                    scheme: scheme,
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: widget.controller,
-                      focusNode: _focus,
-                      enabled: enabled,
-                      minLines: 1,
-                      maxLines: 5,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      style: const TextStyle(fontSize: 15, height: 1.3),
-                      decoration: InputDecoration(
-                        isCollapsed: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 12,
-                        ),
-                        hintText: !enabled
-                            ? 'Unavailable'
-                            : (widget.hintText ?? 'Message the agent…'),
-                        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          // Prominent green paper-plane send.
-          _SendButton(
-            enabled: enabled,
-            active: _hasText,
-            onTap: enabled ? widget.onSend : null,
-          ),
-        ],
+            _SendButton(
+              enabled: enabled,
+              active: _hasText,
+              onTap: enabled ? widget.onSend : null,
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// The paperclip inside the composer pill. Greyed while an upload is already in
-/// flight (the caller passes null then) so a second pick can't start one the
-/// progress bar isn't describing.
+/// The attach affordance, at the composer's leading edge. Greyed while an
+/// upload is already in flight (the caller passes null then) so a second pick
+/// can't start one the progress bar isn't describing.
 class _AttachButton extends StatelessWidget {
   const _AttachButton({required this.onTap, required this.scheme});
 
@@ -2247,18 +2262,21 @@ class _AttachButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message: 'Attach an image',
+      // Transparent, so the icon sits on the composer's own surface. A resting
+      // fill here is what made the control read as a patch stuck onto the
+      // field; the ink ripple is still the press feedback.
       child: Material(
-        color: Colors.transparent,
-        shape: const CircleBorder(),
+        type: MaterialType.transparency,
+        borderRadius: Radii.smAll,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap == null ? null : () => onTap!(),
           child: SizedBox(
-            width: 40,
+            width: 44,
             height: 44,
             child: Icon(
               Icons.add_photo_alternate_outlined,
-              size: 21,
+              size: 20,
               semanticLabel: 'Attach an image',
               color: onTap == null
                   ? scheme.onSurfaceVariant.withValues(alpha: 0.4)
@@ -2271,9 +2289,15 @@ class _AttachButton extends StatelessWidget {
   }
 }
 
-/// The circular green paper-plane send button. Full green when there's text to
-/// send, softer when the field is empty (a bare send is still valid — it accepts
-/// a blocked agent's default), muted when the composer is disabled.
+/// The send control, **inside** the composer's edge.
+///
+/// It is now an accent glyph on the composer's own fill rather than a filled
+/// circle of its own: inside a bordered container, a second filled shape reads
+/// as a button that happens to be parked there. Full accent when there is text
+/// to send, dimmed when the field is empty (a bare send is still valid — it
+/// accepts a blocked agent's default), muted when the composer is disabled.
+///
+/// 44x44 regardless: it lost its filled background, not its tap target.
 class _SendButton extends StatelessWidget {
   const _SendButton({
     required this.enabled,
@@ -2281,7 +2305,6 @@ class _SendButton extends StatelessWidget {
     required this.onTap,
   });
 
-  static const _green = Color(0xFF00C853);
   final bool enabled;
   final bool active;
   final Future<void> Function()? onTap;
@@ -2289,24 +2312,33 @@ class _SendButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final Color bg = !enabled
-        ? scheme.surfaceContainerHighest
-        : (active ? _green : _green.withValues(alpha: 0.65));
-    final Color fg = enabled
-        ? Colors.white
-        : scheme.onSurfaceVariant.withValues(alpha: 0.6);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+    final Color fg = !enabled
+        ? scheme.onSurfaceVariant.withValues(alpha: 0.4)
+        : (active ? scheme.primary : scheme.primary.withValues(alpha: 0.55));
+    return SizedBox(
+      // 44 either way: it lost its filled circle, not its tap target.
+      width: 44,
+      height: 44,
       child: Material(
-        color: Colors.transparent,
-        shape: const CircleBorder(),
+        type: MaterialType.transparency,
+        borderRadius: Radii.smAll,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap == null ? null : () => onTap!(),
-          child: Center(child: Icon(Icons.send_rounded, size: 22, color: fg)),
+          child: Center(
+            child: AnimatedSlide(
+              // A nudge on the way out, so a send registers even when the
+              // field empties in the same frame.
+              duration: const Duration(milliseconds: 150),
+              offset: Offset.zero,
+              child: Icon(
+                Icons.send_rounded,
+                size: 20,
+                semanticLabel: 'Send',
+                color: fg,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -3099,7 +3131,7 @@ class _AttachmentChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: Radii.smAll,
           border: Border.all(
             color: scheme.outlineVariant.withValues(alpha: 0.5),
           ),
@@ -3139,7 +3171,7 @@ class _RawEntry extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.smAll,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

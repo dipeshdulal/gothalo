@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
 
 import '../../core/connection/connection_providers.dart';
 import '../push/push_service.dart';
@@ -160,7 +161,8 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerHighest.withValues(alpha: 0.96),
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: Radii.mdAll,
+                  border: Border.all(color: scheme.hairline),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -174,11 +176,10 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: _deviceName,
+                      // Border and density come from the theme.
                       decoration: const InputDecoration(
                         labelText: 'This device\'s name',
                         prefixIcon: Icon(Icons.smartphone),
-                        border: OutlineInputBorder(),
-                        isDense: true,
                       ),
                     ),
                     if (_error != null) ...[

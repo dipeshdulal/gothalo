@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/widgets/action_chip.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/start_agent_sheet.dart';
@@ -237,36 +238,16 @@ class _SuggestionChip extends StatelessWidget {
     final fg = urgent
         ? scheme.error
         : (dimmed ? scheme.onSurfaceVariant : null);
-    final chip = ActionChip(
-      avatar: Icon(_icon, size: 15, color: fg),
-      visualDensity: VisualDensity.compact,
-      onPressed: onTap,
-      label: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // The ellipsis marks an agent-performed chip: tapping it opens an
-          // editable prompt rather than doing the thing. Cheaper than a second
-          // icon, and it reads the way an ellipsis always has on a menu item.
-          Text(
-            suggestion.byAgent ? '${suggestion.label}…' : suggestion.label,
-            style: TextStyle(color: fg),
-          ),
-          if (suggestion.detail.isNotEmpty) ...[
-            const SizedBox(width: 6),
-            Text(
-              suggestion.detail,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ],
-      ),
+    final chip = AppActionChip(
+      icon: _icon,
+      label: suggestion.byAgent ? '${suggestion.label}…' : suggestion.label,
+      detail: suggestion.detail,
+      color: fg,
+      onTap: onTap,
     );
     if (onLongPress == null) return chip;
-    // GestureDetector rather than a Chip parameter: ActionChip has no
-    // onLongPress, and wrapping keeps the tap on the chip itself so the ink
-    // splash still reads as one control.
+    // GestureDetector rather than a Chip parameter: wrapping keeps the tap on
+    // the chip itself so the ink splash still reads as one control.
     return GestureDetector(onLongPress: onLongPress, child: chip);
   }
 }

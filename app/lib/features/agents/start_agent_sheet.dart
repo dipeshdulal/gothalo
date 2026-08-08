@@ -151,9 +151,9 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
               SheetNotice(
                 icon: Icons.folder_outlined,
                 text: widget.target.defaultCwd.isEmpty
-                    ? "Runs in the pane's current directory."
-                    : 'Runs in ${widget.target.defaultCwd} — the pane is '
-                        'already there.',
+                    ? "Runs in this terminal's current directory."
+                    : 'Runs in ${widget.target.defaultCwd} — this terminal '
+                        'is already there.',
               ),
             const SizedBox(height: 16),
 
