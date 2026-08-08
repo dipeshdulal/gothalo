@@ -436,6 +436,14 @@ the payload and the UI states it. Pushing a branch deletion from a phone affects
 everyone and reaches outside the host; nothing else on this bridge does that, and
 this does not either.
 
+## D26 — deliberately unused
+Held the one-tap "Create PR" decision while that feature was its own PR (#112).
+When #112 was absorbed into the pane-suggestions work, its reasoning moved into
+**D29** — where it belongs, since "the agent performs this one" is a property of
+the suggestion mechanism rather than a decision standing on its own. The number
+is left vacant rather than recycled: renumbering would silently repoint every
+reference written while #112 was open.
+
 ## D27 — Opening a space from the phone needs a filesystem read, kept as narrow as it can be
 Every creating endpoint the app had needed something already open to hang off:
 `pane.split` needs a pane, `tab.create` needs a workspace, `/agent/start` needs
@@ -513,3 +521,200 @@ repo. Diff lines wrap into a fixed gutter instead of scrolling horizontally,
 which also keeps the whole screen renderable as one lazy list: a horizontally
 scrollable code block has to lay out every line of a file to measure the widest
 one, which is precisely what must not happen on a several-thousand-line diff.
+
+## D29 — One mechanism answers "what can I do with this pane"
+
+`GET /suggestions` is the single surface the app asks what a pane affords, and
+`internal/suggest` is the single place that decides. **Three** features arrived
+at that question separately, each with its own endpoint, its own gate and its
+own affordance, and all three are now **sources** inside one mechanism, ranked
+in one row:
+
+| Was | Is now |
+|---|---|
+| `GET /ports` + a dev-server preview chip | the `dev_server` / `dev_server_local` sources |
+| `GET /diff?context=1` + a "Create PR" button in the composer | the `create_pr` source |
+| — | the `git_conflict` / `git_dirty` / `shell_idle` sources |
+
+The raw feeds survive underneath, and each still owns its own reading: `/ports`
+is the layer that knows about `lsof`, HTTP probes and process trees; `/diff` is
+the layer that knows how to run git against a pane's cwd. The app calls neither
+of them for this.
+
+They were converging on the same question from different directions. "A server
+is up in this pane, here is a URL", "this pane's rebase stopped, here is the
+diff", and "this branch has work on it, shall I open a PR" are the same sentence
+with different nouns. Shipping them separately would have meant three contracts,
+three gates, three chip-or-button surfaces, and a standing argument about which
+one a future affordance belongs in. The person asking does not know or care
+which subsystem noticed.
+
+**What made it affordable is that the scan is host-wide and cached.** The
+objection to merging was real: a port scan costs an `lsof`, a `ps` and a probe
+per listener, and it is inherently a *host* question that a pane filter narrows
+afterwards — so folding it into a per-pane read looks like making every pane pay
+for a scan. It isn't, because `ports.Cache` is shared and 5s-lived: a row of
+open panes costs one `lsof` between them, not one each. The per-pane suggestion
+cache sits just *past* that TTL (6s) so a miss usually finds the scan warm
+rather than re-triggering one it then ignores.
+
+**One git read per pane.** The same argument, made twice. Before the merge the
+suggestion sources ran their own `git status` while the app separately polled
+`/diff?context=1` for the PR gate — two implementations of "what is this pane's
+git situation", against the same directory, free to disagree about how many
+files had changed. `internal/gitdiff` owns it now; `internal/suggest` receives
+the answer as data and shells out for nothing. That is why the chip saying "9
+files changed" and the diff screen listing nine files are the same nine.
+
+There is one deliberate second read: the app re-checks git when a `create_pr`
+chip is **tapped**. That is a pre-flight, not a gate — the bridge already decided
+whether to offer it — and it exists because that action reaches outside the host
+and the chip may be seconds stale.
+
+**Rank is the merge.** Every source now scores itself into one ordering, and
+those numbers live in one block so "which of these matters more" is a single
+reviewable argument rather than one per feature: stuck (30) → serving (25) →
+changed (20) → shippable (18) → up but unreachable (15) → empty (10). A source
+may contribute at most two chips, so a microservice stack cannot crowd out the
+chip that needs a person.
+
+**`kind` and `action` stay separate, and that is what makes one mechanism
+extensible.** `kind` says why and only picks the icon; `action` says what and is
+the only field the app branches on. An action a client does not implement — or a
+known one missing its required param — is dropped rather than rendered, so a
+newer bridge can add a source against an older app and the worst case is a
+missing chip. It is also what makes the deferred loopback relay cheap: it
+becomes one more action on an existing chip, not a second mechanism.
+
+### The mechanism carries two kinds of action, and says which
+
+Most suggestions are things the **app** does — open a screen, open a URL. The
+pull request is something only the **agent** can do, and folding it in without
+flattening that difference is the substantive part of this decision.
+
+`performer: "agent"` means the app does not perform the action; it sends the
+agent in the pane a message (`params.prompt`) asking for it. The bridge
+deliberately never runs `git push` or `gh pr create` itself. A `POST /pr` that
+shelled out to git and `gh` was the obvious alternative and is rejected on three
+counts:
+
+- **Agent-agnostic by construction (D7).** Every agent Herdr hosts has a shell.
+  Nothing here knows or cares that it is talking to Claude.
+- **The agent is the one with the context.** It holds the `gh` auth, the repo's
+  commit conventions, and enough of the work to write a PR body worth reading. A
+  bridge-side implementation would have to reinvent all three, badly.
+- **It is watchable.** Every step lands in the transcript, where it can be read
+  and interrupted mid-flight — as opposed to an opaque HTTP call from a phone
+  that either worked or didn't.
+
+Two consequences follow, both deliberate:
+
+- **The prompt is shown and editable before it is sent.** Committing and pushing
+  are irreversible and outward-facing; a phone tap that silently does them is
+  the wrong default, and the wording is exactly what a person wants to adjust
+  ("…and mention it supersedes #41"). The chip carries a trailing "…" for the
+  same reason a menu item does.
+- **The prompt is composed on the bridge, not the client.** One wording,
+  reviewable in one place, identical on every client — and it names the branch,
+  the remote and the base explicitly, because the bridge knows them and an agent
+  that guesses pushes to the wrong place. It is one line, because `POST /send`
+  pastes the body and delivers Enter separately, so an embedded newline submits
+  half a message on any agent without bracketed paste.
+
+An absent or unrecognised `performer` must read as `app`. Failing closed is the
+only safe direction: the cost of misreading an app action as an agent action is
+an irreversible push nobody asked for.
+
+**What the app gave up.** The PR button used to be drawn whenever the pane was
+in a repository at all, *disabled with a sentence* for the finer conditions
+("This pane is on main — move the work onto a feature branch first"). As a chip
+it simply does not appear in those states. That is a real loss, and it is the
+right trade: a chip row answers *what should I do now* and has to stay quiet,
+while a sentence answers *why didn't that work* — a question asked after a tap,
+not before one. The tap-time pre-flight keeps every one of those sentences for
+the case that matters most, a chip that went stale between being drawn and being
+tapped.
+
+**The two endpoints disagree in exactly one place, on purpose.** A failed scan
+is a `502` on `/ports`, because there the scan *is* the response; on
+`/suggestions` it is logged and costs only the dev-server chips, because losing
+`lsof` must not cost a pane its "resolve this conflict" chip.
+
+**A preview URL is built for a caller, not for the host.** Found the hard way on
+a real device: the dev-server URL was derived from the bridge's own bind address,
+which behind `tailscale serve` is `127.0.0.1:8787`, so every phone was handed
+`http://127.0.0.1:<port>` — its *own* loopback. The chip rendered, the browser
+opened, the connection was refused. The bind address answers "where does this
+process listen" and never "what should someone else dial", and those are
+different machines' points of view.
+
+The host now comes from the request that just succeeded (`Host`), falling back to
+`transport.public_url` and then to a non-loopback bind address — first
+non-loopback candidate wins, and "no candidate" means no URL rather than a link
+that cannot connect. That per-caller answer is also why the suggestion cache is
+keyed by client host as well as pane.
+
+The general lesson, worth stating because the same shape recurs: this feature
+already reasoned carefully about bind addresses — it distinguishes a
+loopback-bound server from a public one and renders them differently — and then
+composed the public one's URL out of the wrong machine's address anyway. Careful
+reasoning about a value does not transfer to code that merely *uses* it. Every
+layer that produces a preview URL now carries a tested invariant (no loopback
+host may ever appear in one) rather than an intention.
+
+**A loopback-bound server is relayed, not merely explained.** The bridge runs on
+the Herdr host, so it can dial `127.0.0.1` when the phone cannot;
+`internal/preview` opens a listener the phone can reach and proxies it. The chip
+stops being an explanation and becomes a link.
+
+Three choices inside that, each of which could have gone the other way:
+
+- **A listener per previewed port, not a path prefix on the bridge.** A prefix
+  is cheaper to build and cannot be made to work: Vite, Next and Flutter web all
+  serve root-absolute asset paths, HMR computes its socket URL from `location`,
+  and every framework redirects to `/` somewhere. Making a prefix hold means
+  rewriting HTML, CSS `url()`, JS literals and `Location` headers — an arms race
+  against every framework's output that fails silently and differently for each.
+  A dedicated listener gives the app a real origin, and nothing is unusual from
+  its point of view.
+- **The proxied request carries the target's own `Host`**, not the relay's. Dev
+  servers increasingly refuse unknown Hosts (Vite's `allowedHosts`, Django's
+  `ALLOWED_HOSTS`, Rails' host authorization), and a rejected request is a hard,
+  confusing failure. Presenting as the local request the server already serves
+  happily is the predictable choice; the outside authority is preserved in
+  `X-Forwarded-Host`. The cost is an app that builds absolute self-URLs from
+  `Host`, which is rarer than a host check firing.
+- **The grant is a cookie, obtained from a one-shot query parameter.** The
+  client is a *browser*, not the app: it cannot set an `Authorization` header,
+  and it cannot attach a query parameter to the subresources the page fetches on
+  its own. So the first navigation trades the token for an `HttpOnly` cookie and
+  redirects the token out of the URL, and everything after that — including the
+  hot-reload WebSocket handshake — carries the cookie.
+
+**What the grant is honestly worth.** A paired device already has `POST /send`,
+which is arbitrary typing into any pane, which includes `curl localhost:8124`.
+Reaching a loopback port is not an escalation of what that bearer can do, and
+the gate exists so the relay is not a hole *wider* than the rest of the API —
+not because it is the only thing between the tailnet and this host. The relay
+also binds only the address the caller reached the bridge on, so a bridge behind
+`tailscale serve` does not put a dev server on the LAN.
+
+**Lifecycle is an idle timeout and nothing else.** A dev server that dies stops
+being connected to, so its relay goes idle and is reaped after five minutes.
+Tying reaping to the port scan would couple two caches and still need this as a
+backstop. It also bounds the one unpleasant failure: a relay outliving its
+server while a different process takes that port.
+
+**A directly reachable server is never relayed.** Adding a hop, a listener and a
+token exchange to reach something the phone can already dial is worse on every
+axis, so the direct URL wins whenever it exists.
+
+**What was deliberately not collapsed.** `/ports` is not folded into
+`/suggestions` as a `?host=1` mode: the host-wide list is a different question
+with a different natural cadence, and a per-pane endpoint that sometimes answers
+about the whole machine is worse than two endpoints. `/diff` keeps its `git`
+object and its `?context=1` mode for the same reason — it is the diff screen's
+own header, and it is the pre-flight's read. The scanning and the git-running
+code stay in `internal/ports` and `internal/gitdiff`: `internal/suggest` has no
+dependency beyond the standard library, and every source is a pure function of
+an already-collected observation, which is what keeps adding the next one cheap.

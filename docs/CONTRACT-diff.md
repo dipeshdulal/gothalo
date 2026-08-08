@@ -1,9 +1,22 @@
-# CONTRACT — `GET /diff` (working-tree changes) + `GET /diff/expand`
+# CONTRACT — `GET /diff` (working-tree changes + git context) + `GET /diff/expand`
 
 The "Changes" review screen's contract: an agent pane's pending git changes —
 branch, and one unified diff per changed file — without dropping to the raw
 terminal and running `git diff` by hand. Pairs naturally with the approval
 bar: review what an agent actually did before approving its next action.
+
+It also answers **"what is this pane's git situation?"** — root, branch, default
+branch, remote, ahead/behind, dirty, changed count, and any unfinished
+merge/rebase — as a `git` object on the same response, and `?context=1` asks for
+that object *alone*. It lives here rather than on an endpoint of its own because
+it is the same `git` shell-out against the same resolved pane cwd; two endpoints
+would be two answers to one question.
+
+**This is the bridge's single per-pane git read.** `GET /suggestions` calls the
+same `gitdiff.ReadContext` for its `create_pr`, `git_dirty`, `git_conflict` and
+`shell_idle` sources rather than shelling out for git a second time (D29) — which
+is why the chip that says "9 files changed" and the file list below it are the
+same nine. Nothing else in the bridge runs `git status` against a pane.
 
 Captured live against **gothalo itself mid-development** (the `feat/diff-endpoint`
 branch, diffing its own new files) — a real multi-file capture, not a toy
@@ -14,7 +27,7 @@ example.
 ## Request
 
 ```
-GET /diff?pane=<pane_id>
+GET /diff?pane=<pane_id>[&context=1]
 Authorization: Bearer <bearer>
 ```
 
@@ -23,6 +36,7 @@ Authorization: Bearer <bearer>
 | Method | `GET` |
 | Path | `/diff` |
 | Query | `pane` — the Herdr `pane_id` (e.g. `wN:p1`), from `/snapshot`. **Required.** |
+| Query | `context` — `1`/`true` narrows the response to `branch` + `git` with an empty `files[]`. Any other value (or absent) returns the full diff. |
 | Body | none |
 | Auth header | `Authorization: Bearer <bearer>` — the per-device bearer from `/pair`, or the admin token (dev). |
 
@@ -42,7 +56,8 @@ hosts an agent.
 
 | Field | Type | Notes |
 |---|---|---|
-| `branch` | string | Best-effort (`git rev-parse --abbrev-ref HEAD`); `""` on a detached HEAD or if git fails — never fails the whole request. |
+| `branch` | string | Best-effort; `""` on a detached HEAD or if git fails — never fails the whole request. The same value as `git.branch`, kept at the top level because the app read it before `git` existed. |
+| `git` | object | The pane's git **situation** — see the table below. Always present (a bridge older than this omits it entirely; treat that as "unknown"). |
 | `files` | array | One entry per changed file, in `git status` order. Empty (not absent) when the tree is clean or `cwd` isn't a git repo — "nothing to review" is a normal state, not an error. |
 | `files[].path` | string | The file's current path (its new path for a rename). |
 | `files[].old_path` | string \| absent | Set **only** for a rename/copy — the path it moved from. |
@@ -50,6 +65,75 @@ hosts an agent.
 | `files[].additions` | int | Lines added, counted from the diff itself. |
 | `files[].deletions` | int | Lines removed. Always `0` for `"untracked"` — see below. |
 | `files[].diff` | string | A **unified diff for this file alone** (one `diff --git …` section, not the whole tree's combined diff). May contain `\n`. |
+
+### The `git` object
+
+| Field | Type | Notes |
+|---|---|---|
+| `repo` | bool | The pane's cwd is inside a git work tree (`git rev-parse --is-inside-work-tree`), **detected on the host** — not inferred from the path. False makes every other field meaningless; they are all zero-valued in that case. |
+| `root` | string | The work tree's top level — for a `git worktree`, the worktree itself and not the main clone. Symlinks are resolved (git's own behaviour), so on macOS a `/var` path comes back as `/private/var`: read its base name to identify a checkout, do not treat it as "where this pane is". |
+| `branch` | string | The checked-out branch. `""` on a detached HEAD. An *unborn* branch (fresh `git init`, no commits) still names itself — this is `git symbolic-ref --short HEAD`, not `rev-parse --abbrev-ref`, which would answer the literal `"HEAD"` when detached. |
+| `default_branch` | string | The repo's trunk — what a PR would target. `""` when git can't name one. |
+| `default_ref` | string | The ref `ahead`/`behind` were actually counted against (`refs/remotes/origin/main`, `refs/heads/main`). Reported so a client can say what the comparison meant instead of guessing. |
+| `remote` | string | The remote a push would go to: `origin` when it exists, else the first configured remote. `""` means there is nowhere to push. |
+| `upstream` | string | The branch's tracking ref (`origin/feat/x`); `""` when it has never been pushed. |
+| `ahead` | int | Commits on `HEAD` that `default_ref` doesn't have — the work a PR would contain. `0` when there is no `default_ref` to compare against. |
+| `behind` | int | The reverse: commits on `default_ref` that `HEAD` doesn't have. |
+| `dirty` | bool | The working tree has uncommitted changes, **untracked files included** (same `git status` read the file list comes from). |
+| `changed` | int | How many files `dirty` is made of — the length `files[]` would have. `0` whenever `dirty` is false. |
+| `operation` | string \| absent | An unfinished operation holding the tree: `"merge"`, `"rebase"`, `"cherry-pick"`, `"revert"`. Absent the rest of the time. The only field here that means **a person is needed** — everything else describes a tree getting on with it. Read from the marker files git leaves (`MERGE_HEAD`, `rebase-merge/`, …) via `git rev-parse --absolute-git-dir`, not from `git status`, which keeps it reliable on a repository large enough that a status call is not — and gets a worktree's per-checkout git dir right for free. |
+
+**Everything is best-effort and nothing here is an error.** A repo with no
+remote, no commits, or a detached HEAD is an ordinary state; the endpoint
+reports it and lets the *client* decide what is disqualifying. The app's
+"Create PR" gate, for instance, treats a dirty tree with zero commits ahead as
+perfectly openable — committing is the first thing it asks the agent to do —
+but refuses a detached HEAD, a missing remote, and the default branch itself.
+
+**How `default_branch` is resolved**, first hit wins:
+
+1. `refs/remotes/<remote>/HEAD` — what the remote itself says its HEAD is.
+   Authoritative when present, but it is only set by a clone or an explicit
+   `git remote set-head`, so a locally-`init`ed repo that later gained a remote
+   has none.
+2. The first of `main`, `master` that exists — remote-tracking ref before the
+   local branch, since the remote-tracking ref is what a PR is actually opened
+   against and a stale local `main` is common on a worktree checkout.
+
+A repo whose trunk is neither reports `""` rather than a wrong guess, and a
+client should degrade accordingly (the app drops the explicit base from its
+prompt and lets `gh pr create` resolve the repo's own default).
+
+### `?context=1` — the git object without the diff
+
+```
+GET /diff?pane=wN:p1&context=1
+```
+```json
+{
+  "branch": "feat/one-tap-pr",
+  "git": {
+    "repo": true,
+    "branch": "feat/one-tap-pr",
+    "default_branch": "main",
+    "default_ref": "refs/remotes/origin/main",
+    "remote": "origin",
+    "upstream": "origin/main",
+    "ahead": 3,
+    "behind": 0,
+    "dirty": true
+  },
+  "files": []
+}
+```
+
+`files` is empty **and present** — the narrowed response is the same shape as
+the full one, so one decoder handles both.
+
+The reason it exists: diffing the working tree is the expensive half of this
+endpoint, and a client deciding *whether to show a button* has no use for a
+single line of diff. The full response carries the identical `git` object, so a
+client already fetching the diff never needs a second call.
 
 ### The `"untracked"` diff is synthetic, not `git diff` output
 
@@ -74,6 +158,17 @@ that capture, shown in full (the other three are the same shape):
 ```json
 {
   "branch": "feat/diff-endpoint",
+  "git": {
+    "repo": true,
+    "branch": "feat/diff-endpoint",
+    "default_branch": "main",
+    "default_ref": "refs/remotes/origin/main",
+    "remote": "origin",
+    "upstream": "",
+    "ahead": 0,
+    "behind": 0,
+    "dirty": true
+  },
   "files": [
     {
       "path": "internal/server/server.go",
@@ -183,15 +278,58 @@ file should not have to know where it ends before it asks.
 
 ---
 
+## What consumes the `git` object — and what the bridge will not do
+
+**`GET /suggestions` is the main consumer**, and it does not go over HTTP for it:
+it calls `gitdiff.ReadContext` directly, once per pane, behind its own cache.
+That single read backs four of its six sources. The app does **not** poll
+`?context=1` to decide what to offer — the suggestion is the offer.
+
+**The app calls `?context=1` in exactly one place**: the pre-flight when a
+"Create PR" chip is tapped (`app/lib/features/pr/create_pr.dart`). That is not a
+second gate; the bridge already decided whether to offer the chip. It is a
+re-check that the answer has not changed in the seconds since the chip was drawn,
+before an action that reaches outside the host — and it is where the *reasons*
+live: detached HEAD, no remote, sitting on the default branch, nothing ahead and
+nothing uncommitted. An agent that opened the PR while you were reading the
+screen is exactly the case worth catching.
+
+When it *can* proceed the app sends the agent the prompt the suggestion carried,
+over `POST /send`, telling it to commit, `git push -u`, and run `gh pr create`.
+**The bridge never runs `git push` or `gh pr create` itself, and this endpoint
+must not grow a `POST` that does.** Three reasons, all deliberate:
+
+- **Agent-agnostic.** Any agent Herdr can host has a shell; nothing about this
+  is Claude-specific.
+- **Credentials and judgement stay with the agent.** It has the `gh` auth, the
+  repo's commit conventions, and the context to write a PR body worth reading.
+- **It happens in the transcript**, where the user can watch each step and
+  interrupt it — rather than inside an opaque HTTP call from a phone.
+
+So `/diff` stays a **read**. It answers "what is the situation here?"; the agent
+does the acting. See D29 for how that distinction is carried in the suggestion
+payload (`performer: "app"` vs `performer: "agent"`).
+
+---
+
 ## Implementation notes (for maintainers)
 
 - Handlers: `internal/server/diff.go` (`handleDiff`, `handleDiffExpand`),
   registered at `mux.HandleFunc("/diff", …)` / `("/diff/expand", …)` in
   `internal/server/server.go`.
-- Core logic: `internal/gitdiff` (`gitdiff.Collect(cwd)`) — pure Go, unit- and
-  integration-tested (`internal/gitdiff/gitdiff_test.go`) against a real
-  temp git repo covering modify/add/delete/rename/untracked, independent of
-  the HTTP layer.
+- Core logic: `internal/gitdiff` (`gitdiff.Collect(cwd)`, and
+  `gitdiff.ReadContext(cwd)` for the `?context=1` path) — pure Go, unit- and
+  integration-tested (`internal/gitdiff/gitdiff_test.go`) against real temp git
+  repos covering modify/add/delete/rename/untracked, detached HEAD, an unborn
+  branch, and a cloned repo with a real `origin/main`, independent of the HTTP
+  layer.
+- `Collect` fills the same `git` object from the status read it is already
+  doing, so the full response costs no extra `git status` over the context-only
+  one.
+- The app does **not** gate on `BridgeVersion` for either of these: an older
+  bridge simply omits `git` (which decodes to "not a repo") and 404s
+  `/diff/expand` (which degrades to a diff with three lines of context) — the
+  endpoint answering is what unlocks each of them.
 - One `git diff HEAD` invocation covers every tracked file (staged,
   unstaged, or both) in a single process spawn; it's split back into
   per-file diffs client-side in Go rather than shelling out once per file.

@@ -179,18 +179,123 @@ class DiffFile {
       );
 }
 
-/// The full `GET /diff` payload — an agent pane's working-tree changes.
-class DiffResult {
-  const DiffResult({required this.branch, required this.files});
+/// The pane's git *situation*, from the `git` object on `GET /diff` — which
+/// branch, where it sits relative to the default branch, whether there is a
+/// remote to push to. See CONTRACT-diff.md.
+///
+/// This is what decides whether offering "Create PR" for a pane makes any
+/// sense, and it is read from the host rather than inferred from the cwd path:
+/// a directory named `feat/x` is not evidence of a repository, let alone of a
+/// branch with commits on it.
+///
+/// A bridge older than the `git` object sends nothing, which decodes to
+/// [unknown] — [repo] false, so every gate reads it as "can't tell" and hides
+/// the action rather than offering one that would fail.
+class GitContext {
+  const GitContext({
+    required this.repo,
+    required this.branch,
+    required this.defaultBranch,
+    required this.defaultRef,
+    required this.remote,
+    required this.upstream,
+    required this.ahead,
+    required this.behind,
+    required this.dirty,
+  });
 
-  /// Best-effort; "" on a detached HEAD or if git couldn't resolve one.
+  /// What an absent `git` object (an older bridge) means: nothing is known.
+  static const unknown = GitContext(
+    repo: false,
+    branch: '',
+    defaultBranch: '',
+    defaultRef: '',
+    remote: '',
+    upstream: '',
+    ahead: 0,
+    behind: 0,
+    dirty: false,
+  );
+
+  /// The pane's cwd is inside a git work tree. False makes every other field
+  /// meaningless.
+  final bool repo;
+
+  /// The checked-out branch; "" on a detached HEAD.
   final String branch;
+
+  /// The repo's trunk — what a PR would target. "" when git couldn't name one.
+  final String defaultBranch;
+
+  /// The ref [ahead]/[behind] were counted against, e.g.
+  /// `refs/remotes/origin/main`. Display/diagnostic only.
+  final String defaultRef;
+
+  /// The remote a push would go to ("origin"); "" when the repo has none.
+  final String remote;
+
+  /// The branch's tracking ref, "" when it has never been pushed. Not
+  /// disqualifying — `git push -u` is part of what the agent is asked to do.
+  final String upstream;
+
+  /// Commits on this branch that [defaultBranch] doesn't have — the work a PR
+  /// would contain.
+  final int ahead;
+
+  /// Commits on [defaultBranch] that this branch doesn't have.
+  final int behind;
+
+  /// The working tree has uncommitted changes (untracked files included).
+  final bool dirty;
+
+  /// True when the pane sits on the trunk itself — you don't open a PR from
+  /// `main` to `main`.
+  bool get onDefaultBranch =>
+      branch.isNotEmpty && defaultBranch.isNotEmpty && branch == defaultBranch;
+
+  /// There is something to turn into a pull request: commits the default
+  /// branch doesn't have, or uncommitted work that would become one.
+  bool get hasWork => ahead > 0 || dirty;
+
+  factory GitContext.fromJson(Map<String, dynamic> j) => GitContext(
+        repo: j['repo'] == true,
+        branch: (j['branch'] as String?) ?? '',
+        defaultBranch: (j['default_branch'] as String?) ?? '',
+        defaultRef: (j['default_ref'] as String?) ?? '',
+        remote: (j['remote'] as String?) ?? '',
+        upstream: (j['upstream'] as String?) ?? '',
+        ahead: (j['ahead'] as num?)?.toInt() ?? 0,
+        behind: (j['behind'] as num?)?.toInt() ?? 0,
+        dirty: j['dirty'] == true,
+      );
+}
+
+/// The full `GET /diff` payload — an agent pane's working-tree changes, plus
+/// the [git] context they sit in.
+class DiffResult {
+  const DiffResult({
+    required this.branch,
+    required this.files,
+    this.git = GitContext.unknown,
+  });
+
+  /// Best-effort; "" on a detached HEAD or if git couldn't resolve one. Same
+  /// value as `git.branch`, kept because the app read it before `git` existed.
+  final String branch;
+
+  /// The pane's git situation. [GitContext.unknown] on a bridge too old to
+  /// send it.
+  final GitContext git;
   final List<DiffFile> files;
 
   factory DiffResult.fromJson(Map<String, dynamic> j) {
     final files = j['files'];
+    final git = j['git'];
     return DiffResult(
       branch: (j['branch'] as String?) ?? '',
+      git: git is Map
+          ? GitContext.fromJson(Map<String, dynamic>.from(git))
+          : GitContext.unknown,
       files: files is List
           ? files
               .whereType<Map>()
@@ -407,6 +512,105 @@ class SlashCommand {
         argumentHint: (j['argument_hint'] as String?) ?? '',
         source: (j['source'] as String?) ?? '',
         scope: (j['scope'] as String?) ?? '',
+      );
+}
+
+/// One offered action for a pane, from `GET /suggestions` — see
+/// `docs/CONTRACT-suggestions.md`.
+///
+/// The bridge decides *what* is worth offering (it is the only side that can
+/// see the pane's processes, working tree and listeners); the app decides how to
+/// render it and which [action] values it knows how to perform. Anything else is
+/// dropped on the floor — see [isActionable] — which is what lets a newer bridge
+/// add a suggestion kind without breaking an app that predates it.
+class PaneSuggestion {
+  const PaneSuggestion({
+    required this.kind,
+    required this.label,
+    required this.action,
+    this.performer = 'app',
+    this.detail = '',
+    this.params = const {},
+    this.rank = 0,
+  });
+
+  /// Why it was offered: `git_conflict` | `git_dirty` | `shell_idle`. Only
+  /// drives the icon — never whether the chip renders, so an unrecognised kind
+  /// with a known action still works.
+  final String kind;
+
+  /// The chip text, already short enough for a phone. Rendered verbatim: the
+  /// bridge is what knows whether the tree has one file changed or forty.
+  final String label;
+
+  /// One line of justification under the label. May be empty.
+  final String detail;
+
+  /// What to do on tap: `open_diff` | `start_agent` | `open_url` | `show_note`
+  /// | `prompt_agent`.
+  final String action;
+
+  /// Who carries it out: `app` or `agent` — see [byAgent]. Defaults to `app`
+  /// for a bridge that predates the field, which is the safe reading: an app
+  /// suggestion is never sent anywhere.
+  final String performer;
+
+  /// The action's arguments. Always carries `pane` (session-qualified).
+  final Map<String, String> params;
+
+  /// Usefulness, highest first. The bridge has already sorted; this is kept so
+  /// a caller merging in suggestions from elsewhere can interleave them.
+  final int rank;
+
+  /// The pane this acts on — the same id `/attach`, `/diff` and `/send` take.
+  String get pane => params['pane'] ?? '';
+
+  /// The dev server to open, for `open_url`. Empty for every other action.
+  String get url => params['url'] ?? '';
+
+  /// What a `show_note` tap displays. Empty for every other action.
+  String get note => params['note'] ?? '';
+
+  /// The text a `prompt_agent` tap puts in front of the user. Empty otherwise.
+  ///
+  /// This is a *starting* text, never a message to send on its own: an agent
+  /// action commits, pushes and reaches outside the machine, so it is shown and
+  /// editable before anything leaves the phone.
+  String get prompt => params['prompt'] ?? '';
+
+  /// Whether this asks the AGENT in the pane to do something rather than the
+  /// app. The distinction is load-bearing, not cosmetic: an agent action needs
+  /// its text confirmed first, and it lands in the transcript where it can be
+  /// watched and interrupted.
+  bool get byAgent => performer == 'agent';
+
+  /// Whether THIS build knows how to perform the action, *and* was given what
+  /// that action needs. A chip that cannot do anything is worse than a missing
+  /// chip, so both an unknown action and a known one with a missing argument
+  /// are dropped rather than rendered as a dead button.
+  bool get isActionable => switch (action) {
+        'open_diff' || 'start_agent' => pane.isNotEmpty,
+        'open_url' => url.isNotEmpty,
+        'show_note' => note.isNotEmpty,
+        // Needs both: something to say, and an agent to say it to.
+        'prompt_agent' => prompt.isNotEmpty && pane.isNotEmpty,
+        _ => false,
+      };
+
+  factory PaneSuggestion.fromJson(Map<String, dynamic> j) => PaneSuggestion(
+        kind: (j['kind'] as String?) ?? '',
+        performer: (j['performer'] as String?) ?? 'app',
+        label: (j['label'] as String?) ?? '',
+        detail: (j['detail'] as String?) ?? '',
+        action: (j['action'] as String?) ?? '',
+        params: switch (j['params']) {
+          final Map<dynamic, dynamic> p => {
+              for (final e in p.entries)
+                e.key.toString(): e.value?.toString() ?? '',
+            },
+          _ => const <String, String>{},
+        },
+        rank: (j['rank'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -980,13 +1184,19 @@ class BridgeClient {
   }
 
   /// `GET /diff?pane=<id>` → an agent pane's working-tree changes (branch +
-  /// one unified diff per changed file). Agent panes only — a non-agent pane
-  /// throws (404). See CONTRACT-diff.md.
-  Future<DiffResult> getDiff(String pane) async {
+  /// one unified diff per changed file), plus the pane's [GitContext]. Agent
+  /// panes only — a non-agent pane throws (404). See CONTRACT-diff.md.
+  ///
+  /// [contextOnly] narrows the request to the git context and skips the diff
+  /// itself — the read behind the "Create PR" gate, which needs to know whether
+  /// the pane is on a pushable feature branch and has no use for a single line
+  /// of diff. Diffing a large tree is the expensive half of this endpoint, so a
+  /// gate that runs on screen build must not pay for it.
+  Future<DiffResult> getDiff(String pane, {bool contextOnly = false}) async {
     try {
       final res = await _dio.get<Map<String, dynamic>>(
         '/diff',
-        queryParameters: {'pane': pane},
+        queryParameters: {'pane': pane, if (contextOnly) 'context': '1'},
       );
       final body = res.data;
       if (body == null) throw BridgeException('Empty diff response');
@@ -1048,6 +1258,37 @@ class BridgeClient {
           .whereType<Map>()
           .map((c) => SlashCommand.fromJson(Map<String, dynamic>.from(c)))
           .where((c) => c.name.isNotEmpty)
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return const [];
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /suggestions?pane=<id>` → the handful of one-tap actions that make
+  /// sense for what is running in that pane right now. See
+  /// CONTRACT-suggestions.md.
+  ///
+  /// Returns an empty list rather than throwing for every "nothing to offer
+  /// here" case, including a bridge too old to have the endpoint (404) and a
+  /// pane that has since closed (404). This is a convenience surface: an error
+  /// state in front of it would cost the user more attention than the feature
+  /// gives back, and there is nothing they could do about either cause.
+  ///
+  /// Suggestions carrying an action this build does not implement are dropped
+  /// here, so a caller never has to render a chip it cannot honour.
+  Future<List<PaneSuggestion>> getSuggestions(String pane) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/suggestions',
+        queryParameters: {'pane': pane},
+      );
+      final list = (res.data ?? const {})['suggestions'];
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((s) => PaneSuggestion.fromJson(Map<String, dynamic>.from(s)))
+          .where((s) => s.label.isNotEmpty && s.isActionable)
           .toList();
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return const [];

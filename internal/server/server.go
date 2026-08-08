@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -17,8 +18,11 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/events"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/pairing"
+	"github.com/dipeshdulal/gothalo/internal/ports"
+	"github.com/dipeshdulal/gothalo/internal/preview"
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/store"
+	"github.com/dipeshdulal/gothalo/internal/suggest"
 	"github.com/dipeshdulal/gothalo/internal/timeline"
 )
 
@@ -44,8 +48,34 @@ type Server struct {
 	// than an empty history — "no recorder running" and "nothing happened yet"
 	// are different answers and a client should be able to tell them apart.
 	timeline *timeline.Log
+	// portsCache memoises the host port scan behind GET /ports. The list page
+	// polls it alongside /snapshot, so the scan is shared across callers rather
+	// than run per request.
+	portsCache ports.Cache
+	// previews relays loopback-bound dev servers onto the tailnet, so a server
+	// the phone cannot reach becomes a link it can open. Lazily populated: no
+	// listener exists until a suggestion actually needs one.
+	previews *preview.Manager
+	// paneMap memoises the pane -> shell-pid map that attribution joins against.
+	// Separate from portsCache and longer-lived: a pane's shell pid never
+	// changes, so it survives many scans.
+	paneMap paneMapCache
+	// suggestions memoises per-pane suggestions behind GET /suggestions. Short
+	// TTL: the app is allowed to refetch on every focus and status change, and
+	// this is what stops that reaching Herdr each time.
+	suggestions suggestCache
 	// requester backs POST /herdr in tests; nil in production (routed per session).
 	requester herdrRequester
+	// processInfo backs the pane observation behind /suggestions in tests; nil in
+	// production, where it comes from the pane's own session client.
+	processInfo processInfoGetter
+	// serversFor backs the dev-server half of that observation in tests; nil in
+	// production, where it reads the cached host port scan (paneServers). A seam
+	// rather than a live scan because the real one shells out to `lsof` and
+	// probes every listener on the machine running the tests. It takes the
+	// caller's reachable host for the same reason paneServers does — a preview
+	// URL is only correct for the client it was built for.
+	serversFor func(ctx context.Context, pane, clientHost string) []suggest.Server
 	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
 	// production, where the agent is fetched from the pane's own session client.
 	agents agentGetter
@@ -59,7 +89,17 @@ type Server struct {
 
 // New constructs a Server. push, bus and tl may be nil.
 func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus, tl *timeline.Log) *Server {
-	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus, timeline: tl}
+	return &Server{
+		cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm,
+		web: web, bus: bus, timeline: tl,
+		previews: preview.New(),
+	}
+}
+
+// Close releases what the Server owns outside the HTTP handler set — today the
+// preview relays, which hold real listeners. Safe to call more than once.
+func (s *Server) Close() {
+	s.previews.Close()
 }
 
 // target resolves a possibly session-qualified id ("acme/w1:p2") to its
@@ -98,6 +138,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
 	mux.HandleFunc("/commands", s.handleCommands)
+	mux.HandleFunc("/ports", s.handlePorts)
+	mux.HandleFunc("/suggestions", s.handleSuggestions)
 	mux.HandleFunc("/agents/available", s.handleAgentsAvailable)
 	mux.HandleFunc("/agent/start", s.handleAgentStart)
 	mux.HandleFunc("/agent/restart", s.handleAgentRestart)
@@ -356,7 +398,15 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	10 — GET /browse: pick a directory on the host, so a space can be opened
 //	    from the phone on a session with nothing open at all. Same gating rule
 //	    as 5 — an older bridge 404s and the app hides the picker.
-const BridgeVersion = 10
+//	11 — GET /suggestions: context-aware one-tap actions for a pane, from what
+//	    is running in it — the host's dev servers (discovered by GET /ports),
+//	    the pane's git situation (read by GET /diff, which also carries a `git`
+//	    object and answers `?context=1` for it alone), and a shell at its
+//	    prompt. Same gating rule — an older bridge 404s and the app shows no
+//	    chip row — and the app additionally ignores any `action` it does not
+//	    implement, so a bridge that grows a new suggestion kind does not need an
+//	    app release to stay safe.
+const BridgeVersion = 11
 
 // GET /info -> this bridge's identity and capability level.
 //

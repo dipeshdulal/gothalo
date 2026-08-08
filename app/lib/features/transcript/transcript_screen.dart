@@ -23,6 +23,7 @@ import '../attach/image_attach.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
 import 'slash_commands.dart';
 import 'transcript_models.dart';
@@ -1041,6 +1042,15 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
             // Real approval → an actionable card; just-waiting → a soft cue;
             // working → a live "thinking…" indicator (see _bottomStatus).
             _bottomStatus(),
+            // Context chips for this pane — "Create PR", "Review changes",
+            // "Resolve", "Open :5173". Renders nothing at all when the bridge
+            // has nothing to offer, which is most of the time.
+            //
+            // The same row the terminal screen carries, off the same endpoint.
+            // It is here because the most valuable suggestion for an agent pane
+            // is the one the AGENT performs, and this is the screen where you
+            // watch it happen.
+            PaneSuggestionsBar(pane: widget.pane),
             // Directly above the toolbar that started the upload, so progress
             // and the button that caused it read as one thing. Renders nothing
             // while idle.
@@ -1062,6 +1072,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
               )
             else
               _ComposerActionsRow(
+                pane: widget.pane,
+                agentKind: agent?.agent ?? _agentState?.agentKind ?? 'agent',
                 modeLabel: _agentState?.permissionMode != null
                     ? _modeLabel(_agentState!.permissionMode!)
                     : null,
@@ -1947,8 +1959,8 @@ class _ThinkingIndicator extends StatelessWidget {
 /// One row above the composer for everything that's an action about *how*
 /// you're talking to the agent rather than the chat itself: the Claude
 /// permission-mode switcher, quick-command snippets (see
-/// docs/RESEARCH-feature-ideas.md, #7), "+" to add one, a jump to another
-/// agent, and a jump to the raw terminal.
+/// docs/RESEARCH-feature-ideas.md, #7), "+" to add one, "create a pull
+/// request", a jump to another agent, and a jump to the raw terminal.
 ///
 /// Built from the same [AccessoryButton] as the terminal's key bar, spread
 /// evenly and scrolling as one strip when it overflows. It had been Material
@@ -1957,6 +1969,8 @@ class _ThinkingIndicator extends StatelessWidget {
 /// acts on the message being written, so it lives inside the composer pill.
 class _ComposerActionsRow extends ConsumerWidget {
   const _ComposerActionsRow({
+    required this.pane,
+    required this.agentKind,
     required this.modeLabel,
     required this.onCycleMode,
     required this.onOpenTerminal,
@@ -1964,6 +1978,11 @@ class _ComposerActionsRow extends ConsumerWidget {
     required this.onQuickCommand,
     required this.enabled,
   });
+
+  final String pane;
+
+  /// Names the agent in a sheet's copy ("claude runs this itself").
+  final String agentKind;
 
   final String? modeLabel;
   final VoidCallback onCycleMode;
@@ -2027,6 +2046,12 @@ class _ComposerActionsRow extends ConsumerWidget {
               semanticLabel: 'Add a quick command',
               tooltip: 'Add a quick command',
             ),
+            // "Create PR" used to be a button here, with a git read of its own
+            // to decide whether to draw it. It is a suggestion chip now
+            // (PaneSuggestionsBar, above the composer) — same sheet, same
+            // editable prompt, but offered by the one mechanism that also knows
+            // about this pane's dev server and its unread changes, off one git
+            // read rather than a second one. See D29.
             // Jump and Terminal are both "leave this conversation for another
             // view". They live here rather than in the app bar because this is
             // where a thumb already is — the app bar is a stretch away at the

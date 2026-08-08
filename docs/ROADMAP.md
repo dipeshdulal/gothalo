@@ -82,8 +82,74 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 - ⬜ iOS Live Activity / Android ongoing-notification approvals. Note
       `core/widgets/live_activity_line.dart` is an **in-app** activity line, not
       ActivityKit — the real Live Activity is still unbuilt and needs Swift.
-- ⬜ Browser preview (agent's dev server in a WebView). Low value over a
-      tailnet, where the phone browser already reaches it directly.
+- ✅ **Pane suggestions** — `GET /suggestions` plus a chip row above the terminal
+      and the transcript (`internal/suggest`, `internal/ports`,
+      `internal/gitdiff`, `app/lib/features/suggestions/`,
+      `docs/CONTRACT-suggestions.md`): the two or three things worth doing to a
+      pane given what is running in it. Six sources — a reachable dev server, a
+      stopped merge/rebase/cherry-pick, an agent tree with uncommitted changes, a
+      branch worth opening a pull request for, a dev server bound to localhost,
+      and a plain shell parked at its prompt inside a worktree.
+
+      **One mechanism, not three.** Dev-server discovery and the one-tap "Create
+      PR" were each built as their own endpoint with their own gate and their own
+      affordance; both are sources inside the suggestion mechanism now, ranked in
+      one row. `GET /ports` and `GET /diff?context=1` survive underneath as the
+      raw feeds — the layers that know about `lsof` and about running git — and
+      the app calls neither. There is **one git read per pane** and one shared
+      host scan; the scan is cached host-wide for 5s, so a row of open panes
+      shares one `lsof` between them rather than each paying for one.
+
+      **The mechanism carries two kinds of action.** Most are things the app does
+      (open a screen, open a URL). "Create PR" is `performer: "agent"`: the app
+      does not open the pull request, it sends the pane's own agent an editable
+      prompt asking it to commit, `git push -u` and `gh pr create`. The bridge
+      runs no git for that by design — the agent has the `gh` auth, the repo's
+      conventions and the context to write a real body, it works for any agent
+      Herdr can host, and every step lands in the transcript where it can be
+      watched and interrupted. The prompt is always shown and editable first: a
+      phone tap that silently commits and pushes is the wrong default.
+
+      This supersedes the earlier "browser preview in a WebView — low value over
+      a tailnet" note, which was half right and half wrong. Right: the **tunnel**
+      is redundant. Tailscale already reaches a server bound to `0.0.0.0`, so
+      there is nothing to forward and no WebView is wanted — the chip opens the
+      system browser. Wrong on two counts: dev servers **default to
+      `127.0.0.1`** (Vite, `next dev`, `rails s`), which no amount of tailnet
+      reaches; and with agents in parallel worktrees, **discovery and attribution**
+      is the real problem — three servers on 5173/5174/5175 and a bare port
+      number tells you nothing about whose is whose.
+
+      A reachable server's `url` names the address **the caller** reached the
+      bridge on, not the address the bridge binds — deriving it from the bind
+      address shipped `http://127.0.0.1:<port>` to a phone, which is the phone's
+      own loopback (caught on a real device; both layers now carry a tested
+      no-loopback invariant, see D29).
+
+      Loopback-bound servers are **relayed** (`internal/preview`): the bridge
+      runs on the host, so it dials `127.0.0.1` when the phone cannot, and the
+      chip becomes a link instead of an explanation. A listener per previewed
+      port rather than a path prefix — root-absolute asset paths, HMR sockets and
+      redirects to `/` all break under a prefix and cannot be rewritten
+      reliably — proxied with the target's own `Host` so dev-server host checks
+      pass, with WebSocket upgrades carried end to end so hot reload works. The
+      grant is a cookie obtained from a one-shot query parameter, because the
+      client is a browser. Relays are reaped after five minutes idle. A directly
+      reachable server is never relayed: the direct URL is faster. The
+      explanation survives on a long press, since rebinding is still the better
+      fix. See D29.
+
+      The design constraint that mattered most was **restraint**: the row renders
+      nothing at all for a pane with nothing to offer, which on the development
+      host is most of them, and one source may contribute at most two chips so a
+      microservice stack cannot crowd out the chip that needs a person. The cost
+      of that restraint is named in the contract: "Create PR" no longer appears
+      greyed-out-with-a-reason when you are standing on `main`. The reason is
+      kept where it is actually asked for — after a tap, when a chip has gone
+      stale. A rerun-the-test-runner source was scoped out on purpose —
+      recognising the runner is easy, but a watcher wants a keystroke and a
+      finished run wants the command retyped, and the process list cannot tell
+      the two apart.
 
 ## Known gaps
 - **Codex transcripts** — `internal/transcript/codex.go` is an honest stub that

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +141,52 @@ func (c *Client) runFor(d time.Duration, args ...string) ([]byte, error) {
 // /snapshot refetch, so it ran once per change burst as a process spawn.
 func (c *Client) SnapshotRaw() ([]byte, error) {
 	return c.Request("session.snapshot", struct{}{})
+}
+
+// PaneIDs returns every pane in this session — agent-hosted and plain alike.
+//
+// `agent.list` is the cheaper read but only knows agent panes, and a plain pane
+// is where a dev server usually lives: you split a pane off and run `npm run
+// dev` in it precisely so it isn't competing with the agent for the terminal.
+// Anything keyed on panes-that-run-things has to come off the snapshot tree.
+func (c *Client) PaneIDs() ([]string, error) {
+	raw, err := c.SnapshotRaw()
+	if err != nil {
+		return nil, err
+	}
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return nil, fmt.Errorf("parse session.snapshot: %w", err)
+	}
+	seen := map[string]bool{}
+	collectPaneIDs(tree, seen)
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// collectPaneIDs walks decoded snapshot JSON gathering every `pane_id`. It
+// deliberately ignores the other id keys RewriteIDs handles — `focused_pane_id`
+// and friends are pointers at a pane listed elsewhere in the tree, not
+// additional panes.
+func collectPaneIDs(v any, out map[string]bool) {
+	switch n := v.(type) {
+	case map[string]any:
+		for k, val := range n {
+			if s, ok := val.(string); ok && k == "pane_id" && s != "" {
+				out[s] = true
+				continue
+			}
+			collectPaneIDs(val, out)
+		}
+	case []any:
+		for _, e := range n {
+			collectPaneIDs(e, out)
+		}
+	}
 }
 
 // Agent is the subset of snapshot agent fields gothalo uses.

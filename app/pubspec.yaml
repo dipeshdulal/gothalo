@@ -55,6 +55,7 @@ dependencies:
   flutter_local_notifications: ^22.2.0
   flutter_markdown: ^0.7.7+1
   image_picker: ^1.2.3 # camera roll / camera -> bytes for POST /image (needs the Info.plist + manifest usage strings)
+  url_launcher: ^6.3.2 # hand a discovered dev server's URL to the system browser (dev_server suggestion)
 
 dev_dependencies:
   flutter_test:

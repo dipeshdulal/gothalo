@@ -113,6 +113,10 @@ func runServe(configPath string) error {
 	}
 
 	srv = server.New(cfg, mgr, pc, st, pm, webFS, bus, tl)
+	// The Server owns real listeners beyond the HTTP one (preview relays), so it
+	// gets released rather than left to process exit — which matters for the
+	// tests and for anything that ever restarts it in-process.
+	defer srv.Close()
 	go mgr.Run(context.Background())
 
 	// The notification-clearer is the process-wide bus consumer that dismisses a
