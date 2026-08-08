@@ -18,10 +18,12 @@ class Backgrounds {
 /// A screen's **opaque** backdrop: a flat [AppTheme.scaffoldBase] fill, with an
 /// optional faint artwork faded over it, behind a transparent [Scaffold].
 ///
-/// Terminal-native means flat: no gradient, no glow, no translucency. A screen
-/// is one even colour, and its panels hold themselves with hairlines rather
-/// than by being lit from behind. The opaque fill is what makes a sliding page
-/// move as one solid layer instead of revealing the page beneath it.
+/// Terminal-native means flat: one even colour, and panels hold themselves with
+/// hairlines rather than by being lit from behind. A single flat colour is also
+/// what makes the otherwise-transparent Android status bar read as intentional —
+/// the bar sits over the same colour the page uses, so it is one surface, not a
+/// cut. The fill is opaque, which is what makes a sliding page move as one solid
+/// layer instead of revealing the page beneath.
 ///
 /// Wrap a screen like:
 /// ```dart
@@ -49,8 +51,8 @@ class AppBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      // The opaque base — this is what makes the page a solid layer for a clean
-      // slide transition.
+      // The opaque base — one even colour so the status bar over its top reads
+      // as one surface, and a solid layer for a clean slide transition.
       decoration: BoxDecoration(
         color: AppTheme.scaffoldBase(Theme.of(context).brightness),
       ),

@@ -143,8 +143,8 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     return AppBackground(
       asset: Backgrounds.servers,
       child: Scaffold(
-        // No app bar: the greeting header owns the top of this screen. The
-        // scroll view handles its own top inset below.
+        // No app bar: _StatusBand frames the status bar and the greeting
+        // header owns the top of this screen.
         floatingActionButton: FloatingActionButton(
           onPressed: () => showAddServerSheet(context),
           tooltip: 'Add server manually',
@@ -163,113 +163,123 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
               var step = 0;
               Widget enter(Widget child, {Key? key}) =>
                   Entrance(key: key, index: step++, child: child);
-              return RefreshIndicator(
-                onRefresh: () async => ref.invalidate(serverAgentsProvider),
-                child: ListView(
-                  padding: EdgeInsets.only(
-                    // The screen's own top inset (status bar etc.) now that
-                    // there is no app bar to absorb it.
-                    top: MediaQuery.paddingOf(context).top,
-                    // Clear of the FAB, and clear of it on a gesture-nav phone
-                    // too. A flat 96 was measured from the viewport, which sits
-                    // *above* the system inset the FAB is also lifted by — so on
-                    // a device with a home indicator the button landed on the
-                    // last row. The inset has to be added, not assumed away.
-                    bottom:
-                        _fabClearance + MediaQuery.paddingOf(context).bottom,
+              return Column(
+                children: [
+                  _StatusBand(),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: () async =>
+                          ref.invalidate(serverAgentsProvider),
+                      child: ListView(
+                        padding: EdgeInsets.only(
+                          // No top inset here: _StatusBand above owns it.
+                          // Bottom still needs to clear the FAB, and clear it
+                          // on a gesture-nav phone too. A flat 96 was measured
+                          // from the viewport, which sits *above* the system
+                          // inset the FAB is also lifted by — so on a device
+                          // with a home indicator the button landed on the
+                          // last row. The inset has to be added, not assumed
+                          // away.
+                          bottom:
+                              _fabClearance +
+                              MediaQuery.paddingOf(context).bottom,
+                        ),
+                        children: [
+                          // --- Greeting ---
+                          enter(
+                            _GreetingHeader(
+                              needsYou: hits.where((h) => h.needsYou).length,
+                            ),
+                          ),
+
+                          // --- Priority (needs you + starred) ---
+                          enter(
+                            SectionLabel(
+                              'Priority',
+                              trailing: _SectionAction(
+                                label: 'Manage',
+                                onTap: () => context.push('/priority'),
+                              ),
+                            ),
+                          ),
+                          if (hits.isEmpty)
+                            enter(
+                              _PriorityEmpty(
+                                onManage: () => context.push('/priority'),
+                              ),
+                            )
+                          else ...[
+                            for (final h in overflow.visible)
+                              enter(
+                                key: ValueKey(
+                                  'priority-${h.server.id}-${h.agent.paneId}',
+                                ),
+                                AgentRow(
+                                  agent: h.agent,
+                                  starred: h.starred,
+                                  serverName: showServer ? h.server.name : null,
+                                  onTap: () => _openAgent(h.server, h.agent),
+                                ),
+                              ),
+                            PriorityOverflowBar(
+                              overflow: overflow,
+                              onToggle: () => ref
+                                  .read(priorityExpandedProvider.notifier)
+                                  .toggle(),
+                            ),
+                          ],
+
+                          // --- Recent (this device's own history) ---
+                          //
+                          // Absent entirely when empty. A device that has opened
+                          // nothing, or whose recents have all been claimed above,
+                          // gets no header and no empty box — an empty shortcut is
+                          // worse than no shortcut.
+                          if (recents.isNotEmpty) ...[
+                            enter(const SectionLabel('Recent')),
+                            for (final r in recents)
+                              enter(
+                                key: ValueKey('recent-${r.key}'),
+                                AgentRow(
+                                  agent: r.agent,
+                                  serverName: showServer ? r.server.name : null,
+                                  trailing: _ViewMark(view: r.view),
+                                  onTap: () => _open(r.server, r.route),
+                                ),
+                              ),
+                          ],
+
+                          // --- Everything else, by state ---
+                          //
+                          // The same builder the Flock screen uses, so an agent looks
+                          // identical whichever way you reached it.
+                          ...buildAgentSections(
+                            context,
+                            ref,
+                            groups: groups,
+                            showServer: showServer,
+                            onOpen: (hit) => _openAgent(hit.server, hit.agent),
+                          ).map(enter),
+
+                          // --- Servers ---
+                          enter(const SectionLabel('Servers')),
+                          for (final s in list)
+                            enter(
+                              key: ValueKey('server-${s.id}'),
+                              _ServerTile(
+                                server: s,
+                                summary: byServer[s.id],
+                                onTap: () => _openServer(s),
+                                onEdit: () =>
+                                    showEditServerSheet(context, s.id),
+                                onDelete: () => _confirmDelete(s),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                  children: [
-                    // --- Greeting ---
-                    enter(
-                      _GreetingHeader(
-                        needsYou: hits.where((h) => h.needsYou).length,
-                      ),
-                    ),
-
-                    // --- Priority (needs you + starred) ---
-                    enter(
-                      SectionLabel(
-                        'Priority',
-                        trailing: _SectionAction(
-                          label: 'Manage',
-                          onTap: () => context.push('/priority'),
-                        ),
-                      ),
-                    ),
-                    if (hits.isEmpty)
-                      enter(
-                        _PriorityEmpty(
-                          onManage: () => context.push('/priority'),
-                        ),
-                      )
-                    else ...[
-                      for (final h in overflow.visible)
-                        enter(
-                          key: ValueKey(
-                            'priority-${h.server.id}-${h.agent.paneId}',
-                          ),
-                          AgentRow(
-                            agent: h.agent,
-                            starred: h.starred,
-                            serverName: showServer ? h.server.name : null,
-                            onTap: () => _openAgent(h.server, h.agent),
-                          ),
-                        ),
-                      PriorityOverflowBar(
-                        overflow: overflow,
-                        onToggle: () => ref
-                            .read(priorityExpandedProvider.notifier)
-                            .toggle(),
-                      ),
-                    ],
-
-                    // --- Recent (this device's own history) ---
-                    //
-                    // Absent entirely when empty. A device that has opened
-                    // nothing, or whose recents have all been claimed above,
-                    // gets no header and no empty box — an empty shortcut is
-                    // worse than no shortcut.
-                    if (recents.isNotEmpty) ...[
-                      enter(const SectionLabel('Recent')),
-                      for (final r in recents)
-                        enter(
-                          key: ValueKey('recent-${r.key}'),
-                          AgentRow(
-                            agent: r.agent,
-                            serverName: showServer ? r.server.name : null,
-                            trailing: _ViewMark(view: r.view),
-                            onTap: () => _open(r.server, r.route),
-                          ),
-                        ),
-                    ],
-
-                    // --- Everything else, by state ---
-                    //
-                    // The same builder the Flock screen uses, so an agent looks
-                    // identical whichever way you reached it.
-                    ...buildAgentSections(
-                      context,
-                      ref,
-                      groups: groups,
-                      showServer: showServer,
-                      onOpen: (hit) => _openAgent(hit.server, hit.agent),
-                    ).map(enter),
-
-                    // --- Servers ---
-                    enter(const SectionLabel('Servers')),
-                    for (final s in list)
-                      enter(
-                        key: ValueKey('server-${s.id}'),
-                        _ServerTile(
-                          server: s,
-                          summary: byServer[s.id],
-                          onTap: () => _openServer(s),
-                          onEdit: () => showEditServerSheet(context, s.id),
-                          onDelete: () => _confirmDelete(s),
-                        ),
-                      ),
-                  ],
-                ),
+                ],
               );
             },
           ),
@@ -304,9 +314,7 @@ class _GreetingHeader extends StatelessWidget {
 
     final needs = needsYou > 0;
     final color = needs ? scheme.error : scheme.primary;
-    final stateLabel = needs
-        ? '$needsYou NEED YOU'
-        : 'ALL CLEAR';
+    final stateLabel = needs ? '$needsYou NEED YOU' : 'ALL CLEAR';
 
     return Padding(
       // Roomier up top — this is the screen's headline, so it wants to sit
@@ -335,16 +343,16 @@ class _GreetingHeader extends StatelessWidget {
               children: [
                 Text(
                   greeting,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: Space.xs),
                 Text(
                   _friendlyDate(now),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ).mono,
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant)
+                      .mono,
                 ),
                 const SizedBox(height: Space.md),
                 Row(
@@ -720,6 +728,26 @@ String _hostLabel(String baseUrl) {
   final uri = Uri.tryParse(baseUrl);
   if (uri == null || uri.host.isEmpty) return baseUrl;
   return uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+}
+
+/// The slim strip the status bar sits on. With edge-to-edge rendering the
+/// system status bar is transparent over our content, and floating icons on
+/// the flat page reads as "broken" — this band gives that area a defined
+/// surface and a hairline edge, so the top of the screen reads as one frame.
+class _StatusBand extends StatelessWidget {
+  const _StatusBand();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      height: MediaQuery.paddingOf(context).top,
+      decoration: BoxDecoration(
+        color: scheme.wellFill,
+        border: Border(bottom: BorderSide(color: scheme.hairline, width: 1)),
+      ),
+    );
+  }
 }
 
 class _EmptyServers extends StatelessWidget {

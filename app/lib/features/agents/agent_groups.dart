@@ -59,7 +59,7 @@ const int kSectionVisibleRows = 5;
 /// A little more generous than [kSectionVisibleRows] because these rows are
 /// less than half the height, and because what it hides is by definition not
 /// urgent.
-const int kIdleVisibleRows = 6;
+const int kIdleVisibleRows = 3;
 
 /// Which agent sections the user has expanded, this session.
 ///

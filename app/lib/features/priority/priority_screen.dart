@@ -89,6 +89,7 @@ class PriorityScreen extends ConsumerWidget {
                   const _Hint(
                     'Nothing needs you right now. Blocked agents appear here '
                     'automatically; star any agent to always pin it.',
+                    small: true,
                   )
                 else ...[
                   for (final h in overflow.visible)
@@ -310,8 +311,13 @@ class _IdentityLine extends StatelessWidget {
 }
 
 class _Hint extends StatelessWidget {
-  const _Hint(this.text);
+  const _Hint(this.text, {this.small = false});
   final String text;
+
+  /// A quieter hint: the "nothing needs you" empty state reads as a notice
+  /// rather than an instruction, so it sits a step down from the hints that
+  /// explain why something is missing.
+  final bool small;
 
   @override
   Widget build(BuildContext context) {
@@ -319,7 +325,10 @@ class _Hint extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(Space.gutter, 4, Space.gutter, 8),
       child: Text(
         text,
-        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+        style: TextStyle(
+          fontSize: small ? 12 : null,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }

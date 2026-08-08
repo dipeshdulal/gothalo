@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/connection/server_switch.dart';
@@ -147,6 +148,17 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
       // No app-wide backdrop here: each screen paints its OWN opaque backdrop
       // via AppBackground, so pages slide as solid layers instead of showing
       // through one another during a transition. See AppBackground.
+      //
+      // Status-bar icons must read over the screen's backdrop. This is the one
+      // place Theme is guaranteed valid for any screen (it runs inside the
+      // MaterialApp), and it follows the theme's own brightness, which tracks
+      // the OS since themeMode is system.
+      builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+        value: Theme.of(context).brightness == Brightness.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        child: child!,
+      ),
     );
   }
 }
