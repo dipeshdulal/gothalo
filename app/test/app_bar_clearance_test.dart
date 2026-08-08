@@ -111,8 +111,24 @@ double _firstRowTop(WidgetTester tester) {
 }
 
 void main() {
+  // Home has no app bar — the greeting header owns the top, so the list only
+  // needs to clear the device's own top inset (the status bar). The bar-backed
+  // screens below assert against the bar instead.
+  testWidgets('home starts its list below the top inset, at rest', (tester) async {
+    await _pump(tester, const ServersScreen());
+
+    final insetBottom = MediaQuery.of(
+      tester.element(find.byType(Scaffold)),
+    ).padding.top;
+    expect(
+      _firstRowTop(tester),
+      greaterThanOrEqualTo(insetBottom),
+      reason: 'home draws its first row under the status bar',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   for (final (name, screen) in <(String, Widget)>[
-    ('home', const ServersScreen()),
     ('a project', const OverviewScreen(workspaceId: 'w1')),
     ('all projects', const OverviewScreen()),
   ]) {
