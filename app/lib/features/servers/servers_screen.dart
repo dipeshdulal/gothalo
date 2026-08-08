@@ -7,16 +7,33 @@ import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
 import '../../core/widgets/app_mark.dart';
+import '../../core/widgets/flat_app_bar.dart';
+import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/models/snapshot.dart';
-import '../inbox/widgets/agent_avatar.dart';
-import '../../core/widgets/agent_age.dart';
-import '../inbox/widgets/status_badge.dart';
+import '../agents/widgets/agent_row.dart';
 import '../priority/priority_providers.dart';
 import '../priority/widgets/priority_overflow_bar.dart';
+import '../recents/recent_providers.dart';
 
-/// Home dashboard: your **priority** (starred) agents across every server up
-/// top, then the **servers** list below with live per-server stats. Pick a
-/// server to open its flock, or jump straight to a starred agent.
+/// Home — **agents**, not servers.
+///
+/// The screen is named for the route it has always owned, but its subject has
+/// changed: you no longer walk server → flock → agents to reach the thing you
+/// were working on. Everything paired to this phone is on one page, in the
+/// order a person actually wants it:
+///
+///   1. **Priority** — what needs you, plus what you starred. Unchanged: the
+///      five-row cap, the "show N more" expander, the tally, and the rule that
+///      a blocked agent is never hidden by the cap.
+///   2. **Recent** — the agents *this device* opened last, straight back to the
+///      view you left them in. See [recentHitsProvider] for why this cannot be
+///      the bridge's recency ordering.
+///   3. **Agents** — every other agent on every server, grouped by state.
+///   4. **Servers** — still here, still how you add, edit and open one. It is
+///      no longer the way you find an agent.
+///
+/// Each of the first three shows an agent at most once: sections 2 and 3 are
+/// deduped against section 1, and 3 against 2. One agent, one row.
 class ServersScreen extends ConsumerStatefulWidget {
   const ServersScreen({super.key});
 
@@ -37,18 +54,22 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Future<void> _openServer(ServerSummary server) async {
     await ref.read(activeServerIdProvider.notifier).set(server.id);
     // push, not go: `go` replaces the whole stack, so Flock had no back entry
-    // and the hardware back button exited the app. Pushing keeps Servers
+    // and the hardware back button exited the app. Pushing keeps home
     // underneath, so back returns here.
     if (mounted) context.push('/inbox');
   }
 
-  Future<void> _openAgent(ServerSummary server, Agent agent) async {
+  /// Open an agent on [server]. The route is the caller's, because "back to
+  /// where you were" means the transcript for most rows and the terminal for a
+  /// Recent row that was left in one.
+  Future<void> _open(ServerSummary server, String route) async {
     await ref.read(activeServerIdProvider.notifier).set(server.id);
-    if (mounted) {
-      // Agents open the chat/transcript view by default (with a terminal toggle).
-      context.push('/transcript/${Uri.encodeComponent(agent.paneId)}');
-    }
+    if (mounted) context.push(route);
   }
+
+  Future<void> _openAgent(ServerSummary server, Agent agent) =>
+      // Agents open the chat/transcript view by default (with a terminal toggle).
+      _open(server, '/transcript/${Uri.encodeComponent(agent.paneId)}');
 
   Future<void> _confirmDelete(ServerSummary server) async {
     final ok = await showDialog<bool>(
@@ -80,7 +101,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     final servers = ref.watch(serversProvider);
     final hits = ref.watch(priorityHitsProvider);
     // Priority is the top of this screen, not the whole of it: past a handful
-    // of agents the section grew until the servers list was off the bottom.
+    // of agents the section grew until everything below it was off the bottom.
     // Cut it at the cap and put the rest behind an expander — except for the
     // agents that need you, which the cap is not allowed to hide.
     final overflow = PriorityOverflow.of(
@@ -95,14 +116,35 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     // state is AsyncLoading, which still carries the previous value but is not
     // AsyncData. Reading `asData` blanked the row back to "checking…" on every
     // tick, which defeats the point of refreshing at all.
-    final byServer = {
-      for (final sa in watchAllServerAgents(ref)) sa.server.id: sa,
+    final serverAgents = watchAllServerAgents(ref);
+    final byServer = {for (final sa in serverAgents) sa.server.id: sa};
+
+    // Everything Priority owns — the whole list, not the visible prefix, so
+    // expanding it can never duplicate a row further down the page.
+    final claimed = {
+      for (final h in overflow.all) recentKey(h.server.id, h.agent.paneId),
     };
+    final recents = recentRows(
+      ref.watch(recentHitsProvider),
+      exclude: claimed,
+    );
+    claimed.addAll(recents.map((r) => r.key));
+
+    // The rest of the flock, grouped by what it is doing. Ordered inside each
+    // group by the bridge's own attention-then-recency rule, so this list and
+    // the per-server flock list never disagree about what comes first.
+    final groups = groupAgentsByState(serverAgents, exclude: claimed);
+
+    // A single-server setup says the same server name on every row, which is
+    // noise. Two or more and it is the thing that tells otherwise-identical
+    // branches apart.
+    final showServer = (servers.value?.length ?? 0) > 1;
 
     return AppBackground(
       asset: Backgrounds.servers,
       child: Scaffold(
-        appBar: AppBar(
+        extendBodyBehindAppBar: true,
+        appBar: FlatAppBar(
           title: Row(
             mainAxisSize: MainAxisSize.min,
             children: const [
@@ -132,21 +174,27 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
             return RefreshIndicator(
               onRefresh: () async => ref.invalidate(serverAgentsProvider),
               child: ListView(
-                padding: const EdgeInsets.only(bottom: 96),
+                padding: EdgeInsets.only(
+                  top: FlatAppBar.padding(context),
+                  bottom: 96,
+                ),
                 children: [
-                  // --- Priority (starred) ---
-                  _SectionHeader(
-                    icon: Icons.star,
-                    label: 'Priority',
-                    onAction: () => context.push('/priority'),
-                    actionLabel: 'Manage',
+                  // --- Priority (needs you + starred) ---
+                  SectionLabel(
+                    'Priority',
+                    trailing: _SectionAction(
+                      label: 'Manage',
+                      onTap: () => context.push('/priority'),
+                    ),
                   ),
                   if (hits.isEmpty)
                     _PriorityEmpty(onManage: () => context.push('/priority'))
                   else ...[
                     for (final h in overflow.visible)
-                      _PriorityTile(
-                        hit: h,
+                      AgentRow(
+                        agent: h.agent,
+                        starred: h.starred,
+                        serverName: showServer ? h.server.name : null,
                         onTap: () => _openAgent(h.server, h.agent),
                       ),
                     PriorityOverflowBar(
@@ -156,14 +204,45 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                     ),
                   ],
 
-                  const SizedBox(height: 8),
-                  const Divider(height: 1),
+                  // --- Recent (this device's own history) ---
+                  //
+                  // Absent entirely when empty. A device that has opened
+                  // nothing, or whose recents have all been claimed above,
+                  // gets no header and no empty box — an empty shortcut is
+                  // worse than no shortcut.
+                  if (recents.isNotEmpty) ...[
+                    const SectionLabel('Recent'),
+                    for (final r in recents)
+                      AgentRow(
+                        agent: r.agent,
+                        serverName: showServer ? r.server.name : null,
+                        trailing: _ViewMark(view: r.view),
+                        onTap: () => _open(r.server, r.route),
+                      ),
+                  ],
+
+                  // --- Everything else, by state ---
+                  for (final group in groups) ...[
+                    SectionLabel(
+                      group.label,
+                      color: group.emphasize
+                          ? Theme.of(context).colorScheme.error
+                          : null,
+                      trailing: _Count(
+                        group.agents.length,
+                        emphasize: group.emphasize,
+                      ),
+                    ),
+                    for (final hit in group.agents)
+                      AgentRow(
+                        agent: hit.agent,
+                        serverName: showServer ? hit.server.name : null,
+                        onTap: () => _openAgent(hit.server, hit.agent),
+                      ),
+                  ],
 
                   // --- Servers ---
-                  const _SectionHeader(
-                    icon: Icons.dns_outlined,
-                    label: 'Servers',
-                  ),
+                  const SectionLabel('Servers'),
                   for (final s in list)
                     _ServerTile(
                       server: s,
@@ -182,46 +261,111 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   }
 }
 
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.icon,
+/// One agent on one server — the pair every home-screen section is a list of.
+class ServerAgentHit {
+  const ServerAgentHit(this.server, this.agent);
+  final ServerSummary server;
+  final Agent agent;
+
+  String get key => recentKey(server.id, agent.paneId);
+}
+
+/// A named group of agents on the home screen.
+class AgentGroup {
+  const AgentGroup({
     required this.label,
-    this.onAction,
-    this.actionLabel,
+    required this.agents,
+    this.emphasize = false,
   });
 
-  final IconData icon;
   final String label;
-  final VoidCallback? onAction;
-  final String? actionLabel;
+  final List<ServerAgentHit> agents;
+
+  /// Draw the header in the attention colour — true only for the group that is
+  /// waiting on a human.
+  final bool emphasize;
+}
+
+/// Every agent across every reachable server, minus [exclude], grouped by what
+/// it is doing.
+///
+/// Three groups, in the order a person triages: **needs you** (blocked or
+/// finished), **working**, **idle**. An empty group is omitted rather than
+/// rendered as a heading with nothing under it.
+///
+/// This is a pure function of the servers it is handed so the grouping, the
+/// ordering and the exclusion can be pinned without a bridge. Ordering inside a
+/// group is [Agent.byAttentionThenRecency] — the same comparator the flock list
+/// and Priority use, because two lists of the same agents in two different
+/// orders is worse than either order is good.
+///
+/// Unreachable servers contribute nothing. Their state is reported once, in the
+/// Servers section, rather than as a hole in the middle of the agent list.
+List<AgentGroup> groupAgentsByState(
+  List<ServerAgents> servers, {
+  Set<String> exclude = const {},
+}) {
+  final needsYou = <ServerAgentHit>[];
+  final working = <ServerAgentHit>[];
+  final idle = <ServerAgentHit>[];
+
+  for (final sa in servers) {
+    if (!sa.ok) continue;
+    for (final agent in sa.agents) {
+      final hit = ServerAgentHit(sa.server, agent);
+      if (exclude.contains(hit.key)) continue;
+      switch (agent.agentStatus) {
+        case AgentStatus.blocked:
+        case AgentStatus.done:
+          needsYou.add(hit);
+        case AgentStatus.working:
+          working.add(hit);
+        case AgentStatus.idle:
+        case AgentStatus.unknown:
+          idle.add(hit);
+      }
+    }
+  }
+
+  for (final list in [needsYou, working, idle]) {
+    list.sort((a, b) => Agent.byAttentionThenRecency(a.agent, b.agent));
+  }
+
+  return [
+    if (needsYou.isNotEmpty)
+      AgentGroup(label: 'Needs you', agents: needsYou, emphasize: true),
+    if (working.isNotEmpty) AgentGroup(label: 'Working', agents: working),
+    if (idle.isNotEmpty) AgentGroup(label: 'Idle', agents: idle),
+  ];
+}
+
+/// A section header's count, in mono like every other number on the screen.
+class _Count extends StatelessWidget {
+  const _Count(this.value, {this.emphasize = false});
+
+  final int value;
+  final bool emphasize;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 8, 6),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: scheme.primary),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const Spacer(),
-          if (onAction != null && actionLabel != null)
-            TextButton(onPressed: onAction, child: Text(actionLabel!)),
-        ],
-      ),
+    return Text(
+      '$value',
+      style: TextStyle(
+        fontSize: 10.5,
+        color: emphasize ? scheme.error : scheme.onSurfaceVariant,
+      ).mono,
     );
   }
 }
 
-class _PriorityTile extends StatelessWidget {
-  const _PriorityTile({required this.hit, required this.onTap});
-  final PriorityHit hit;
+/// The text action that sits on a section header ("Manage"), sized to the
+/// header rather than as a full [TextButton], which would out-weigh the label
+/// it is attached to.
+class _SectionAction extends StatelessWidget {
+  const _SectionAction({required this.label, required this.onTap});
+
+  final String label;
   final VoidCallback onTap;
 
   @override
@@ -229,55 +373,47 @@ class _PriorityTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
+      borderRadius: Radii.xsAll,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: [
-            AgentAvatar(agent: hit.agent.agent, radius: 18),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    hit.agent.displayTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${hit.server.name}  ·  ${hit.agent.gitLabel}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: scheme.onSurfaceVariant),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (hit.starred)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 6),
-                    child: Icon(Icons.star, size: 15, color: Color(0xFFF5C043)),
-                  ),
-                // How long it has been like this. "Done" is a state; "Done · 4m"
-                // is a decision. This is the first screen you see, so the number
-                // belongs here more than anywhere.
-                AgentAge(
-                  hit.agent.sinceLastActivity,
-                  emphasize: hit.agent.agentStatus == AgentStatus.blocked,
-                ),
-                const SizedBox(width: 8),
-                StatusBadge(hit.agent.agentStatus),
-              ],
-            ),
-          ],
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: scheme.primary,
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// Which view a Recent row will reopen — `CHAT` or `TERM`.
+///
+/// Small, mono and muted: it is a promise about where the tap goes, not a
+/// status. Without it two rows for the same agent (opened once in each view)
+/// would be indistinguishable, and more importantly a tap that lands somewhere
+/// other than where you left off reads as the app losing your place.
+class _ViewMark extends StatelessWidget {
+  const _ViewMark({required this.view});
+
+  final OpenedView view;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Text(
+      switch (view) {
+        OpenedView.transcript => 'CHAT',
+        OpenedView.terminal => 'TERM',
+      },
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.8,
+        color: scheme.onSurfaceVariant,
+      ).mono,
     );
   }
 }
@@ -289,31 +425,33 @@ class _PriorityEmpty extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
+    return PanelRow(
       onTap: onManage,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Icon(Icons.check_circle_outline, color: scheme.primary),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Nothing needs you'),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Blocked agents show up here automatically. Tap to star more.',
-                    style: TextStyle(color: scheme.onSurfaceVariant),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle_outline, size: 18, color: scheme.primary),
+          const SizedBox(width: Space.lg),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Nothing needs you',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Agents waiting on you show up here. Tap to star more.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: scheme.onSurfaceVariant,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right),
-          ],
-        ),
+          ),
+          Icon(Icons.chevron_right, size: 18, color: scheme.onSurfaceVariant),
+        ],
       ),
     );
   }
@@ -344,75 +482,80 @@ class _ServerTile extends StatelessWidget {
             .length ??
         0;
 
-    return InkWell(
+    return PanelRow(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: server.isActive
-                  ? scheme.primary
-                  : scheme.surfaceContainerHighest,
-              child: Icon(
-                Icons.dns_outlined,
-                size: 20,
-                color: server.isActive ? scheme.onPrimary : scheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          server.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
+      selected: server.isActive,
+      borderColor: server.isActive ? scheme.primary : null,
+      padding: const EdgeInsets.fromLTRB(10, 9, 4, 9),
+      child: Row(
+        children: [
+          Icon(
+            Icons.dns_outlined,
+            size: 18,
+            color: server.isActive ? scheme.primary : scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: Space.lg),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        server.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13.5,
                         ),
                       ),
-                      if (server.isActive) ...[
-                        const SizedBox(width: 8),
-                        _ActivePill(scheme: scheme),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _hostLabel(server.baseUrl),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontFamily: AppTheme.monoFamily,
-                      fontSize: 12.5,
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  _StatsLine(
-                    summary: summary,
-                    attention: attention,
-                    needsUpgrade: server.needsUpgrade,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            PopupMenuButton<String>(
-              onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'edit', child: Text('Edit')),
-                PopupMenuItem(value: 'delete', child: Text('Remove')),
+                    if (server.isActive) ...[
+                      const SizedBox(width: Space.md),
+                      Text(
+                        'ACTIVE',
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.8,
+                          color: scheme.primary,
+                        ).mono,
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _hostLabel(server.baseUrl),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 11.5,
+                  ).mono,
+                ),
+                const SizedBox(height: 2),
+                _StatsLine(
+                  summary: summary,
+                  attention: attention,
+                  needsUpgrade: server.needsUpgrade,
+                ),
               ],
             ),
-          ],
-        ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Server actions',
+            iconSize: 18,
+            icon: Icon(Icons.more_horiz, color: scheme.onSurfaceVariant),
+            onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'edit', child: Text('Edit')),
+              PopupMenuItem(value: 'delete', child: Text('Remove')),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -436,13 +579,13 @@ class _StatsLine extends StatelessWidget {
     if (summary == null) {
       return Text(
         'checking…',
-        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
       );
     }
     if (!summary!.ok) {
       return Text(
         'unreachable',
-        style: TextStyle(color: scheme.error, fontSize: 12),
+        style: TextStyle(color: scheme.error, fontSize: 11.5),
       );
     }
     final count = summary!.agents.length;
@@ -450,7 +593,7 @@ class _StatsLine extends StatelessWidget {
       children: [
         Text(
           '$count agent${count == 1 ? '' : 's'}',
-          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
         ),
         // A bridge that has never identified itself can't have its notifications
         // attributed or routed. Worth showing — the alternative is discovering
@@ -464,7 +607,7 @@ class _StatsLine extends StatelessWidget {
                 'Update gothalo on this machine to route its notifications',
             child: Icon(
               Icons.warning_amber_rounded,
-              size: 15,
+              size: 14,
               color: _warnColor,
             ),
           ),
@@ -477,7 +620,7 @@ class _StatsLine extends StatelessWidget {
             'update bridge',
             style: TextStyle(
               color: _warnColor,
-              fontSize: 12,
+              fontSize: 11.5,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -485,8 +628,8 @@ class _StatsLine extends StatelessWidget {
         if (attention > 0) ...[
           const SizedBox(width: 8),
           Container(
-            width: 7,
-            height: 7,
+            width: 6,
+            height: 6,
             decoration: BoxDecoration(
               color: scheme.error,
               shape: BoxShape.circle,
@@ -497,7 +640,7 @@ class _StatsLine extends StatelessWidget {
             '$attention need you',
             style: TextStyle(
               color: scheme.error,
-              fontSize: 12,
+              fontSize: 11.5,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -517,30 +660,6 @@ String _hostLabel(String baseUrl) {
   final uri = Uri.tryParse(baseUrl);
   if (uri == null || uri.host.isEmpty) return baseUrl;
   return uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
-}
-
-class _ActivePill extends StatelessWidget {
-  const _ActivePill({required this.scheme});
-  final ColorScheme scheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: scheme.primary.withValues(alpha: 0.18),
-        borderRadius: Radii.smAll,
-      ),
-      child: Text(
-        'Active',
-        style: TextStyle(
-          color: scheme.primary,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
 }
 
 class _EmptyServers extends StatelessWidget {

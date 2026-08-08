@@ -11,6 +11,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 
 import '../../core/connection/connection.dart';
+import '../../core/naming.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
@@ -20,6 +21,8 @@ import '../../features/approvals/approve_action.dart';
 import '../attach/image_attach.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../recents/record_open.dart';
+import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
 import '../transcript/quick_commands_providers.dart';
 import 'accessory_key_row.dart';
@@ -49,7 +52,8 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen> {
+class _TerminalScreenState extends ConsumerState<TerminalScreen>
+    with RecentOpenRecorder {
   /// [PtyMouseHandler] replaces xterm's wheel encoding so a drag on an
   /// alt-screen pane actually scrolls the application — see its doc comment.
   final terminal = Terminal(
@@ -435,9 +439,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         break;
       }
     }
+    // "I was just in this agent's terminal" — recorded so the home screen's
+    // Recent section can put you back in the terminal rather than the chat.
+    // Once per visit; see [RecentOpenRecorder].
+    recordRecentOpen(agent, view: OpenedView.terminal);
+
     // A non-agent pane (plain shell, dev server, log) isn't in [agents] at
-    // all — fall back to the flat pane list for its location, so the title
-    // subtitle still has something to show.
+    // all — fall back to the flat pane list, which is what names it: a
+    // terminal is called after what is running in it and where, never after
+    // its pane id.
     Pane? pane;
     if (agent == null) {
       for (final p in snap?.panes ?? const <Pane>[]) {
@@ -456,7 +466,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         title: PaneTitle(
-          title: agent?.displayTitle ?? widget.pane,
+          // An agent pane is titled by its task. A terminal is titled by what
+          // is running in it and the project it is running in — `shell ·
+          // gothalo`, `npm run dev · gothalo`. `w1N:p3` was never a name; it
+          // is the address we dial, and it is not shown. The pane id survives
+          // as the last resort only for the window between pushing this route
+          // and the snapshot arriving, when we genuinely know nothing else.
+          title: agent?.displayTitle ??
+              (pane != null ? terminalTitle(pane) : widget.pane),
           subtitle: agent != null
               ? [
                   agent.gitLabel,
@@ -499,7 +516,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               icon: const Icon(Icons.chat_bubble_outline),
             ),
           IconButton(
-            tooltip: 'Overview',
+            tooltip: 'Projects',
             onPressed: () => context.push('/overview'),
             icon: const Icon(Icons.grid_view_outlined),
           ),
@@ -649,7 +666,7 @@ class _ClosedOverlay extends StatelessWidget {
               Icon(Icons.tab_unselected, size: 44, color: scheme.onSurface),
               const SizedBox(height: 12),
               Text(
-                'This pane was closed',
+                'This terminal was closed',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 6),
@@ -667,7 +684,7 @@ class _ClosedOverlay extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onOverview,
                     icon: const Icon(Icons.grid_view_outlined, size: 18),
-                    label: const Text('Overview'),
+                    label: const Text('Projects'),
                   ),
                   const SizedBox(width: 12),
                   FilledButton.icon(

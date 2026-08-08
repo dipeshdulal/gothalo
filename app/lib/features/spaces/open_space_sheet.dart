@@ -462,7 +462,7 @@ class _OpenHereBar extends StatelessWidget {
             Expanded(
               child: Text(
                 listing.isOpen
-                    ? '${_leaf(listing.path)} is already a space'
+                    ? '${_leaf(listing.path)} is already open'
                     : 'Open ${_leaf(listing.path)} itself',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -567,7 +567,7 @@ class _BrowseError extends StatelessWidget {
           Text(
             unsupported
                 ? 'Browsing for a project needs a newer gothalo bridge on the '
-                    'host. Update it, or open the space in Herdr on the desktop.'
+                    'host. Update it, or open the project in Herdr on the desktop.'
                 : (bridgeErr?.message ?? '$error'),
             textAlign: TextAlign.center,
             style: Theme.of(context)

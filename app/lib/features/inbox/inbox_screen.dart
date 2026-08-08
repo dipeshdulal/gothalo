@@ -16,10 +16,13 @@ import 'inbox_providers.dart';
 import 'widgets/agent_avatar.dart';
 import 'widgets/status_badge.dart';
 
-/// The inbox for the active server, structured like Herdr's sidebar: an
-/// **Agents** tab (every agent, attention-first) and a **Spaces** tab (agents
-/// grouped by workspace). Pull to refresh on either. Tapping a row opens its
-/// (stubbed) terminal.
+/// The flock for the active server: an **Agents** tab (every agent,
+/// attention-first) and a **Projects** tab (what is checked out on this
+/// machine, one row per repo/branch). Pull to refresh on either. Tapping an
+/// agent opens its chat; tapping a project opens it.
+///
+/// Herdr calls the second thing a workspace, or a space. The app does not —
+/// see `lib/core/naming.dart` for the whole of that mapping.
 class InboxScreen extends ConsumerWidget {
   const InboxScreen({super.key});
 
@@ -90,7 +93,7 @@ class InboxScreen extends ConsumerWidget {
                     value: _FlockMenuAction.overview,
                     child: _MenuRow(
                       icon: Icons.dashboard_outlined,
-                      label: 'Overview',
+                      label: 'All projects',
                     ),
                   ),
                   const PopupMenuItem(
@@ -116,7 +119,7 @@ class InboxScreen extends ConsumerWidget {
                 ),
                 Tab(
                   text:
-                      'Spaces${_countSuffix(snapshot, (s) => s.workspaces.length)}',
+                      'Projects${_countSuffix(snapshot, (s) => s.workspaces.length)}',
                 ),
               ],
             ),
@@ -139,7 +142,7 @@ class InboxScreen extends ConsumerWidget {
                       ),
                       _Refreshable(
                         ref: ref,
-                        child: _SpacesTab(snap: snap),
+                        child: _ProjectsTab(snap: snap),
                       ),
                     ],
                   ),
@@ -203,7 +206,7 @@ class _AgentsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (snap.agents.isEmpty) {
-      return _EmptyState(spacesOpen: snap.workspaces.isNotEmpty);
+      return _EmptyState(projectsOpen: snap.workspaces.isNotEmpty);
     }
     final agents = snap.agentsSorted;
     return ListView.separated(
@@ -216,16 +219,17 @@ class _AgentsTab extends StatelessWidget {
   }
 }
 
-/// Agents grouped by project (repo folder), merging a project's main checkout
-/// with its worktrees. Herdr's raw `w5`/`w8` workspace ids are demoted to a
-/// subtle per-row detail.
-class _SpacesTab extends StatelessWidget {
-  const _SpacesTab({required this.snap});
+/// The server's projects — one row per Herdr workspace, named for the repo it
+/// is checked out at and the branch it is on. A project's main checkout sorts
+/// above its worktrees, which reads as the worktrees belonging under it.
+/// Herdr's raw `w5`/`w8` workspace ids never appear.
+class _ProjectsTab extends StatelessWidget {
+  const _ProjectsTab({required this.snap});
   final Snapshot snap;
 
   @override
   Widget build(BuildContext context) {
-    if (snap.workspaces.isEmpty) return const _EmptyState(spacesOpen: false);
+    if (snap.workspaces.isEmpty) return const _EmptyState(projectsOpen: false);
     // Representative cwd per workspace (from its first pane) → git context, so
     // worktrees sort right under their parent project.
     final cwdByWs = <String, String>{};
@@ -246,23 +250,45 @@ class _SpacesTab extends StatelessWidget {
         return a.number.compareTo(b.number);
       });
 
+    // How many agents and how many terminals each project holds — the two
+    // things it is actually made of, in place of the pane/tab counts, which
+    // named Herdr's containers rather than their contents.
+    final agentPanes = snap.agentPaneIds;
+    final agents = <String, int>{};
+    final terminals = <String, int>{};
+    for (final p in snap.panes) {
+      final bucket = agentPanes.contains(p.paneId) ? agents : terminals;
+      bucket.update(p.workspaceId, (n) => n + 1, ifAbsent: () => 1);
+    }
+
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: spaces.length,
       separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
-      itemBuilder: (context, i) =>
-          _SpaceTile(space: spaces[i], git: git(spaces[i])),
+      itemBuilder: (context, i) => _ProjectTile(
+        space: spaces[i],
+        git: git(spaces[i]),
+        agents: agents[spaces[i].workspaceId] ?? 0,
+        terminals: terminals[spaces[i].workspaceId] ?? 0,
+      ),
     );
   }
 }
 
-/// One space (workspace). Worktree spaces are marked with a branch icon and
-/// indented under their parent project. Tapping opens the space's overview.
-class _SpaceTile extends StatelessWidget {
-  const _SpaceTile({required this.space, required this.git});
+/// One project. A worktree checkout is marked with a branch icon and indented
+/// under the repo it belongs to. Tapping opens it.
+class _ProjectTile extends StatelessWidget {
+  const _ProjectTile({
+    required this.space,
+    required this.git,
+    required this.agents,
+    required this.terminals,
+  });
   final WorkspaceInfo space;
   final ({String project, String? worktree}) git;
+  final int agents;
+  final int terminals;
 
   @override
   Widget build(BuildContext context) {
@@ -356,7 +382,7 @@ class _SpaceTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${space.paneCount} pane${space.paneCount == 1 ? '' : 's'} · ${space.tabCount} tab${space.tabCount == 1 ? '' : 's'}',
+                    _contents(agents, terminals),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -504,6 +530,17 @@ class _AgentTile extends ConsumerWidget {
   }
 }
 
+/// "2 agents · 1 terminal" — what a project actually contains, in place of the
+/// pane and tab counts it used to show. A project with neither reads as "empty"
+/// rather than as "0 agents · 0 terminals", which is three words to say nothing.
+String _contents(int agents, int terminals) {
+  final parts = <String>[
+    if (agents > 0) '$agents agent${agents == 1 ? '' : 's'}',
+    if (terminals > 0) '$terminals terminal${terminals == 1 ? '' : 's'}',
+  ];
+  return parts.isEmpty ? 'empty' : parts.join(' · ');
+}
+
 /// A full-width monospace metadata line (leading icon + text), used for the
 /// project folder and branch on an agent row. The text takes the remaining
 /// width and ellipsizes, so a long branch name never overflows the row.
@@ -546,17 +583,17 @@ class _GitLine extends StatelessWidget {
 
 /// The nothing-here state, in its two meaningfully different flavours.
 ///
-/// With spaces open, "no agents" is a normal lull — the operator starts one and
-/// pulls to refresh. With **nothing** open the phone previously had nothing to
-/// offer at all: no space means no pane to split and no directory to inherit, so
-/// the only route back in was walking to the desktop. That is the case that
-/// gets the call to action.
+/// With a project open, "no agents" is a normal lull — the operator starts one
+/// and pulls to refresh. With **nothing** open the phone previously had nothing
+/// to offer at all: no project means no terminal to split and no directory to
+/// inherit, so the only route back in was walking to the desktop. That is the
+/// case that gets the call to action.
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.spacesOpen});
+  const _EmptyState({required this.projectsOpen});
 
-  /// Whether the server has any workspace at all. False is the empty-session
+  /// Whether the server has any project open at all. False is the empty-session
   /// case the "Open a project" flow exists for.
-  final bool spacesOpen;
+  final bool projectsOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -566,14 +603,14 @@ class _EmptyState extends StatelessWidget {
       children: [
         SizedBox(height: MediaQuery.of(context).size.height * 0.22),
         Icon(
-          spacesOpen ? Icons.inbox_outlined : Icons.folder_off_outlined,
+          projectsOpen ? Icons.inbox_outlined : Icons.folder_off_outlined,
           size: 56,
           color: scheme.onSurfaceVariant,
         ),
         const SizedBox(height: 12),
         Center(
           child: Text(
-            spacesOpen ? 'No agents right now' : 'Nothing open on this server',
+            projectsOpen ? 'No agents right now' : 'Nothing open on this server',
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
@@ -582,10 +619,10 @@ class _EmptyState extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 32),
             child: Text(
-              spacesOpen
+              projectsOpen
                   ? 'Start an agent in Herdr, then pull to refresh.'
-                  : 'Herdr has no spaces open. Pick a project on the host and '
-                      'open it as a space — you can start an agent in it from '
+                  : 'Nothing is open on this machine yet. Pick a project on '
+                      'the host to open it — you can start an agent in it from '
                       'here afterwards.',
               textAlign: TextAlign.center,
               style: Theme.of(
@@ -594,7 +631,7 @@ class _EmptyState extends StatelessWidget {
             ),
           ),
         ),
-        if (!spacesOpen) ...[
+        if (!projectsOpen) ...[
           const SizedBox(height: 20),
           Center(
             child: FilledButton.icon(

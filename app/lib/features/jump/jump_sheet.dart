@@ -263,7 +263,7 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
           isDense: true,
           filled: true,
           fillColor: scheme.surfaceContainerHighest,
-          hintText: 'Search agents, files, workspaces…',
+          hintText: 'Search agents, files, projects…',
           prefixIcon: const Icon(Icons.search, size: 20),
           suffixIcon: _query.isEmpty
               ? null
@@ -444,11 +444,11 @@ class _JumpItem {
     if (git.project.isNotEmpty) parts.add(git.project);
     final branch = a.branchName;
     if (branch != null && branch.isNotEmpty) parts.add(branch);
-    if (tabLabel.isNotEmpty) {
-      parts.add(tabLabel);
-    } else if (tab != null && tab.number > 0) {
-      parts.add('tab ${tab.number}');
-    }
+    // A tab the user has *named* is a name they chose, so it earns a place on
+    // the context line. An unnamed one used to fall back to "tab 3", which named
+    // Herdr's container rather than anything about the agent — dropped, not
+    // renamed: there is nothing to say there.
+    if (tabLabel.isNotEmpty) parts.add(tabLabel);
     if (!a.isDefaultSession) parts.add(a.sessionName);
 
     final hay = [

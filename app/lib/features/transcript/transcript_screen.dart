@@ -24,6 +24,8 @@ import '../attach/image_attach.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../recents/record_open.dart';
+import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
 import 'slash_commands.dart';
@@ -65,7 +67,8 @@ class TranscriptScreen extends ConsumerStatefulWidget {
   ConsumerState<TranscriptScreen> createState() => _TranscriptScreenState();
 }
 
-class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
+class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
+    with RecentOpenRecorder {
   final ScrollController _scroll = ScrollController();
   final TextEditingController _composer = TextEditingController();
 
@@ -925,6 +928,9 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
         break;
       }
     }
+    // "I was just in this agent's chat" — the fact the home screen's Recent
+    // section is built from. Once per visit; see [RecentOpenRecorder].
+    recordRecentOpen(agent, view: OpenedView.transcript);
 
     // The slash typeahead's matches, or empty when it should not show — no
     // active `/…` token, the fetch has not landed, or nothing matches what was
@@ -1128,7 +1134,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen> {
     if (_conn == _Conn.closed) {
       return _CenteredNotice(
         icon: Icons.tab_unselected,
-        title: 'This pane was closed',
+        title: 'This agent is gone',
         message:
             'It was closed on the host or the agent finished. The conversation '
             'above is the last we received.',

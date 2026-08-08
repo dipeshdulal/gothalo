@@ -156,7 +156,7 @@ void main() {
   testWidgets('the dialog names the branch and says it is merged', (tester) async {
     await _openDialog(tester, _Bridge(branchInfo: _info()));
 
-    expect(find.text('Remove worktree?'), findsOneWidget);
+    expect(find.text('Finish this work?'), findsOneWidget);
     expect(find.textContaining('Also delete the branch'), findsOneWidget);
     expect(find.textContaining('feat/x'), findsWidgets);
     expect(find.textContaining('Merged into main'), findsOneWidget);
@@ -308,7 +308,7 @@ void main() {
     await _openDialog(tester, adapter);
 
     expect(_checkbox, findsNothing);
-    expect(find.text('Remove worktree?'), findsOneWidget);
+    expect(find.text('Finish this work?'), findsOneWidget);
 
     await tester.tap(_removeButton);
     await tester.pumpAndSettle();
@@ -334,7 +334,7 @@ void main() {
     }
 
     // Not a generic success, and not a bare error either: both halves.
-    expect(find.textContaining('Worktree removed'), findsOneWidget);
+    expect(find.textContaining('Work finished'), findsOneWidget);
     expect(find.textContaining('branch feat/x kept'), findsOneWidget);
     expect(find.textContaining('not merged'), findsOneWidget);
   });
@@ -352,7 +352,7 @@ void main() {
           'remote_deleted': false,
         }),
       );
-      expect(line, 'Worktree removed · branch feat/x deleted');
+      expect(line, 'Work finished · branch feat/x deleted');
     });
 
     test('a forced delete says so and keeps the sha', () {
@@ -367,7 +367,7 @@ void main() {
           'remote_deleted': false,
         }),
       );
-      expect(line, 'Worktree removed · unmerged branch feat/x deleted (was abc1234)');
+      expect(line, 'Work finished · unmerged branch feat/x deleted (was abc1234)');
     });
 
     test('an upstream is reported as left alone, never as deleted', () {
@@ -389,7 +389,7 @@ void main() {
   test('branchKeptSummary reports both halves', () {
     expect(
       branchKeptSummary('feat/x', 'it is checked out at /wt/other'),
-      'Worktree removed · branch feat/x kept: it is checked out at /wt/other',
+      'Work finished · branch feat/x kept: it is checked out at /wt/other',
     );
   });
 }

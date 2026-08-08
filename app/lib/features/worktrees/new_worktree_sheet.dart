@@ -142,7 +142,7 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
                 Icon(Icons.call_split, color: scheme.primary),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text('New worktree in ${widget.repoLabel}',
+                  child: Text('Start new work in ${widget.repoLabel}',
                       style: text.titleMedium),
                 ),
               ],
@@ -176,7 +176,7 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
               contentPadding: EdgeInsets.zero,
               title: const Text('Start an agent in it'),
               subtitle: Text(
-                'Launches in the new worktree’s first pane, once it exists.',
+                'Launches in the new branch’s first terminal, once it exists.',
                 style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ),
@@ -286,7 +286,7 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
               : Icon(_withAgent
                   ? Icons.rocket_launch_outlined
                   : Icons.add_rounded),
-          label: Text(_withAgent ? 'Create & start' : 'Create'),
+          label: Text(_withAgent ? 'Start & run agent' : 'Start'),
         ),
       ],
     );
@@ -333,9 +333,9 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
       // started into it — both halves of that have to reach the operator.
       messenger.showSnackBar(SnackBar(
         content: Text(_withAgent
-            ? 'Worktree "$branch" created. No agent was started — the sheet '
+            ? 'Work started on "$branch". No agent was started — the sheet '
                 'was closed before it could be.'
-            : 'Worktree "$branch" created'),
+            : 'Work started on "$branch"'),
         duration: const Duration(seconds: 4),
       ));
       return;
@@ -350,7 +350,7 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
       // toggle existed.
       navigator.pop();
       messenger.showSnackBar(SnackBar(
-        content: Text('Worktree "$branch" created'),
+        content: Text('Work started on "$branch"'),
         duration: const Duration(seconds: 1),
       ));
       return;
@@ -481,8 +481,8 @@ class _Progress extends StatelessWidget {
       children: [
         _StepRow(
           label: created != null
-              ? 'Worktree "$branch" created'
-              : 'Creating worktree "$branch"…',
+              ? 'Checkout for "$branch" ready'
+              : 'Setting up "$branch"…',
           running: creating,
           done: created != null,
         ),

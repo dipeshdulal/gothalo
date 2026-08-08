@@ -109,7 +109,7 @@ Future<bool> _confirm(
   return ok ?? false;
 }
 
-/// Split [paneId] to add a pane beside it (the app's "new pane").
+/// Split [paneId] to open a second terminal beside it.
 Future<void> splitPane(
   BuildContext context,
   WidgetRef ref,
@@ -121,40 +121,57 @@ Future<void> splitPane(
       ref,
       'pane.split',
       {'target_pane_id': paneId, 'direction': direction},
-      successMessage: 'Pane added',
+      successMessage: 'Terminal added',
     );
 
-/// Close [paneId] (closing a tab's last pane closes the tab too).
-Future<void> closePane(BuildContext context, WidgetRef ref, String paneId) async {
+/// Close [paneId] (closing the last one sharing its split closes the split too).
+///
+/// [label] is what the user calls it — an agent's task or a terminal's name —
+/// and [subject] is which of the two it is. The confirm names those rather than
+/// the pane id: a dialog that says "this closes w1N:p3" is asking someone to
+/// agree to something they cannot read, and the pane id is an address, not a
+/// name.
+Future<void> closePane(
+  BuildContext context,
+  WidgetRef ref,
+  String paneId, {
+  String? label,
+  String subject = 'terminal',
+}) async {
+  final what = (label == null || label.trim().isEmpty)
+      ? 'this $subject'
+      : '"${label.trim()}"';
   if (!await _confirm(
     context,
-    title: 'Close pane?',
-    message: 'This closes $paneId on the host. Anything running in it stops.',
+    title: 'Close this $subject?',
+    message: 'This closes $what on the host. Anything running in it stops.',
     confirmLabel: 'Close',
   )) {
     return;
   }
   if (!context.mounted) return;
   await _run(context, ref, 'pane.close', {'pane_id': paneId},
-      successMessage: 'Pane closed');
+      successMessage: 'Closed');
 }
 
-/// Close a whole tab and its panes.
+/// Close every terminal sharing one split (Herdr: a tab and all its panes).
 Future<void> closeTab(BuildContext context, WidgetRef ref, String tabId) async {
   if (!await _confirm(
     context,
-    title: 'Close tab?',
-    message: 'This closes tab $tabId and every pane in it on the host.',
-    confirmLabel: 'Close',
+    title: 'Close all in this split?',
+    message: 'This closes every terminal sharing this split on the host. '
+        'Anything running in them stops.',
+    confirmLabel: 'Close all',
   )) {
     return;
   }
   if (!context.mounted) return;
   await _run(context, ref, 'tab.close', {'tab_id': tabId},
-      successMessage: 'Tab closed');
+      successMessage: 'Closed');
 }
 
-/// The longest tab label the app will send.
+/// The longest terminal name the app will send (Herdr stores it as the tab's
+/// label).
 ///
 /// Herdr imposes no limit of its own and happily accepts an empty string —
 /// verified against the socket, where `tab.rename` with `""` blanks the label
@@ -174,11 +191,18 @@ String? normalizeTabLabel(String raw) {
   return trimmed;
 }
 
-/// Prompt for a new label and rename [tabId].
+/// Prompt for a new name and rename [tabId].
 ///
-/// Prefilled with the tab's current label and selected, so the common case
-/// (replace it) is one keystroke and the rarer one (edit it) is still possible.
-/// No manual refresh: Herdr emits `tab.renamed`, which reaches the app over
+/// Herdr's unit here is the **tab**, and the app never says that word. It is
+/// only offered on a terminal whose tab holds exactly one pane — which is what
+/// everything the app creates looks like — so renaming that tab is precisely
+/// renaming that terminal, and the subject the user is given is the one they
+/// can see. The wire call is unchanged; see `_PaneCard` for where the
+/// one-pane rule is enforced.
+///
+/// Prefilled with the current name and selected, so the common case (replace
+/// it) is one keystroke and the rarer one (edit it) is still possible. No
+/// manual refresh: Herdr emits `tab.renamed`, which reaches the app over
 /// `/events` and re-snapshots like every other change.
 Future<void> renameTabDialog(
   BuildContext context,
@@ -199,7 +223,7 @@ Future<void> renameTabDialog(
     ref,
     'tab.rename',
     {'tab_id': tabId, 'label': label},
-    successMessage: 'Tab renamed to "$label"',
+    successMessage: 'Renamed to "$label"',
   );
 }
 
@@ -239,14 +263,14 @@ class _RenameTabDialogState extends State<_RenameTabDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Rename tab'),
+      title: const Text('Rename terminal'),
       content: TextField(
         controller: _controller,
         autofocus: true,
         maxLength: maxTabLabelLength,
         textInputAction: TextInputAction.done,
         decoration: const InputDecoration(
-          labelText: 'Tab name',
+          labelText: 'Terminal name',
           hintText: 'api server',
         ),
         onSubmitted: (_) => _submit(),
@@ -271,10 +295,13 @@ class _RenameTabDialogState extends State<_RenameTabDialog> {
   }
 }
 
-/// Add a new tab (with its root shell) to [workspaceId].
-Future<void> newTab(BuildContext context, WidgetRef ref, String workspaceId) =>
-    _run(context, ref, 'tab.create', {'workspace_id': workspaceId},
-        successMessage: 'Tab created');
+// `tab.create` is deliberately not wrapped here any more. It used to back a
+// "New tab" menu item sitting next to "New terminal", which was the same action
+// twice in the user's terms and Herdr's vocabulary leaking to explain the
+// difference. The one that survived is the one that also navigates you into
+// what it made: `BridgeClient.createPane(workspaceId:)`, which Herdr answers by
+// opening a tab with a shell in it — the same call, minus the second name for
+// it.
 
 /// Remove a git worktree workspace (deletes its checkout on the host), and
 /// optionally the branch it was on.
@@ -331,7 +358,7 @@ Future<void> removeWorktree(
 
   if (!deleteBranch || branch == null) {
     messenger.showSnackBar(
-      const SnackBar(content: Text('Worktree removed'), duration: Duration(seconds: 1)),
+      const SnackBar(content: Text('Work finished'), duration: Duration(seconds: 1)),
     );
     return;
   }
@@ -367,7 +394,7 @@ Future<void> removeWorktree(
 /// were dropped (and leaves the sha, the only way back), a plain one does not,
 /// and an upstream is reported as *kept* because nothing here pushes.
 String removeWorktreeSummary(BranchDeleteResult r) {
-  final parts = <String>['Worktree removed'];
+  final parts = <String>['Work finished'];
   parts.add(r.forced
       ? 'unmerged branch ${r.branch} deleted (was ${r.sha})'
       : 'branch ${r.branch} deleted');
@@ -380,9 +407,16 @@ String removeWorktreeSummary(BranchDeleteResult r) {
 /// The outcome line for a removal whose branch survived — the normal partial
 /// result, not an error. [reason] is the bridge's own sentence.
 String branchKeptSummary(String branch, String reason) =>
-    'Worktree removed · branch $branch kept: $reason';
+    'Work finished · branch $branch kept: $reason';
 
-/// The "Remove worktree?" confirm, with the opt-in branch delete.
+/// The "Finish this work?" confirm, with the opt-in branch delete.
+///
+/// The subject is the work, not the worktree: from a phone this is "I am done
+/// with this branch, take it off the machine". Everything it actually does is
+/// unchanged — `worktree.remove` on the host, then the optional
+/// `POST /branch-delete` — and the parts that name git's own objects (the
+/// branch, whether it is merged, the sha a forced delete leaves behind) keep
+/// saying so, because those are the words that let someone get the work back.
 ///
 /// Pops `null` (cancelled), `false` (remove the worktree only) or `true`
 /// (remove it and delete the branch). Default is **off**: removing a worktree
@@ -438,15 +472,15 @@ class _RemoveWorktreeDialogState extends State<_RemoveWorktreeDialog> {
     final offerable = info != null && info.deletable && info.branch.isNotEmpty;
 
     return AlertDialog(
-      title: const Text('Remove worktree?'),
+      title: const Text('Finish this work?'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'This removes the "${widget.label}" worktree checkout on the '
-              'host. Uncommitted changes there are lost.',
+              'This removes the "${widget.label}" checkout on the host. '
+              'Uncommitted changes there are lost.',
             ),
             if (offerable) ...[
               const SizedBox(height: 8),
