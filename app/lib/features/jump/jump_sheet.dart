@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
 import '../../core/widgets/action_chip.dart';
+import '../../core/widgets/app_search_field.dart';
 import '../agents/widgets/agent_row.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -385,54 +386,19 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
   Widget _searchField(ColorScheme scheme) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: TextField(
+      // The shared field. It was this screen's own decoration, and the look was
+      // good enough that it became the app's — so it now lives in the theme and
+      // in [AppSearchField], and this call site declares nothing about it.
+      //
+      // Not autofocused: opening the sheet used to raise the keyboard
+      // immediately, covering about half the screen and leaving three and a
+      // half results visible. Jump is mostly for *scanning*, so it opens with
+      // the list at full height and tapping the field is how you get a keyboard.
+      child: AppSearchField(
         controller: _search,
         focusNode: _searchFocus,
-        // **Not autofocused.** Opening the sheet used to raise the keyboard
-        // immediately, which covers about half the screen and left three and a
-        // half results visible. Jump is mostly for *scanning* — you open it to
-        // see what is there and tap one — so it opens with the list at full
-        // height. Tapping the field is how you get the keyboard.
-        autofocus: false,
-        textInputAction: TextInputAction.search,
+        hintText: 'Search agents, files, projects…',
         onChanged: (v) => setState(() => _query = v),
-        style: const TextStyle(fontSize: 14),
-        // The composer's treatment: a flat panel fill inside a hairline, the
-        // accent only on focus. It was a heavy mint-accented rounded box, which
-        // is the one input style in the app that had not been converted.
-        decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: scheme.panelFill,
-          hintText: 'Search agents, files, projects…',
-          hintStyle: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
-          prefixIcon: Icon(
-            Icons.search,
-            size: 18,
-            color: scheme.onSurfaceVariant,
-          ),
-          suffixIcon: _query.isEmpty
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.clear, size: 16),
-                  onPressed: () {
-                    _search.clear();
-                    setState(() => _query = '');
-                  },
-                ),
-          border: OutlineInputBorder(
-            borderRadius: Radii.mdAll,
-            borderSide: BorderSide(color: scheme.hairline),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: Radii.mdAll,
-            borderSide: BorderSide(color: scheme.hairline),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: Radii.mdAll,
-            borderSide: BorderSide(color: scheme.primary),
-          ),
-        ),
       ),
     );
   }

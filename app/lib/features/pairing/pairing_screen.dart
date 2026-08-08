@@ -176,11 +176,10 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: _deviceName,
+                      // Border and density come from the theme.
                       decoration: const InputDecoration(
                         labelText: 'This device\'s name',
                         prefixIcon: Icon(Icons.smartphone),
-                        border: OutlineInputBorder(),
-                        isDense: true,
                       ),
                     ),
                     if (_error != null) ...[

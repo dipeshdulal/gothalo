@@ -83,12 +83,13 @@ class AppTheme {
       brightness: brightness,
     );
     final dark = brightness == Brightness.dark;
-    // The edge every flat surface is drawn with. Light-on-dark rather than an
-    // outline colour, so a panel looks lit from above rather than outlined in
-    // pen.
-    final hairline = dark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.08);
+    // **The tokens' hairline, not a second copy of it.** This used to compute
+    // its own at 8% — which is what the token was before the contrast pass
+    // raised it — so every surface the *theme* draws (cards, chips, dividers,
+    // fields) kept the faint edge while `PanelRow` and friends moved to the
+    // legible one. Two definitions of one line is how a design language drifts
+    // from itself in a single file.
+    final hairline = scheme.hairline;
 
     return ThemeData(
       useMaterial3: true,
@@ -161,24 +162,48 @@ class AppTheme {
         showCheckmark: false,
       ),
       dividerTheme: DividerThemeData(color: hairline, space: 1, thickness: 1),
-      // Fields are flat wells with a hairline edge; focus draws a single
-      // accent border.
+      // **The app's one text-field treatment**, in the theme rather than as a
+      // widget, so every `TextField` and `TextFormField` gets it without being
+      // told: a flat panel fill inside a hairline at the panel radius, the
+      // accent showing only on focus, and a muted hint.
+      //
+      // It is the Jump search field's look, which was the odd one out and
+      // turned out to be the good one. The previous theme differed from it in
+      // three ways — a sunken `wellFill`, the tighter `sm` radius, and a 1.2px
+      // focus ring — each of which made a field read as a hole in the page
+      // rather than as a panel you can type in. Fields that need more (the
+      // composer's inline controls, a mono value for an identifier) take it as
+      // a parameter; none of them redeclare the border.
       inputDecorationTheme: InputDecorationTheme(
+        isDense: true,
         filled: true,
-        fillColor: scheme.wellFill,
+        fillColor: scheme.panelFill,
+        hintStyle: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
         border: OutlineInputBorder(
-          borderRadius: Radii.smAll,
+          borderRadius: Radii.mdAll,
           borderSide: BorderSide(color: hairline),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: Radii.smAll,
+          borderRadius: Radii.mdAll,
           borderSide: BorderSide(color: hairline),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: Radii.smAll,
-          borderSide: BorderSide(color: scheme.primary, width: 1.2),
+          borderRadius: Radii.mdAll,
+          borderSide: BorderSide(color: scheme.primary),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: Radii.mdAll,
+          borderSide: BorderSide(color: hairline),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: Radii.mdAll,
+          borderSide: BorderSide(color: scheme.error),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: Radii.mdAll,
+          borderSide: BorderSide(color: scheme.error),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       ),
       // A label-width underline instead of a full-width bar, and no divider
       // beneath the tab row — the flat header already ends in a hairline, and

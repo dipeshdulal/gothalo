@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/tokens.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 
@@ -34,8 +35,8 @@ import '../../data/bridge/bridge_providers.dart';
 /// Never surfaces an error: every failure (no connection, a bridge too old to
 /// send the `git` object) collapses to [GitContext.unknown], which reads as
 /// "can't tell" and blocks the send rather than guessing.
-final paneGitContextProvider =
-    FutureProvider.autoDispose.family<GitContext, String>((ref, pane) async {
+final paneGitContextProvider = FutureProvider.autoDispose
+    .family<GitContext, String>((ref, pane) async {
       final client = ref.watch(bridgeClientProvider);
       if (client == null) return GitContext.unknown;
       try {
@@ -74,7 +75,9 @@ String? prBlockReason(GitContext git) {
         'onto a feature branch first.';
   }
   if (!git.hasWork) {
-    final base = git.defaultBranch.isNotEmpty ? git.defaultBranch : 'the default branch';
+    final base = git.defaultBranch.isNotEmpty
+        ? git.defaultBranch
+        : 'the default branch';
     return 'Nothing to open a pull request with: no commits ahead of $base, '
         'and no uncommitted changes.';
   }
@@ -97,7 +100,9 @@ Future<void> showAgentPromptSheet(
   final messenger = ScaffoldMessenger.of(context);
   final client = ref.read(bridgeClientProvider);
   if (client == null) {
-    messenger.showSnackBar(const SnackBar(content: Text('No bridge connection.')));
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No bridge connection.')),
+    );
     return;
   }
 
@@ -212,7 +217,10 @@ class _AgentPromptSheetState extends State<_AgentPromptSheet> {
                 blocked == null
                     ? widget.suggestion.detail
                     : 'No longer available for this pane',
-                style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 14),
               if (blocked != null)
@@ -225,12 +233,10 @@ class _AgentPromptSheetState extends State<_AgentPromptSheet> {
                   minLines: 4,
                   maxLines: 8,
                   autofocus: false,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
+                  // No decoration override: the theme owns the field's look.
+                  // This declared its own 10dp radius, which matched neither
+                  // the theme's nor anything else in the app.
+                  decoration: const InputDecoration(),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -283,8 +289,9 @@ class _Notice extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
+        color: scheme.wellFill,
+        borderRadius: Radii.mdAll,
+        border: Border.all(color: scheme.hairline),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

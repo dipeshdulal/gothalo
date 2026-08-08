@@ -316,4 +316,71 @@ void main() {
     expect(Space.gutter, lessThanOrEqualTo(12));
     expect(Space.xl, lessThanOrEqualTo(16));
   });
+
+  testWidgets('there is one text-field treatment, and it is the theme\'s', (
+    tester,
+  ) async {
+    for (final theme in [AppTheme.dark, AppTheme.light]) {
+      final scheme = theme.colorScheme;
+      final input = theme.inputDecorationTheme;
+
+      // A field is a panel you can type in, not a hole in the page: it takes
+      // the panel fill and the panel radius. It used to take the sunken
+      // `wellFill` at the tighter `sm` radius, which is why the one screen that
+      // overrode it (Jump) looked better than the rest.
+      expect(input.filled, isTrue);
+      expect(input.fillColor, scheme.panelFill);
+      for (final border in [input.border, input.enabledBorder]) {
+        final b = border as OutlineInputBorder;
+        expect(b.borderRadius, Radii.mdAll);
+        expect(b.borderSide.color, scheme.hairline);
+      }
+      // Focus is the accent, one pixel — the same edge weight as everything
+      // else in the language.
+      final focused = input.focusedBorder as OutlineInputBorder;
+      expect(focused.borderSide.color, scheme.primary);
+      expect(focused.borderSide.width, 1);
+      expect(focused.borderRadius, Radii.mdAll);
+    }
+  });
+
+  testWidgets('no field restates the border the theme already owns', (
+    tester,
+  ) async {
+    // The rule that keeps it one treatment: a call site may add a hint, a
+    // prefix or a label, and must not add a border, a fill or a radius.
+    await tester.pumpWidget(
+      host(
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: TextField(decoration: InputDecoration(hintText: 'x')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final decoration = tester
+        .widget<TextField>(find.byType(TextField))
+        .decoration!;
+    expect(decoration.border, isNull);
+    expect(decoration.filled, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the theme draws the same hairline the panels do', (
+    tester,
+  ) async {
+    // One definition, not two. The theme computed its own at the pre-contrast
+    // 8%, so cards, chips, dividers and fields kept the faint edge after the
+    // tokens moved — a design language drifting from itself inside one file.
+    for (final theme in [AppTheme.dark, AppTheme.light]) {
+      final scheme = theme.colorScheme;
+      expect(theme.dividerTheme.color, scheme.hairline);
+      expect(theme.chipTheme.side?.color, scheme.hairline);
+      expect(
+        (theme.cardTheme.shape as RoundedRectangleBorder).side.color,
+        scheme.hairline,
+      );
+    }
+  });
 }

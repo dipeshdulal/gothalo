@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../agents/agent_kind_picker.dart';
@@ -585,7 +586,7 @@ class _Outcome extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: scheme.errorContainer.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.mdAll,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

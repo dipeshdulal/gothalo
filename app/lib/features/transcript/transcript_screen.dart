@@ -2214,11 +2214,22 @@ class _ComposerBarState extends State<_ComposerBar> {
                 style: const TextStyle(fontSize: 15, height: 1.3),
                 decoration: InputDecoration(
                   isCollapsed: true,
+                  // **`filled: false`.** The theme fills every field, and this
+                  // one is already inside a container that provides the
+                  // surface — so the text area was painting its own shade over
+                  // the middle of the composer while attach and send sat on the
+                  // container's. That is what read as three surfaces stitched
+                  // together, and as "the icons have their own backgrounds":
+                  // it was the field's fill, not the icons'.
+                  filled: false,
                   contentPadding: const EdgeInsets.symmetric(vertical: 13),
                   hintText: !enabled
                       ? 'Unavailable'
                       : (widget.hintText ?? 'Message the agent…'),
                   hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  // The border belongs to the container, which wraps the
+                  // controls too — the whole point of the composer being one
+                  // bordered thing rather than a field with buttons beside it.
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
@@ -2251,8 +2262,11 @@ class _AttachButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message: 'Attach an image',
+      // Transparent, so the icon sits on the composer's own surface. A resting
+      // fill here is what made the control read as a patch stuck onto the
+      // field; the ink ripple is still the press feedback.
       child: Material(
-        color: Colors.transparent,
+        type: MaterialType.transparency,
         borderRadius: Radii.smAll,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -2302,10 +2316,11 @@ class _SendButton extends StatelessWidget {
         ? scheme.onSurfaceVariant.withValues(alpha: 0.4)
         : (active ? scheme.primary : scheme.primary.withValues(alpha: 0.55));
     return SizedBox(
+      // 44 either way: it lost its filled circle, not its tap target.
       width: 44,
       height: 44,
       child: Material(
-        color: Colors.transparent,
+        type: MaterialType.transparency,
         borderRadius: Radii.smAll,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
