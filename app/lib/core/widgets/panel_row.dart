@@ -131,6 +131,7 @@ class PanelList extends StatelessWidget {
     super.key,
     required this.rows,
     this.footer,
+    this.dividerBefore,
     this.margin = const EdgeInsets.fromLTRB(
       Space.gutter,
       Space.xs,
@@ -143,6 +144,15 @@ class PanelList extends StatelessWidget {
 
   /// Drawn below a divider inside the panel — a "show N more", say.
   final Widget? footer;
+
+  /// Whether row `i` gets a divider above it. Defaults to "every row but the
+  /// first", which is what a flat list wants.
+  ///
+  /// A list with internal structure wants less: the projects list draws a rail
+  /// down its worktrees, and a full-width line slicing across that rail is two
+  /// systems claiming the same space. There, only the boundary between one
+  /// project and the next gets a line, and the rail carries the rest.
+  final bool Function(int index)? dividerBefore;
 
   final EdgeInsetsGeometry margin;
 
@@ -168,7 +178,7 @@ class PanelList extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               for (var i = 0; i < rows.length; i++) ...[
-                if (i > 0) const PanelDivider(),
+                if (dividerBefore?.call(i) ?? i > 0) const PanelDivider(),
                 rows[i],
               ],
               if (footer != null) ...[const PanelDivider(), footer!],

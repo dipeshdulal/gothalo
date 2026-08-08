@@ -171,13 +171,20 @@ void main() {
     await tester.tap(find.textContaining('Projects'));
     await tester.pumpAndSettle();
 
-    // One panel for the repo and both its branches — not three boxes. A dozen
-    // projects each carrying their own outline read as a grid, which is the
-    // complaint this fixes; the edge is unchanged, there is one of it.
+    // ONE panel for the whole list — not one per project, and not a nested one
+    // around the group. Ten outlined boxes stacked is the border-density
+    // problem; the edge is right, there were too many of them.
     expect(find.byType(PanelList), findsOneWidget);
     expect(find.text('gothalo'), findsOneWidget);
     expect(find.text('feat-x'), findsOneWidget);
     expect(find.text('permission-check'), findsOneWidget);
+
+    // A worktree's content starts meaningfully to the right of its repo's, so
+    // the rail has a gutter to live in rather than crossing the text — and the
+    // subordination survives even if the rail is not visible.
+    final parentX = tester.getRect(find.text('gothalo')).left;
+    final childX = tester.getRect(find.text('feat-x')).left;
+    expect(childX - parentX, greaterThan(12));
     expect(tester.takeException(), isNull);
   });
 

@@ -413,70 +413,43 @@ class _ProjectsTab extends StatelessWidget {
       });
     }
 
-    return ListView.builder(
+    // One panel for the whole list, not one per project. Ten outlined boxes
+    // stacked (plus an eleventh nested round the group) is the border-density
+    // problem again: the edge is right, there were too many of them. A repo's
+    // group is now a *region* inside the single panel, marked by the rail down
+    // its children rather than by a box of its own.
+    final rows = <Widget>[];
+    // Only the boundary between one project and the next gets a line. Inside a
+    // group the rail does the work — a full-bleed separator cutting across it
+    // was two systems claiming the same space, which is what read as odd.
+    final boundaries = <int>{};
+    for (final repo in repos) {
+      final members = groups[repo]!;
+      if (rows.isNotEmpty) boundaries.add(rows.length);
+      final name = repo.isEmpty ? 'Untitled' : repo;
+      final hasCheckout = members.any((w) => git(w).worktree == null);
+      if (!hasCheckout) rows.add(_RepoHeader(repo: name));
+      for (var i = 0; i < members.length; i++) {
+        final w = members[i];
+        rows.add(
+          _ProjectTile(
+            repo: name,
+            space: w,
+            branch: git(w).worktree,
+            agents: agents[w.workspaceId] ?? 0,
+            terminals: terminals[w.workspaceId] ?? 0,
+            child: git(w).worktree != null,
+            last: i == members.length - 1,
+          ),
+        );
+      }
+    }
+
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(vertical: Space.md),
-      itemCount: repos.length,
-      itemBuilder: (context, i) {
-        final repo = repos[i];
-        final members = groups[repo]!;
-        return _ProjectGroup(
-          repo: repo.isEmpty ? 'Untitled' : repo,
-          members: [
-            for (final w in members)
-              (
-                space: w,
-                branch: git(w).worktree,
-                agents: agents[w.workspaceId] ?? 0,
-                terminals: terminals[w.workspaceId] ?? 0,
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-/// One repo and everything checked out from it — the main checkout, then its
-/// worktrees on a rail beneath it.
-///
-/// Two problems at once. The rows each carried their own border, so a dozen
-/// projects read as a grid of boxes rather than a list (the edge is not too
-/// strong — the agent rows need exactly that contrast — there were simply too
-/// many of them). And a worktree was a sibling row with a small indent, so
-/// `gothalo` and its `feat-x` branch looked like two unrelated entries.
-///
-/// One [PanelList] per repo fixes both: one border round the group, hairlines
-/// inside it, and a vertical rail plus a branch glyph down the left of the
-/// children so the relationship is drawn rather than inferred from pixel
-/// offsets.
-class _ProjectGroup extends StatelessWidget {
-  const _ProjectGroup({required this.repo, required this.members});
-
-  final String repo;
-  final List<
-    ({WorkspaceInfo space, String? branch, int agents, int terminals})
-  >
-  members;
-
-  @override
-  Widget build(BuildContext context) {
-    // A group whose checkout is not itself open is all branches — it still gets
-    // a header naming the repo, so the branches have something to hang off.
-    final hasCheckout = members.any((m) => m.branch == null);
-    return PanelList(
-      rows: [
-        if (!hasCheckout) _RepoHeader(repo: repo),
-        for (final m in members)
-          _ProjectTile(
-            repo: repo,
-            space: m.space,
-            branch: m.branch,
-            agents: m.agents,
-            terminals: m.terminals,
-            // Everything except the repo's own checkout is a child of it.
-            child: m.branch != null,
-          ),
+      children: [
+        PanelList(rows: rows, dividerBefore: boundaries.contains),
       ],
     );
   }
@@ -522,10 +495,12 @@ class _RepoHeader extends StatelessWidget {
 
 /// One checkout — the repo itself, or one of its worktrees.
 ///
-/// A child row is drawn on a rail: a hairline running down the left of the
-/// group with a short branch glyph off it, so "this belongs to the thing above"
-/// is visible rather than implied. The branch name is the child's subject (the
-/// repo is already the group's), set in accent mono because it is a git ref.
+/// A child is **indented** and the rail runs down the gutter that indent
+/// creates, with a short elbow into the branch glyph. Before, the child's
+/// content started at nearly the parent's own x and only the glyph hinted at
+/// subordination; the rail also overlapped the text rather than living beside
+/// it. Now the offset and the drawn line say the same thing, and the rail stops
+/// at the last child rather than dangling past it.
 class _ProjectTile extends StatelessWidget {
   const _ProjectTile({
     required this.repo,
@@ -534,6 +509,7 @@ class _ProjectTile extends StatelessWidget {
     required this.agents,
     required this.terminals,
     required this.child,
+    required this.last,
   });
 
   final String repo;
@@ -547,6 +523,10 @@ class _ProjectTile extends StatelessWidget {
   /// Drawn as a worktree hanging off the repo above it.
   final bool child;
 
+  /// The last row of its group — the rail stops halfway rather than running on
+  /// into the next project.
+  final bool last;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -557,35 +537,32 @@ class _ProjectTile extends StatelessWidget {
           context.push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
       child: Container(
         // The repo's own checkout is the group's head, so it carries the raised
-        // fill; its branches sit on the resting one. Weight, fill, the rail and
-        // the branch glyph all say the same thing at once — any one of them
-        // alone was not carrying it, which is why two rounds of "indent it
-        // more" did not read.
+        // fill; its branches sit on the resting one. Fill, weight, indent and
+        // rail all say the same thing at once — any one alone was not carrying
+        // it, which is why two earlier rounds of "indent it more" did not read.
         color: child ? null : scheme.panelFillRaised,
         padding: EdgeInsets.fromLTRB(child ? 0 : 11, 9, 8, 9),
         child: Row(
           children: [
-            if (child) ...[
-              // The rail: a vertical hairline the child sits against, and a
-              // short elbow into it. Drawn, not indented — an offset alone was
-              // what made a worktree read as an oddly-spaced sibling.
+            if (child)
+              // The gutter: the rail lives here, beside the content rather than
+              // under it.
               SizedBox(
-                width: 26,
-                height: 20,
+                width: _railGutter,
+                height: 22,
                 child: CustomPaint(
-                  painter: _RailPainter(color: scheme.hairlineStrong),
+                  painter: _RailPainter(
+                    color: scheme.hairlineStrong,
+                    last: last,
+                  ),
                 ),
               ),
-              Icon(Icons.call_split, size: 13, color: scheme.primary),
-              const SizedBox(width: 6),
-            ] else ...[
-              Icon(
-                Icons.folder_outlined,
-                size: 15,
-                color: scheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: Space.md),
-            ],
+            Icon(
+              child ? Icons.call_split : Icons.folder_outlined,
+              size: child ? 13 : 15,
+              color: child ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            SizedBox(width: child ? 6 : Space.md),
             // The identifier takes every pixel the counts do not need, and is
             // the last thing to truncate — it is what tells one row from
             // another.
@@ -643,11 +620,19 @@ class _ProjectTile extends StatelessWidget {
   }
 }
 
-/// The vertical rail plus the elbow into a child row.
+/// How much a worktree row is indented, and therefore how much room the rail
+/// has to live in without touching the text.
+const double _railGutter = 30;
+
+/// The rail down a group's children, and the elbow into each one.
 class _RailPainter extends CustomPainter {
-  const _RailPainter({required this.color});
+  const _RailPainter({required this.color, required this.last});
 
   final Color color;
+
+  /// The last child: the vertical stops at the elbow instead of carrying on
+  /// into whatever follows the group.
+  final bool last;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -655,19 +640,17 @@ class _RailPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
-    const x = 16.0;
-    // Down the left of the group, through the full height of the row...
-    canvas.drawLine(const Offset(x, -12), Offset(x, size.height / 2), paint);
-    // ...then a short elbow into the branch glyph.
-    canvas.drawLine(
-      Offset(x, size.height / 2),
-      Offset(size.width, size.height / 2),
-      paint,
-    );
+    const x = 18.0;
+    final mid = size.height / 2;
+    // Up past the top of this row, so the line joins the row above with no gap
+    // — there are no separators inside a group for it to collide with.
+    canvas.drawLine(Offset(x, -14), Offset(x, last ? mid : size.height + 14), paint);
+    // ...and a short elbow out to the branch glyph.
+    canvas.drawLine(Offset(x, mid), Offset(size.width, mid), paint);
   }
 
   @override
-  bool shouldRepaint(_RailPainter old) => old.color != color;
+  bool shouldRepaint(_RailPainter old) => old.color != color || old.last != last;
 }
 
 /// What a project contains, as glyph + number rather than words.
@@ -678,11 +661,14 @@ class _RailPainter extends CustomPainter {
 /// permissi…` to make room. The branch is the only thing telling one worktree
 /// row from another, so the words go and the space goes to the name.
 ///
-/// Both glyphs are ones the app already uses for these things — the chat bubble
-/// is the agent shortcut on every pane card, and the terminal glyph marks a
-/// non-agent pane everywhere — so a terminal looks like a terminal on every
-/// screen. The numbers are set in JetBrains Mono, which is monospaced, so
-/// 1 and 11 occupy the same column instead of jittering.
+/// The terminal glyph is the one that marks a non-agent pane everywhere else,
+/// so a terminal looks like a terminal on every screen. The agent glyph is
+/// **not** the chat bubble it started as: a bubble reads as "messages", and
+/// chat is already a distinct affordance in this app — the shortcut into an
+/// agent's transcript. The per-kind [AgentAvatar] would be the most honest mark
+/// but cannot stand for a count that mixes kinds, so this is a neutral agent
+/// glyph instead. The numbers are set in JetBrains Mono, which is monospaced,
+/// so 1 and 11 occupy the same column instead of jittering.
 ///
 /// A zero is omitted rather than shown: a project with only terminals shows
 /// only the terminal pair.
@@ -708,7 +694,7 @@ class _Contents extends StatelessWidget {
       children: [
         if (agents > 0)
           _CountPair(
-            icon: Icons.chat_bubble_outline,
+            icon: Icons.smart_toy_outlined,
             count: agents,
             semantics: '$agents agent${agents == 1 ? '' : 's'}',
           ),
