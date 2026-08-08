@@ -67,8 +67,10 @@ type Server struct {
 	// serversFor backs the dev-server half of that observation in tests; nil in
 	// production, where it reads the cached host port scan (paneServers). A seam
 	// rather than a live scan because the real one shells out to `lsof` and
-	// probes every listener on the machine running the tests.
-	serversFor func(context.Context, string) []suggest.Server
+	// probes every listener on the machine running the tests. It takes the
+	// caller's reachable host for the same reason paneServers does — a preview
+	// URL is only correct for the client it was built for.
+	serversFor func(ctx context.Context, pane, clientHost string) []suggest.Server
 	// agents backs the pane -> cwd resolution (paneCwd) in tests; nil in
 	// production, where the agent is fetched from the pane's own session client.
 	agents agentGetter

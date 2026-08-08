@@ -120,6 +120,12 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       is the real problem — three servers on 5173/5174/5175 and a bare port
       number tells you nothing about whose is whose.
 
+      A reachable server's `url` names the address **the caller** reached the
+      bridge on, not the address the bridge binds — deriving it from the bind
+      address shipped `http://127.0.0.1:<port>` to a phone, which is the phone's
+      own loopback (caught on a real device; both layers now carry a tested
+      no-loopback invariant, see D29).
+
       Loopback-bound servers come back with no `url` and render as a dimmed chip
       whose tap explains the bind and names `--host`. Relaying them (a bridge-side
       TCP splice, `ssh -L` without the SSH) is deliberately deferred until that

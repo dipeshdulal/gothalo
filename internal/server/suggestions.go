@@ -58,7 +58,10 @@ func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, status, err := s.suggestions.get(r.Context(), pane, s.observePane)
+	// The caller's own reachable host is part of the answer, not just of the
+	// rendering: a dev-server chip's URL is only correct for the client it was
+	// built for. See reachableHost.
+	found, status, err := s.suggestions.get(r.Context(), pane, s.reachableHost(r), s.observePane)
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return
@@ -98,7 +101,7 @@ type processInfoGetter interface {
 // call GET /diff?context=1 answers with, against the same resolved cwd — the
 // sources do not shell out for git themselves. That is what stops the chip
 // saying "3 files changed" while the diff screen lists four.
-func (s *Server) observePane(ctx context.Context, pane string) (suggest.Pane, int, error) {
+func (s *Server) observePane(ctx context.Context, pane, clientHost string) (suggest.Pane, int, error) {
 	session, bare := herdr.SplitTarget(pane)
 
 	var pg processInfoGetter = s.processInfo
@@ -128,9 +131,9 @@ func (s *Server) observePane(ctx context.Context, pane string) (suggest.Pane, in
 		}
 	}
 	if s.serversFor != nil {
-		out.Servers = s.serversFor(ctx, pane)
+		out.Servers = s.serversFor(ctx, pane, clientHost)
 	} else {
-		out.Servers = s.paneServers(ctx, pane)
+		out.Servers = s.paneServers(ctx, pane, clientHost)
 	}
 	out.Git = paneGit(out.Cwd)
 	return out, http.StatusOK, nil
@@ -181,13 +184,13 @@ func paneGit(cwd string) suggest.Git {
 // this conflict" chip — so the error is logged and the pane simply has no
 // servers. Same reasoning as `agent.get` failing: a missing input narrows which
 // sources fire rather than failing the read.
-func (s *Server) paneServers(ctx context.Context, pane string) []suggest.Server {
+func (s *Server) paneServers(ctx context.Context, pane, clientHost string) []suggest.Server {
 	found, err := s.portsCache.Get(ctx, s.paneShellPIDs)
 	if err != nil {
 		log.Warn("suggestions: port scan failed", "pane", pane, "err", err)
 		return nil
 	}
-	ports.FillURLs(found, s.cfg.Transport.Addr)
+	ports.FillURLs(found, clientHost)
 
 	var out []suggest.Server
 	for _, l := range found {
@@ -241,17 +244,24 @@ func foregroundCwd(info herdr.PaneProcessInfo) string {
 // often that reaches Herdr and the host.
 const suggestTTL = 6 * time.Second
 
-// suggestCache memoises suggestions per pane.
+// suggestCache memoises suggestions per pane, per client host.
 //
 // Keyed per pane rather than one shared entry, because the observation is
 // per-pane: a phone showing one terminal asks about one pane over and over, and
 // a shared slot would make two open panes evict each other on every poll.
 //
+// Keyed by CLIENT HOST too, because a dev-server chip's URL is only correct for
+// the client it was built for (see reachableHost): a phone on the tailnet and a
+// laptop on the LAN must not be served each other's preview links out of a
+// shared entry. In practice this is one or two hosts, so it costs a handful of
+// entries and removes a whole class of "it works on my device" bug.
+//
 // Unbounded in principle, bounded in practice by the number of panes on the
 // host — tens, and each entry is a handful of small structs. A pane that goes
 // away leaves one stale entry behind rather than a leak worth a sweeper.
 type suggestCache struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// entries is keyed by cacheKey(clientHost, pane).
 	entries map[string]suggestEntry
 	// now is swappable in tests; nil means time.Now.
 	now func() time.Time
@@ -281,14 +291,15 @@ func (c *suggestCache) clock() time.Time {
 // A failed observation is returned, never served stale: "this pane is gone" and
 // "this pane has nothing to suggest" are different answers, and the 404 is how
 // a caller tells them apart.
-func (c *suggestCache) get(ctx context.Context, pane string, observe func(context.Context, string) (suggest.Pane, int, error)) ([]suggest.Suggestion, int, error) {
+func (c *suggestCache) get(ctx context.Context, pane, clientHost string, observe func(context.Context, string, string) (suggest.Pane, int, error)) ([]suggest.Suggestion, int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if e, ok := c.entries[pane]; ok && c.clock().Sub(e.at) < suggestTTL {
+	key := cacheKey(clientHost, pane)
+	if e, ok := c.entries[key]; ok && c.clock().Sub(e.at) < suggestTTL {
 		return e.list, http.StatusOK, nil
 	}
-	observed, status, err := observe(ctx, pane)
+	observed, status, err := observe(ctx, pane, clientHost)
 	if err != nil {
 		log.Warn("suggestions: observe failed", "pane", pane, "err", err)
 		return nil, status, err
@@ -297,6 +308,11 @@ func (c *suggestCache) get(ctx context.Context, pane string, observe func(contex
 	if c.entries == nil {
 		c.entries = map[string]suggestEntry{}
 	}
-	c.entries[pane] = suggestEntry{at: c.clock(), list: list}
+	c.entries[key] = suggestEntry{at: c.clock(), list: list}
 	return list, http.StatusOK, nil
 }
+
+// cacheKey joins the two things an entry is specific to. A NUL separator rather
+// than a colon: pane ids already contain colons ("acme/w1:p2"), and a separator
+// that can appear in either half is a collision waiting to happen.
+func cacheKey(clientHost, pane string) string { return clientHost + "\x00" + pane }

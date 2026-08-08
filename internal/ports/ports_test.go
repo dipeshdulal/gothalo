@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"net/url"
 	"testing"
 )
 
@@ -141,7 +142,9 @@ func TestFillURLs(t *testing.T) {
 		{Port: 5173, Bind: "*"},
 		{Port: 5174, Bind: "127.0.0.1", Loopback: true},
 	}
-	FillURLs(ls, "100.84.12.3:8787")
+	// A bare host the CALLER can reach — not the bridge's bind address, which
+	// is what this used to be given and is the bug the tests below pin down.
+	FillURLs(ls, "100.84.12.3")
 
 	if want := "http://100.84.12.3:5173"; ls[0].URL != want {
 		t.Errorf("reachable url = %q, want %q", ls[0].URL, want)
@@ -153,12 +156,112 @@ func TestFillURLs(t *testing.T) {
 	}
 }
 
-// Bound to every interface, the bridge has no single address to advertise —
-// guessing one would hand the app a URL that may not route.
-func TestFillURLsSkipsWildcardBridgeAddr(t *testing.T) {
-	ls := []Listener{{Port: 5173, Bind: "*"}}
-	FillURLs(ls, "0.0.0.0:8787")
+// ---- URL construction ----
+//
+// The regression these guard against was found on a real phone: the chip
+// rendered "Open :8123 · Python · serving", the browser opened, and the
+// connection was refused — because the URL was http://127.0.0.1:8123, which on
+// a phone is the phone's own loopback. The bridge had derived it from its own
+// BIND address (127.0.0.1:8787 behind `tailscale serve`), which answers "where
+// does this process listen" and never "what should someone else dial".
+
+// TestFillURLsNeverEmitsALoopbackURL is the invariant, stated flatly: whatever
+// the inputs, a listener that comes back with a URL must not point the caller
+// at their own machine. This is the one that must never silently regress.
+func TestFillURLsNeverEmitsALoopbackURL(t *testing.T) {
+	binds := []string{"*", "0.0.0.0", "::", "127.0.0.1", "127.0.1.9", "::1", "100.84.12.3", "192.168.1.50"}
+	hosts := []string{
+		"my-mac.tailnet.ts.net", "100.88.0.122", "192.168.1.7",
+		// The dangerous inputs: a caller host that is itself loopback, or absent.
+		"127.0.0.1", "localhost", "::1", "0.0.0.0", "",
+	}
+	for _, bind := range binds {
+		for _, host := range hosts {
+			ls := []Listener{{Port: 8123, Bind: bind, Loopback: isLoopback(bind)}}
+			FillURLs(ls, host)
+			if ls[0].URL == "" {
+				continue
+			}
+			u, err := url.Parse(ls[0].URL)
+			if err != nil {
+				t.Fatalf("bind=%q host=%q: unparseable url %q: %v", bind, host, ls[0].URL, err)
+			}
+			if IsLoopbackHost(u.Hostname()) {
+				t.Errorf("bind=%q host=%q produced %q — a phone opening that reaches ITSELF",
+					bind, host, ls[0].URL)
+			}
+			if u.Port() != "8123" {
+				t.Errorf("bind=%q host=%q produced port %q, want the dev server's 8123 (not the bridge's)",
+					bind, host, u.Port())
+			}
+			if u.Scheme != "http" {
+				t.Errorf("bind=%q host=%q produced scheme %q, want http — the probe that qualified this listener spoke plain HTTP to it",
+					bind, host, u.Scheme)
+			}
+		}
+	}
+}
+
+// TestFillURLsWildcardUsesTheCallerHost is the reported case: a server on
+// 0.0.0.0 answers on every interface, so the address the caller reached the
+// bridge on is the one that works for them.
+func TestFillURLsWildcardUsesTheCallerHost(t *testing.T) {
+	ls := []Listener{{Port: 8123, Bind: "*"}}
+	FillURLs(ls, "my-mac.tailnet.ts.net")
+	if got, want := ls[0].URL, "http://my-mac.tailnet.ts.net:8123"; got != want {
+		t.Errorf("url = %q, want %q", got, want)
+	}
+}
+
+// A server bound to one specific interface names its own address rather than
+// borrowing the bridge's hostname. It is the address the server actually serves
+// on; whether the caller can route there is a network question, and a URL that
+// looks right and times out is worse than one that is simply honest.
+func TestFillURLsSpecificBindKeepsItsOwnAddress(t *testing.T) {
+	ls := []Listener{
+		{Port: 8123, Bind: "100.84.12.3"},
+		{Port: 9000, Bind: "192.168.1.50"},
+	}
+	FillURLs(ls, "my-mac.tailnet.ts.net")
+	if got, want := ls[0].URL, "http://100.84.12.3:8123"; got != want {
+		t.Errorf("tailnet-bound: url = %q, want %q", got, want)
+	}
+	if got, want := ls[1].URL, "http://192.168.1.50:9000"; got != want {
+		t.Errorf("lan-bound: url = %q, want %q", got, want)
+	}
+}
+
+// A loopback-bound server gets no URL however reachable the caller is — it is
+// the app's dimmed "local-only" state, and the note names the fix.
+func TestFillURLsLoopbackBindStaysURLLess(t *testing.T) {
+	ls := []Listener{{Port: 5174, Bind: "127.0.0.1", Loopback: true}}
+	FillURLs(ls, "my-mac.tailnet.ts.net")
 	if ls[0].URL != "" {
-		t.Errorf("url = %q, want empty for a wildcard bridge bind", ls[0].URL)
+		t.Errorf("url = %q, want none for a loopback bind", ls[0].URL)
+	}
+}
+
+// With no reachable caller host, a wildcard-bound server reports no URL rather
+// than one built out of a guess.
+func TestFillURLsWithoutACallerHost(t *testing.T) {
+	ls := []Listener{{Port: 8123, Bind: "*"}}
+	FillURLs(ls, "")
+	if ls[0].URL != "" {
+		t.Errorf("url = %q, want none when there is no host to name", ls[0].URL)
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	loop := []string{"127.0.0.1", "127.0.1.9", "::1", "[::1]", "localhost", "LOCALHOST", "0.0.0.0", "::"}
+	for _, h := range loop {
+		if !IsLoopbackHost(h) {
+			t.Errorf("IsLoopbackHost(%q) = false, want true", h)
+		}
+	}
+	fine := []string{"my-mac.tailnet.ts.net", "100.84.12.3", "192.168.1.50", "example.com", ""}
+	for _, h := range fine {
+		if IsLoopbackHost(h) {
+			t.Errorf("IsLoopbackHost(%q) = true, want false", h)
+		}
 	}
 }

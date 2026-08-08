@@ -1,7 +1,10 @@
 package server
 
 import (
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,7 +44,7 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	ports.FillURLs(found, s.cfg.Transport.Addr)
+	ports.FillURLs(found, s.reachableHost(r))
 
 	if pane := r.URL.Query().Get("pane"); pane != "" {
 		filtered := make([]ports.Listener, 0, len(found))
@@ -125,4 +128,75 @@ func (s *Server) paneShellPIDs() map[int]ports.PaneRef {
 
 	s.paneMap.last, s.paneMap.at = out, time.Now()
 	return out
+}
+
+// reachableHost returns a bare host (no port) that THIS caller can dial to
+// reach another port on the Herdr host — the host part of every dev-server
+// preview URL.
+//
+// The bug this exists to prevent: the bridge's own bind address is not it.
+// Behind `tailscale serve` (the documented deployment) the bridge binds
+// 127.0.0.1:8787 while the tailnet front-end answers on
+// <host>.<tailnet>.ts.net:5338, so deriving a preview URL from the bind address
+// handed every phone http://127.0.0.1:<port> — the phone's own loopback.
+// Verified on a real device: the chip rendered, the browser opened, the
+// connection was refused.
+//
+// Three sources, in this order:
+//
+//  1. **The request's own Host.** Authoritative because it is a fact about a
+//     connection that just succeeded rather than a configuration that might be
+//     stale: whatever the caller dialled to get here, they can dial again. It is
+//     also per-caller correct — a phone on the tailnet and a laptop on the LAN
+//     each get an answer that works for them, which no single configured value
+//     can do.
+//  2. **transport.public_url**, when the Host header is unusable. That happens
+//     when a reverse proxy rewrites Host to its own upstream address — the very
+//     `tailscale serve` case above, if it ever stops passing Host through. The
+//     operator's declared public URL is exactly the right answer there, and it
+//     is already the address the pairing QR hands out.
+//  3. **The bind address**, when it is a literal non-loopback address. This is
+//     the `GOTHALO_ADDR=$(tailscale ip -4):8787` setup from the README, where
+//     the bridge really is reachable at the address it binds.
+//
+// Every candidate is filtered through the same loopback test the URL builder
+// uses, so a stage that can only offer "localhost" falls through to the next
+// rather than producing a link that cannot connect. When all three fall through
+// the caller gets no URL at all and the app renders the honest
+// "up, but not reachable from here" state.
+//
+// Deliberately does NOT consult X-Forwarded-Host. It would help only in the
+// proxy-rewrites-Host case that public_url already covers, and it would add a
+// spoofable input to a URL the user is invited to open.
+func (s *Server) reachableHost(r *http.Request) string {
+	for _, candidate := range []string{
+		hostOnly(r.Host),
+		hostOnly(s.cfg.Transport.PublicURL),
+		hostOnly(s.cfg.Transport.Addr),
+	} {
+		if candidate != "" && !ports.IsLoopbackHost(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// hostOnly reduces whatever shape an address arrives in — "example.ts.net:5338",
+// "https://example.ts.net:5338/", a bare host, an IPv6 literal — to its host.
+func hostOnly(addr string) string {
+	v := strings.TrimSpace(addr)
+	if v == "" {
+		return ""
+	}
+	if strings.Contains(v, "://") {
+		u, err := url.Parse(v)
+		if err != nil || u.Hostname() == "" {
+			return ""
+		}
+		return u.Hostname()
+	}
+	if host, _, err := net.SplitHostPort(v); err == nil {
+		return host
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(v, "["), "]")
 }

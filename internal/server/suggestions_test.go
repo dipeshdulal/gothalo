@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dipeshdulal/gothalo/internal/config"
 	"github.com/dipeshdulal/gothalo/internal/gitdiff"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
+	"github.com/dipeshdulal/gothalo/internal/ports"
 	"github.com/dipeshdulal/gothalo/internal/suggest"
 )
 
@@ -70,13 +73,13 @@ func dirtyRepo(t *testing.T) string {
 // that does not care about it: the production path shells out to `lsof` and
 // probes every listener on the machine running the tests, which is neither
 // cheap nor deterministic.
-func noServers(*Server) func(context.Context, string) []suggest.Server {
-	return func(context.Context, string) []suggest.Server { return nil }
+func noServers(*Server) func(context.Context, string, string) []suggest.Server {
+	return func(context.Context, string, string) []suggest.Server { return nil }
 }
 
 // stubServers stubs the scan with a fixed set of listeners for the pane.
-func stubServers(list ...suggest.Server) func(context.Context, string) []suggest.Server {
-	return func(context.Context, string) []suggest.Server { return list }
+func stubServers(list ...suggest.Server) func(context.Context, string, string) []suggest.Server {
+	return func(context.Context, string, string) []suggest.Server { return list }
 }
 
 func getSuggestions(t *testing.T, s *Server, query string) *httptest.ResponseRecorder {
@@ -457,4 +460,121 @@ func branchWithWork(t *testing.T) string {
 	run("add", "-A")
 	run("commit", "-qm", "two")
 	return dir
+}
+
+// TestSuggestionsDevServerURLIsReachableFromTheCaller reproduces the bug found
+// on a real phone, end to end through the endpoint the app calls.
+//
+// A Python server on 0.0.0.0:8123 in a pane produced a chip reading
+// "Open :8123 · Python · serving" whose url was http://127.0.0.1:8123 — the
+// bridge's own bind address, which on the phone is the PHONE's loopback. The
+// browser opened and the connection was refused.
+func TestSuggestionsDevServerURLIsReachableFromTheCaller(t *testing.T) {
+	s := newTestServer(t)
+	// The deployment that broke it: bound to loopback behind `tailscale serve`.
+	s.cfg.Transport = config.Transport{
+		Addr:      "127.0.0.1:8787",
+		PublicURL: "https://my-mac.tailnet.ts.net:5338",
+	}
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 100,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 100, Cwd: t.TempDir()}},
+	}}
+	s.agents = fakeAgent{err: herdr.ErrAgentNotFound}
+	// The scan's own shape before URLs are stamped — a wildcard bind, exactly
+	// what lsof reports for 0.0.0.0 — run through the real FillURLs against the
+	// host the endpoint derived for this caller.
+	s.serversFor = func(_ context.Context, pane, clientHost string) []suggest.Server {
+		found := []ports.Listener{{Port: 8123, Bind: "*", Proc: "Python", Pane: pane}}
+		ports.FillURLs(found, clientHost)
+		return []suggest.Server{{
+			Port: found[0].Port, Proc: found[0].Proc,
+			URL: found[0].URL, Loopback: found[0].Loopback,
+		}}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/suggestions?pane=w1N:p2", nil)
+	req.Host = "my-mac.tailnet.ts.net:5338"
+	req.Header.Set("Authorization", "Bearer admin-tok")
+	rec := httptest.NewRecorder()
+	s.handleSuggestions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var body suggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Suggestions) != 1 {
+		t.Fatalf("suggestions = %+v, want the dev server", body.Suggestions)
+	}
+	got := body.Suggestions[0]
+	if got.Kind != suggest.KindDevServer {
+		t.Fatalf("kind = %q, want %q", got.Kind, suggest.KindDevServer)
+	}
+	u, err := url.Parse(got.Params["url"])
+	if err != nil {
+		t.Fatalf("unparseable url %q: %v", got.Params["url"], err)
+	}
+	if ports.IsLoopbackHost(u.Hostname()) {
+		t.Fatalf("url = %q — a phone opening that reaches ITSELF", got.Params["url"])
+	}
+	if want := "http://my-mac.tailnet.ts.net:8123"; got.Params["url"] != want {
+		t.Errorf("url = %q, want %q", got.Params["url"], want)
+	}
+	// The dev server's port, never the bridge's.
+	if u.Port() != "8123" {
+		t.Errorf("port = %q, want the dev server's 8123 (the bridge is on 5338/8787)", u.Port())
+	}
+}
+
+// TestSuggestionsCacheIsPerClientHost: a dev-server URL is only correct for the
+// client it was built for, so two callers reaching the bridge by different
+// addresses must not be served each other's links out of one entry.
+func TestSuggestionsCacheIsPerClientHost(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestServer(t)
+	s.cfg.Transport = config.Transport{Addr: "0.0.0.0:8787"}
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 100,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 100, Cwd: dir}},
+	}}
+	s.agents = fakeAgent{err: herdr.ErrAgentNotFound}
+	s.serversFor = func(_ context.Context, _, clientHost string) []suggest.Server {
+		found := []ports.Listener{{Port: 8123, Bind: "*", Proc: "Python"}}
+		ports.FillURLs(found, clientHost)
+		return []suggest.Server{{Port: 8123, Proc: "Python", URL: found[0].URL}}
+	}
+
+	get := func(host string) string {
+		req := httptest.NewRequest(http.MethodGet, "/suggestions?pane=w1:p2", nil)
+		req.Host = host + ":8787"
+		req.Header.Set("Authorization", "Bearer admin-tok")
+		rec := httptest.NewRecorder()
+		s.handleSuggestions(rec, req)
+		var body suggestionsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Suggestions) != 1 {
+			t.Fatalf("suggestions = %+v, want one", body.Suggestions)
+		}
+		return body.Suggestions[0].Params["url"]
+	}
+
+	if got, want := get("100.88.0.122"), "http://100.88.0.122:8123"; got != want {
+		t.Errorf("tailnet caller got %q, want %q", got, want)
+	}
+	// Second caller, different address. A shared cache entry would hand this one
+	// the first caller's link — which is the same class of bug as handing out
+	// loopback, just harder to notice.
+	if got, want := get("192.168.1.7"), "http://192.168.1.7:8123"; got != want {
+		t.Errorf("LAN caller got %q, want %q", got, want)
+	}
+	if len(s.suggestions.entries) != 2 {
+		t.Errorf("cache holds %d entries for two client hosts, want 2", len(s.suggestions.entries))
+	}
 }

@@ -640,6 +640,28 @@ is a `502` on `/ports`, because there the scan *is* the response; on
 `/suggestions` it is logged and costs only the dev-server chips, because losing
 `lsof` must not cost a pane its "resolve this conflict" chip.
 
+**A preview URL is built for a caller, not for the host.** Found the hard way on
+a real device: the dev-server URL was derived from the bridge's own bind address,
+which behind `tailscale serve` is `127.0.0.1:8787`, so every phone was handed
+`http://127.0.0.1:<port>` — its *own* loopback. The chip rendered, the browser
+opened, the connection was refused. The bind address answers "where does this
+process listen" and never "what should someone else dial", and those are
+different machines' points of view.
+
+The host now comes from the request that just succeeded (`Host`), falling back to
+`transport.public_url` and then to a non-loopback bind address — first
+non-loopback candidate wins, and "no candidate" means no URL rather than a link
+that cannot connect. That per-caller answer is also why the suggestion cache is
+keyed by client host as well as pane.
+
+The general lesson, worth stating because the same shape recurs: this feature
+already reasoned carefully about bind addresses — it distinguishes a
+loopback-bound server from a public one and renders them differently — and then
+composed the public one's URL out of the wrong machine's address anyway. Careful
+reasoning about a value does not transfer to code that merely *uses* it. Both
+layers now carry a tested invariant (no loopback host may ever appear in a
+`dev_server` URL) rather than an intention.
+
 **What was deliberately not collapsed.** `/ports` is not folded into
 `/suggestions` as a `?host=1` mode: the host-wide list is a different question
 with a different natural cadence, and a per-pane endpoint that sometimes answers

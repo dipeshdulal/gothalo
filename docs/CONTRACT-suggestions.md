@@ -244,6 +244,62 @@ user is actually asking. "Vite is up on :5174, it's just bound to 127.0.0.1" is
 what you need to know when the preview chip you expected isn't tappable, and the
 note tells you the fix without dropping to the terminal.
 
+### How the `url` is built — and the bug that made this section necessary
+
+**The host is the address the CALLER reached the bridge on, never the address
+the bridge binds.** Those are different machines' points of view, and confusing
+them shipped a broken chip: behind `tailscale serve` the bridge binds
+`127.0.0.1:8787` while the phone talks to `<host>.<tailnet>.ts.net:5338`, so
+deriving the URL from the bind address handed every phone
+`http://127.0.0.1:8123` — the phone's *own* loopback. Verified on a real device:
+the chip rendered "Open :8123 · Python · serving", the browser opened, and the
+connection was refused. The bind address answers "where does this process
+listen"; it never answers "what should someone else dial".
+
+The host is resolved per request, first non-loopback candidate wins
+(`server.reachableHost`):
+
+1. **The request's own `Host`.** Authoritative because it is a fact about a
+   connection that just succeeded rather than configuration that might be stale —
+   whatever the caller dialled to get here, they can dial again. It is also
+   per-caller correct: a phone on the tailnet and a laptop on the LAN each get an
+   answer that works for them, which no single configured value can do.
+2. **`transport.public_url`**, when `Host` is unusable — a reverse proxy that
+   rewrites `Host` to its own upstream. The operator's declared public URL is
+   exactly right there, and it is already the address the pairing QR hands out.
+3. **The bind address**, when it is a literal non-loopback address — the
+   `GOTHALO_ADDR=$(tailscale ip -4):8787` setup, where the bridge really is
+   reachable where it binds.
+
+Every candidate goes through the same loopback test the URL builder uses, so a
+stage that can only offer `localhost` falls through instead of producing a link
+that cannot connect. All three falling through means no `url`, and the chip
+degrades to the honest `dev_server_local` state.
+
+**The port is the server's, not the bridge's.** `:5338` is the bridge; the dev
+server is on `:8123`.
+
+**The scheme is always `http`, and that is not a guess.** A listener only becomes
+a chip after answering a bare `GET / HTTP/1.0` over a plain TCP dial — a server
+that actually spoke TLS on its port would have failed that probe and never been
+listed. The bridge's own `https` is a property of the bridge's port, where
+`tailscale serve` terminates TLS; nothing terminates TLS on a dev server's port.
+
+**A server bound to one specific interface keeps its own address.** `100.84.12.3`
+or `192.168.1.50` is what the server actually serves on, so that is the host in
+its URL rather than the bridge's hostname substituted in. This needs no third UI
+state: it is still `dev_server` with a working-shaped URL. Whether the caller can
+route to that particular interface is a network question the bridge should not
+pretend to answer, and a URL that names the truth beats one that looks right and
+times out. Only the wildcard bind (`*`, i.e. `0.0.0.0`/`::`) borrows the caller's
+host — legitimately, since a server on every interface is by definition answering
+on the one the caller just used.
+
+Two invariants are tested rather than merely intended, because this is a class of
+bug that renders perfectly and fails only on a real device:
+`ports.FillURLs` never emits a URL whose host is loopback for **any** combination
+of bind and caller host, and `server.reachableHost` never returns one.
+
 **The system browser, not a WebView.** Over a tailnet the phone reaches the
 server directly, so a WebView would add nothing and take away the address bar,
 devtools, and the tab you want to keep open while you go back to the terminal.
@@ -310,10 +366,14 @@ staleness is invisible.
 per-pane entry that outlived its scan would keep re-triggering scans it then
 ignores. This way a miss usually finds the scan already warm.
 
-The suggestion cache is keyed **per pane**, not one shared slot: a phone showing
-one terminal asks about one pane repeatedly, and two open panes must not evict
-each other. The lock is held across the observation, so concurrent callers for a
-pane share the one in flight — the same bargain `ports.Cache` makes.
+The suggestion cache is keyed **per pane and per client host**, not one shared
+slot. Per pane because a phone showing one terminal asks about one pane
+repeatedly and two open panes must not evict each other; per client host because
+a dev-server URL is only correct for the client it was built for, and a shared
+entry would hand a LAN caller a tailnet link. That is the same class of bug as
+handing out loopback, just harder to notice. In practice it is one or two hosts.
+The lock is held across the observation, so concurrent callers for a pane share
+the one in flight — the same bargain `ports.Cache` makes.
 
 The port scan is host-wide and shared, which is what makes folding it in
 affordable: a row of open panes costs **one** `lsof` per 5s between them, not one
@@ -429,6 +489,10 @@ Authorization: Bearer <bearer>
 `pane` narrows the result to one pane; it is a filter over the same shared scan,
 not a second code path.
 
+`url` is built for **the caller of this request** — see "How the `url` is built"
+above; the same rules apply here, since both surfaces stamp URLs through
+`ports.FillURLs`.
+
 ## Response `200`
 
 ```jsonc
@@ -442,7 +506,7 @@ not a second code path.
       "loopback": false,                // true => nothing on the tailnet can reach it
       "pane": "acme/wN:p2",            // absent when unattributed
       "agent": "claude",                // absent when unattributed
-      "url": "http://100.84.12.3:5173"  // absent when loopback
+      "url": "http://100.84.12.3:5173"  // absent when loopback or unreachable
     }
   ]
 }
