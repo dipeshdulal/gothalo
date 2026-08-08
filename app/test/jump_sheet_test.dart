@@ -67,6 +67,11 @@ Future<void> _open(WidgetTester tester, {String? current}) async {
   await tester.pumpAndSettle();
 }
 
+/// The results list — the chip row above it is also a ListView.
+final _results = find.byWidgetPredicate(
+  (w) => w is ListView && w.scrollDirection == Axis.vertical,
+);
+
 void main() {
   testWidgets('it opens without raising the keyboard', (tester) async {
     await _open(tester);
@@ -80,7 +85,9 @@ void main() {
     await _open(tester);
 
     // Not a fifth bespoke row: no overlaid status dot, no trailing chevron.
-    expect(find.byType(AgentRow), findsNWidgets(3));
+    // `findsWidgets`, not a count — the sheet rests at half height and the
+    // list is lazy, so how many are built depends on the viewport.
+    expect(find.byType(AgentRow), findsWidgets);
     expect(find.byIcon(Icons.chevron_right), findsNothing);
   });
 
@@ -129,5 +136,40 @@ void main() {
 
     expect(find.byType(AgentRow), findsOneWidget);
     expect(find.text('Grinding away'), findsOneWidget);
+  });
+
+  testWidgets('it rests at half the screen and can be pulled taller', (
+    tester,
+  ) async {
+    await _open(tester);
+
+    final screen = tester.getRect(find.byType(MaterialApp));
+    final resting = tester.getRect(_results).height / screen.height;
+    // Roughly half, not the 92% it used to open at.
+    expect(resting, lessThan(0.7));
+
+    // Dragging the results list up grows the sheet rather than doing nothing:
+    // the list scrolls on the sheet's own controller, which is the wire.
+    await tester.drag(find.byType(AgentRow).first, const Offset(0, -260));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getRect(_results).height / screen.height,
+      greaterThan(resting),
+    );
+  });
+
+  testWidgets('focusing the field grows the sheet out from under the keyboard', (
+    tester,
+  ) async {
+    await _open(tester);
+
+    final before = tester.getRect(_results).height;
+    await tester.tap(find.byType(TextField));
+    await tester.pumpAndSettle();
+
+    // Half a sheet minus a keyboard is a sliver of results; typing is the one
+    // time the sheet should take the whole screen.
+    expect(tester.getRect(_results).height, greaterThan(before));
   });
 }

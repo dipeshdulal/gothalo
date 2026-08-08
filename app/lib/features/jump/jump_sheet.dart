@@ -24,8 +24,9 @@ class JumpFollowHost extends Notifier<bool> {
   void set(bool value) => state = value;
 }
 
-final jumpFollowHostProvider =
-    NotifierProvider<JumpFollowHost, bool>(JumpFollowHost.new);
+final jumpFollowHostProvider = NotifierProvider<JumpFollowHost, bool>(
+  JumpFollowHost.new,
+);
 
 /// The scopes of the Jump switcher's segmented control.
 enum _JumpScope { all, needsMe, working }
@@ -42,16 +43,94 @@ Future<void> showJumpSheet(BuildContext context, {String? currentPane}) {
     useSafeArea: true,
     // No shape override: the theme's bottomSheetTheme owns the radius, and the
     // literal 18 that was here disagreed with it.
-    builder: (_) => _JumpSheet(currentPane: currentPane, navContext: context),
+    builder: (_) =>
+        _JumpSheetHost(navContext: context, currentPane: currentPane),
   );
 }
 
+/// Owns the sheet's [DraggableScrollableController].
+///
+/// It has to sit *above* the `DraggableScrollableSheet` to be attached to it,
+/// and the content below needs it too — focusing the search field resizes the
+/// sheet, which is not a drag. Holding it in the content, where it started,
+/// left it unattached and the resize silently did nothing.
+class _JumpSheetHost extends StatefulWidget {
+  const _JumpSheetHost({required this.navContext, this.currentPane});
+
+  final BuildContext navContext;
+  final String? currentPane;
+
+  @override
+  State<_JumpSheetHost> createState() => _JumpSheetHostState();
+}
+
+class _JumpSheetHostState extends State<_JumpSheetHost> {
+  final DraggableScrollableController _sheet =
+      DraggableScrollableController();
+
+  @override
+  void dispose() {
+    _sheet.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      controller: _sheet,
+      // Half the screen at rest. It used to open at 92% — near-full for a sheet
+      // you dismiss more often than you scroll. Now that the keyboard no longer
+      // takes over on open, half is enough to see the top results and decide,
+      // and the list itself is how you ask for more.
+      initialChildSize: kJumpRestingSize,
+      minChildSize: kJumpRestingSize,
+      maxChildSize: 1,
+      // Snap points, not free-floating: resting, most of the screen for
+      // browsing, and full.
+      snap: true,
+      snapSizes: const [kJumpBrowsingSize],
+      // Dragging below the resting size dismisses, which is the gesture people
+      // already use on every other sheet in the app.
+      shouldCloseOnMinExtent: true,
+      expand: false,
+      builder: (_, scrollController) => _JumpSheet(
+        currentPane: widget.currentPane,
+        navContext: widget.navContext,
+        scrollController: scrollController,
+        sheet: _sheet,
+      ),
+    );
+  }
+}
+
+/// Where the Jump sheet rests, as a fraction of the screen.
+const double kJumpRestingSize = 0.55;
+
+/// The stop between resting and full — "I am browsing now".
+const double kJumpBrowsingSize = 0.85;
+
 class _JumpSheet extends ConsumerStatefulWidget {
-  const _JumpSheet({required this.navContext, this.currentPane});
+  const _JumpSheet({
+    required this.navContext,
+    required this.scrollController,
+    required this.sheet,
+    this.currentPane,
+  });
+
+  /// The sheet's size controller, owned by [_JumpSheetHost] so it is actually
+  /// attached. Used to grow the sheet when the field takes focus.
+  final DraggableScrollableController sheet;
 
   /// The context of the screen that opened the sheet — used to navigate after
   /// the sheet pops (its own context is defunct by then).
   final BuildContext navContext;
+
+  /// The sheet's own controller. The results list **must** scroll on this one:
+  /// it is what makes dragging the list past its top grow the sheet instead of
+  /// doing nothing. Only the results take it — the search field and the filters
+  /// stay pinned above it.
+  final ScrollController scrollController;
+
   final String? currentPane;
 
   @override
@@ -64,8 +143,25 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
   _JumpScope _scope = _JumpScope.all;
   String _query = '';
 
+  /// Drives the sheet when something other than a drag should resize it.
+  @override
+  void initState() {
+    super.initState();
+    // Focusing the field raises the keyboard, which eats the bottom half of a
+    // half-height sheet and leaves the results in a sliver. Typing is the one
+    // time you want the sheet at full height, so it goes there itself.
+    _searchFocus.addListener(_onFocus);
+  }
+
+  void _onFocus() {
+    if (!_searchFocus.hasFocus || !widget.sheet.isAttached) return;
+    if (widget.sheet.size >= kJumpBrowsingSize) return;
+    widget.sheet.animateTo(1, duration: Motion.medium, curve: Motion.curve);
+  }
+
   @override
   void dispose() {
+    _searchFocus.removeListener(_onFocus);
     _search.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -84,10 +180,9 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
       if (client != null) {
         // Best-effort host focus — never blocks or fails the navigation.
         unawaited(
-          client.herdrCommand('pane.focus', {'pane_id': a.paneId}).then(
-            (_) {},
-            onError: (_) {},
-          ),
+          client
+              .herdrCommand('pane.focus', {'pane_id': a.paneId})
+              .then((_) {}, onError: (_) {}),
         );
       }
     }
@@ -101,22 +196,27 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
     final snap = ref.watch(snapshotControllerProvider).asData?.value;
     final agents = snap?.agents ?? const <Agent>[];
 
-    final wsById = {for (final w in snap?.workspaces ?? const []) w.workspaceId: w};
+    final wsById = {
+      for (final w in snap?.workspaces ?? const []) w.workspaceId: w,
+    };
     final tabById = {for (final t in snap?.tabs ?? const []) t.tabId: t};
 
     final items = [
       for (final a in agents)
         _JumpItem.from(a, wsById[a.workspaceId], tabById[a.tabId]),
     ];
-    final waiting =
-        agents.where((a) => a.agentStatus == AgentStatus.blocked).length;
+    final waiting = agents
+        .where((a) => a.agentStatus == AgentStatus.blocked)
+        .length;
 
     final scoped = switch (_scope) {
       _JumpScope.all => items,
-      _JumpScope.needsMe =>
-        items.where((i) => i.agent.agentStatus == AgentStatus.blocked),
-      _JumpScope.working =>
-        items.where((i) => i.agent.agentStatus == AgentStatus.working),
+      _JumpScope.needsMe => items.where(
+        (i) => i.agent.agentStatus == AgentStatus.blocked,
+      ),
+      _JumpScope.working => items.where(
+        (i) => i.agent.agentStatus == AgentStatus.working,
+      ),
     };
 
     final q = _query.trim();
@@ -151,38 +251,51 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: FractionallySizedBox(
-        heightFactor: 0.92,
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(2),
-              ),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(2),
             ),
-            _header(scheme, waiting),
-            _searchField(scheme),
-            _controls(scheme),
-            const SizedBox(height: Space.sm),
-            Expanded(
-              child: results.isEmpty
-                  ? _empty(scheme, q)
-                  : ListView.builder(
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: const EdgeInsets.symmetric(vertical: Space.sm),
-                      itemCount: results.length,
-                      // No separators: each row is a panel held by its own
-                      // hairline, like every other agent list in the app.
-                      itemBuilder: (_, i) => _row(results[i]),
+          ),
+          _header(scheme, waiting),
+          _searchField(scheme),
+          _controls(scheme),
+          const SizedBox(height: Space.sm),
+          Expanded(
+            child: results.isEmpty
+                // Scrollable even when empty, so the sheet can still be
+                // dragged from the middle of it.
+                ? LayoutBuilder(
+                    builder: (_, box) => ListView(
+                      controller: widget.scrollController,
+                      children: [
+                        SizedBox(
+                          height: box.maxHeight,
+                          child: _empty(scheme, q),
+                        ),
+                      ],
                     ),
-            ),
-          ],
-        ),
+                  )
+                : ListView.builder(
+                    // The sheet's controller, not one of our own: this is the
+                    // wire that turns "scroll the list past its top" into
+                    // "grow the sheet".
+                    controller: widget.scrollController,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.symmetric(vertical: Space.sm),
+                    itemCount: results.length,
+                    // No separators: each row is a panel held by its own
+                    // hairline, like every other agent list in the app.
+                    itemBuilder: (_, i) => _row(results[i]),
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -458,8 +571,6 @@ int? _fuzzyScore(String q, String t) {
 /// The agent avatar with a live status dot in the corner — the dot's colour is
 /// driven by the snapshot (which is live off `WS /events`), so it updates as the
 /// agent's state changes.
-
-
 
 /// "You are already here" — the marker on the row for [_JumpSheet.currentPane].
 ///

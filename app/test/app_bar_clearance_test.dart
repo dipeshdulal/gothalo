@@ -92,7 +92,10 @@ Future<void> _pump(WidgetTester tester, Widget screen) async {
     ),
   );
   await tester.pump();
-  await tester.pump();
+  // Past the entrance cascade, so this measures the resting layout rather than
+  // a row still 6px into its lift. Bounded rather than `pumpAndSettle`: the
+  // per-server providers self-invalidate on a timer in the real app.
+  await tester.pump(const Duration(milliseconds: 600));
 }
 
 /// The top edge of the first thing the list draws.

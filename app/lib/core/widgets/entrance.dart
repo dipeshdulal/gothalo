@@ -10,7 +10,15 @@ import '../tokens.dart';
 ///
 /// [index] staggers rows against each other, but the delay is capped: a
 /// per-row delay that keeps growing means row 30 of a long list waits over a
-/// second, which stops reading as polish and starts reading as lag.
+/// second, which stops reading as polish and starts reading as lag. The whole
+/// cascade is therefore over inside [_maxDelay] + [Motion.medium] — a little
+/// over 400ms — however long the list is.
+///
+/// **It animates on first build, not on rebuild.** The controller runs from
+/// `initState`, so a screen that rebuilds on every snapshot tick does not
+/// replay: the [State] survives and the animation is long finished. Give rows a
+/// stable [Key] where the list can reorder, or Flutter will match them by index
+/// and a row that changes place will replay.
 class Entrance extends StatefulWidget {
   const Entrance({
     super.key,

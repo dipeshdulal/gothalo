@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/connection/connection_providers.dart';
+import 'package:gothalo/core/widgets/entrance.dart';
 import 'package:gothalo/core/widgets/panel_row.dart';
 import 'package:gothalo/core/widgets/status_mark.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
@@ -373,5 +374,55 @@ void main() {
     expect(idleTitle.style!.color!.a, lessThan(1.0));
     expect(idleTitle.style!.fontWeight!.value,
         lessThan(workingTitle.style!.fontWeight!.value));
+  });
+
+  testWidgets('rows enter once, and not again on a snapshot tick', (
+    tester,
+  ) async {
+    await _pumpHome(tester, agents: [_working, _idle]);
+
+    // Mid-cascade: rows are on their way in.
+    expect(find.byType(Entrance), findsWidgets);
+    await tester.pump(const Duration(milliseconds: 600));
+
+    double opacityOf(String text) => tester
+        .widgetList<Opacity>(
+          find.ancestor(of: find.text(text), matching: find.byType(Opacity)),
+        )
+        .map((o) => o.opacity)
+        .reduce((a, b) => a < b ? a : b);
+
+    expect(opacityOf('Refactoring the client'), 1.0);
+
+    // A rebuild — what a snapshot tick causes, every six seconds. The rows must
+    // not fade in again: `Entrance` animates from `initState`, and the keys
+    // keep each row's State across the rebuild.
+    await tester.pump();
+    expect(opacityOf('Refactoring the client'), 1.0);
+    expect(opacityOf('Waiting around'), 1.0);
+  });
+
+  testWidgets('the whole cascade is over quickly', (tester) async {
+    // Home is the screen opened most often; an animation that delights on the
+    // first open irritates on the fiftieth. However long the list, the stagger
+    // is capped, so the last row starts no later than 220ms in.
+    final many = [
+      for (var i = 0; i < 30; i++)
+        _agent('w1:m$i', title: 'Agent $i', branch: 'main'),
+    ];
+    await _pumpHome(tester, agents: many);
+    await tester.pump(const Duration(milliseconds: 450));
+
+    // Only the entrance opacities — the backdrop artwork has its own, at 14%.
+    final entering = tester.widgetList<Opacity>(
+      find.descendant(
+        of: find.byType(Entrance),
+        matching: find.byType(Opacity),
+      ),
+    );
+    expect(entering, isNotEmpty);
+    for (final o in entering) {
+      expect(o.opacity, 1.0);
+    }
   });
 }

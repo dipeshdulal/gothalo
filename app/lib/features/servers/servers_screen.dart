@@ -7,6 +7,7 @@ import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
 import '../../core/widgets/app_mark.dart';
+import '../../core/widgets/entrance.dart';
 import '../../core/widgets/flat_app_bar.dart';
 import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -176,6 +177,13 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
             error: (e, _) => Center(child: Text('$e')),
             data: (list) {
               if (list.isEmpty) return const _EmptyServers();
+              // Home is the screen opened most often, so the cascade is short
+              // and shallow: `Entrance` caps its stagger at 220ms whatever the
+              // list length, and the rows are keyed by identity so a snapshot
+              // tick — one every six seconds — rebuilds without replaying.
+              var step = 0;
+              Widget enter(Widget child, {Key? key}) =>
+                  Entrance(key: key, index: step++, child: child);
               return RefreshIndicator(
                 onRefresh: () async => ref.invalidate(serverAgentsProvider),
                 child: ListView(
@@ -191,22 +199,33 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                   ),
                   children: [
                     // --- Priority (needs you + starred) ---
-                    SectionLabel(
-                      'Priority',
-                      trailing: _SectionAction(
-                        label: 'Manage',
-                        onTap: () => context.push('/priority'),
+                    enter(
+                      SectionLabel(
+                        'Priority',
+                        trailing: _SectionAction(
+                          label: 'Manage',
+                          onTap: () => context.push('/priority'),
+                        ),
                       ),
                     ),
                     if (hits.isEmpty)
-                      _PriorityEmpty(onManage: () => context.push('/priority'))
+                      enter(
+                        _PriorityEmpty(
+                          onManage: () => context.push('/priority'),
+                        ),
+                      )
                     else ...[
                       for (final h in overflow.visible)
-                        AgentRow(
-                          agent: h.agent,
-                          starred: h.starred,
-                          serverName: showServer ? h.server.name : null,
-                          onTap: () => _openAgent(h.server, h.agent),
+                        enter(
+                          key: ValueKey(
+                            'priority-${h.server.id}-${h.agent.paneId}',
+                          ),
+                          AgentRow(
+                            agent: h.agent,
+                            starred: h.starred,
+                            serverName: showServer ? h.server.name : null,
+                            onTap: () => _openAgent(h.server, h.agent),
+                          ),
                         ),
                       PriorityOverflowBar(
                         overflow: overflow,
@@ -223,13 +242,16 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                     // gets no header and no empty box — an empty shortcut is
                     // worse than no shortcut.
                     if (recents.isNotEmpty) ...[
-                      const SectionLabel('Recent'),
+                      enter(const SectionLabel('Recent')),
                       for (final r in recents)
-                        AgentRow(
-                          agent: r.agent,
-                          serverName: showServer ? r.server.name : null,
-                          trailing: _ViewMark(view: r.view),
-                          onTap: () => _open(r.server, r.route),
+                        enter(
+                          key: ValueKey('recent-${r.key}'),
+                          AgentRow(
+                            agent: r.agent,
+                            serverName: showServer ? r.server.name : null,
+                            trailing: _ViewMark(view: r.view),
+                            onTap: () => _open(r.server, r.route),
+                          ),
                         ),
                     ],
 
@@ -243,17 +265,20 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                       groups: groups,
                       showServer: showServer,
                       onOpen: (hit) => _openAgent(hit.server, hit.agent),
-                    ),
+                    ).map(enter),
 
                     // --- Servers ---
-                    const SectionLabel('Servers'),
+                    enter(const SectionLabel('Servers')),
                     for (final s in list)
-                      _ServerTile(
-                        server: s,
-                        summary: byServer[s.id],
-                        onTap: () => _openServer(s),
-                        onEdit: () => showEditServerSheet(context, s.id),
-                        onDelete: () => _confirmDelete(s),
+                      enter(
+                        key: ValueKey('server-${s.id}'),
+                        _ServerTile(
+                          server: s,
+                          summary: byServer[s.id],
+                          onTap: () => _openServer(s),
+                          onEdit: () => showEditServerSheet(context, s.id),
+                          onDelete: () => _confirmDelete(s),
+                        ),
                       ),
                   ],
                 ),
