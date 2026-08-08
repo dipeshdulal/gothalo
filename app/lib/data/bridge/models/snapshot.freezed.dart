@@ -1793,7 +1793,13 @@ $WorktreeInfoCopyWith<$Res>? get worktree {
 /// @nodoc
 mixin _$Snapshot {
 
- List<Agent> get agents; List<Pane> get panes; List<TabInfo> get tabs; List<WorkspaceInfo> get workspaces;@JsonKey(name: 'focused_pane_id') String get focusedPaneId;
+ List<Agent> get agents; List<Pane> get panes; List<TabInfo> get tabs; List<WorkspaceInfo> get workspaces;@JsonKey(name: 'focused_pane_id') String get focusedPaneId;/// Every Herdr session the bridge merged this snapshot from, default first
+/// (see D14). It is the only place the app can learn a session exists when
+/// that session has nothing in it — pane and workspace ids only name a
+/// session once there is something to name — which is exactly the case the
+/// "open a space" flow has to target. Empty on a bridge that predates the
+/// field; treat that as the single default session.
+ List<String> get sessions;
 /// Create a copy of Snapshot
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -1806,16 +1812,16 @@ $SnapshotCopyWith<Snapshot> get copyWith => _$SnapshotCopyWithImpl<Snapshot>(thi
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Snapshot&&const DeepCollectionEquality().equals(other.agents, agents)&&const DeepCollectionEquality().equals(other.panes, panes)&&const DeepCollectionEquality().equals(other.tabs, tabs)&&const DeepCollectionEquality().equals(other.workspaces, workspaces)&&(identical(other.focusedPaneId, focusedPaneId) || other.focusedPaneId == focusedPaneId));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Snapshot&&const DeepCollectionEquality().equals(other.agents, agents)&&const DeepCollectionEquality().equals(other.panes, panes)&&const DeepCollectionEquality().equals(other.tabs, tabs)&&const DeepCollectionEquality().equals(other.workspaces, workspaces)&&(identical(other.focusedPaneId, focusedPaneId) || other.focusedPaneId == focusedPaneId)&&const DeepCollectionEquality().equals(other.sessions, sessions));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(agents),const DeepCollectionEquality().hash(panes),const DeepCollectionEquality().hash(tabs),const DeepCollectionEquality().hash(workspaces),focusedPaneId);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(agents),const DeepCollectionEquality().hash(panes),const DeepCollectionEquality().hash(tabs),const DeepCollectionEquality().hash(workspaces),focusedPaneId,const DeepCollectionEquality().hash(sessions));
 
 @override
 String toString() {
-  return 'Snapshot(agents: $agents, panes: $panes, tabs: $tabs, workspaces: $workspaces, focusedPaneId: $focusedPaneId)';
+  return 'Snapshot(agents: $agents, panes: $panes, tabs: $tabs, workspaces: $workspaces, focusedPaneId: $focusedPaneId, sessions: $sessions)';
 }
 
 
@@ -1826,7 +1832,7 @@ abstract mixin class $SnapshotCopyWith<$Res>  {
   factory $SnapshotCopyWith(Snapshot value, $Res Function(Snapshot) _then) = _$SnapshotCopyWithImpl;
 @useResult
 $Res call({
- List<Agent> agents, List<Pane> panes, List<TabInfo> tabs, List<WorkspaceInfo> workspaces,@JsonKey(name: 'focused_pane_id') String focusedPaneId
+ List<Agent> agents, List<Pane> panes, List<TabInfo> tabs, List<WorkspaceInfo> workspaces,@JsonKey(name: 'focused_pane_id') String focusedPaneId, List<String> sessions
 });
 
 
@@ -1843,14 +1849,15 @@ class _$SnapshotCopyWithImpl<$Res>
 
 /// Create a copy of Snapshot
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? agents = null,Object? panes = null,Object? tabs = null,Object? workspaces = null,Object? focusedPaneId = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? agents = null,Object? panes = null,Object? tabs = null,Object? workspaces = null,Object? focusedPaneId = null,Object? sessions = null,}) {
   return _then(_self.copyWith(
 agents: null == agents ? _self.agents : agents // ignore: cast_nullable_to_non_nullable
 as List<Agent>,panes: null == panes ? _self.panes : panes // ignore: cast_nullable_to_non_nullable
 as List<Pane>,tabs: null == tabs ? _self.tabs : tabs // ignore: cast_nullable_to_non_nullable
 as List<TabInfo>,workspaces: null == workspaces ? _self.workspaces : workspaces // ignore: cast_nullable_to_non_nullable
 as List<WorkspaceInfo>,focusedPaneId: null == focusedPaneId ? _self.focusedPaneId : focusedPaneId // ignore: cast_nullable_to_non_nullable
-as String,
+as String,sessions: null == sessions ? _self.sessions : sessions // ignore: cast_nullable_to_non_nullable
+as List<String>,
   ));
 }
 
@@ -1932,10 +1939,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( List<Agent> agents,  List<Pane> panes,  List<TabInfo> tabs,  List<WorkspaceInfo> workspaces, @JsonKey(name: 'focused_pane_id')  String focusedPaneId)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( List<Agent> agents,  List<Pane> panes,  List<TabInfo> tabs,  List<WorkspaceInfo> workspaces, @JsonKey(name: 'focused_pane_id')  String focusedPaneId,  List<String> sessions)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Snapshot() when $default != null:
-return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focusedPaneId);case _:
+return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focusedPaneId,_that.sessions);case _:
   return orElse();
 
 }
@@ -1953,10 +1960,10 @@ return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focus
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( List<Agent> agents,  List<Pane> panes,  List<TabInfo> tabs,  List<WorkspaceInfo> workspaces, @JsonKey(name: 'focused_pane_id')  String focusedPaneId)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( List<Agent> agents,  List<Pane> panes,  List<TabInfo> tabs,  List<WorkspaceInfo> workspaces, @JsonKey(name: 'focused_pane_id')  String focusedPaneId,  List<String> sessions)  $default,) {final _that = this;
 switch (_that) {
 case _Snapshot():
-return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focusedPaneId);}
+return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focusedPaneId,_that.sessions);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -1970,10 +1977,10 @@ return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focus
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( List<Agent> agents,  List<Pane> panes,  List<TabInfo> tabs,  List<WorkspaceInfo> workspaces, @JsonKey(name: 'focused_pane_id')  String focusedPaneId)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( List<Agent> agents,  List<Pane> panes,  List<TabInfo> tabs,  List<WorkspaceInfo> workspaces, @JsonKey(name: 'focused_pane_id')  String focusedPaneId,  List<String> sessions)?  $default,) {final _that = this;
 switch (_that) {
 case _Snapshot() when $default != null:
-return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focusedPaneId);case _:
+return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focusedPaneId,_that.sessions);case _:
   return null;
 
 }
@@ -1985,7 +1992,7 @@ return $default(_that.agents,_that.panes,_that.tabs,_that.workspaces,_that.focus
 @JsonSerializable()
 
 class _Snapshot extends Snapshot {
-  const _Snapshot({final  List<Agent> agents = const <Agent>[], final  List<Pane> panes = const <Pane>[], final  List<TabInfo> tabs = const <TabInfo>[], final  List<WorkspaceInfo> workspaces = const <WorkspaceInfo>[], @JsonKey(name: 'focused_pane_id') this.focusedPaneId = ''}): _agents = agents,_panes = panes,_tabs = tabs,_workspaces = workspaces,super._();
+  const _Snapshot({final  List<Agent> agents = const <Agent>[], final  List<Pane> panes = const <Pane>[], final  List<TabInfo> tabs = const <TabInfo>[], final  List<WorkspaceInfo> workspaces = const <WorkspaceInfo>[], @JsonKey(name: 'focused_pane_id') this.focusedPaneId = '', final  List<String> sessions = const <String>[]}): _agents = agents,_panes = panes,_tabs = tabs,_workspaces = workspaces,_sessions = sessions,super._();
   factory _Snapshot.fromJson(Map<String, dynamic> json) => _$SnapshotFromJson(json);
 
  final  List<Agent> _agents;
@@ -2017,6 +2024,25 @@ class _Snapshot extends Snapshot {
 }
 
 @override@JsonKey(name: 'focused_pane_id') final  String focusedPaneId;
+/// Every Herdr session the bridge merged this snapshot from, default first
+/// (see D14). It is the only place the app can learn a session exists when
+/// that session has nothing in it — pane and workspace ids only name a
+/// session once there is something to name — which is exactly the case the
+/// "open a space" flow has to target. Empty on a bridge that predates the
+/// field; treat that as the single default session.
+ final  List<String> _sessions;
+/// Every Herdr session the bridge merged this snapshot from, default first
+/// (see D14). It is the only place the app can learn a session exists when
+/// that session has nothing in it — pane and workspace ids only name a
+/// session once there is something to name — which is exactly the case the
+/// "open a space" flow has to target. Empty on a bridge that predates the
+/// field; treat that as the single default session.
+@override@JsonKey() List<String> get sessions {
+  if (_sessions is EqualUnmodifiableListView) return _sessions;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_sessions);
+}
+
 
 /// Create a copy of Snapshot
 /// with the given fields replaced by the non-null parameter values.
@@ -2031,16 +2057,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Snapshot&&const DeepCollectionEquality().equals(other._agents, _agents)&&const DeepCollectionEquality().equals(other._panes, _panes)&&const DeepCollectionEquality().equals(other._tabs, _tabs)&&const DeepCollectionEquality().equals(other._workspaces, _workspaces)&&(identical(other.focusedPaneId, focusedPaneId) || other.focusedPaneId == focusedPaneId));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Snapshot&&const DeepCollectionEquality().equals(other._agents, _agents)&&const DeepCollectionEquality().equals(other._panes, _panes)&&const DeepCollectionEquality().equals(other._tabs, _tabs)&&const DeepCollectionEquality().equals(other._workspaces, _workspaces)&&(identical(other.focusedPaneId, focusedPaneId) || other.focusedPaneId == focusedPaneId)&&const DeepCollectionEquality().equals(other._sessions, _sessions));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_agents),const DeepCollectionEquality().hash(_panes),const DeepCollectionEquality().hash(_tabs),const DeepCollectionEquality().hash(_workspaces),focusedPaneId);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_agents),const DeepCollectionEquality().hash(_panes),const DeepCollectionEquality().hash(_tabs),const DeepCollectionEquality().hash(_workspaces),focusedPaneId,const DeepCollectionEquality().hash(_sessions));
 
 @override
 String toString() {
-  return 'Snapshot(agents: $agents, panes: $panes, tabs: $tabs, workspaces: $workspaces, focusedPaneId: $focusedPaneId)';
+  return 'Snapshot(agents: $agents, panes: $panes, tabs: $tabs, workspaces: $workspaces, focusedPaneId: $focusedPaneId, sessions: $sessions)';
 }
 
 
@@ -2051,7 +2077,7 @@ abstract mixin class _$SnapshotCopyWith<$Res> implements $SnapshotCopyWith<$Res>
   factory _$SnapshotCopyWith(_Snapshot value, $Res Function(_Snapshot) _then) = __$SnapshotCopyWithImpl;
 @override @useResult
 $Res call({
- List<Agent> agents, List<Pane> panes, List<TabInfo> tabs, List<WorkspaceInfo> workspaces,@JsonKey(name: 'focused_pane_id') String focusedPaneId
+ List<Agent> agents, List<Pane> panes, List<TabInfo> tabs, List<WorkspaceInfo> workspaces,@JsonKey(name: 'focused_pane_id') String focusedPaneId, List<String> sessions
 });
 
 
@@ -2068,14 +2094,15 @@ class __$SnapshotCopyWithImpl<$Res>
 
 /// Create a copy of Snapshot
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? agents = null,Object? panes = null,Object? tabs = null,Object? workspaces = null,Object? focusedPaneId = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? agents = null,Object? panes = null,Object? tabs = null,Object? workspaces = null,Object? focusedPaneId = null,Object? sessions = null,}) {
   return _then(_Snapshot(
 agents: null == agents ? _self._agents : agents // ignore: cast_nullable_to_non_nullable
 as List<Agent>,panes: null == panes ? _self._panes : panes // ignore: cast_nullable_to_non_nullable
 as List<Pane>,tabs: null == tabs ? _self._tabs : tabs // ignore: cast_nullable_to_non_nullable
 as List<TabInfo>,workspaces: null == workspaces ? _self._workspaces : workspaces // ignore: cast_nullable_to_non_nullable
 as List<WorkspaceInfo>,focusedPaneId: null == focusedPaneId ? _self.focusedPaneId : focusedPaneId // ignore: cast_nullable_to_non_nullable
-as String,
+as String,sessions: null == sessions ? _self._sessions : sessions // ignore: cast_nullable_to_non_nullable
+as List<String>,
   ));
 }
 

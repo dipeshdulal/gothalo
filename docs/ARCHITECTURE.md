@@ -22,6 +22,7 @@ internal/
 ├── events/             in-process pub/sub bus (fan-out; drops slow subscribers)
 ├── agentstate/         parse `herdr agent read` -> compact per-agent state (per-kind)
 ├── transcript/         tail the agent's on-disk transcript -> kind-agnostic chat
+├── browse/             read-only, directories-only host listing + its containment rules
 ├── imagedrop/          land an uploaded image in the agent's cwd -> a path it can read
 ├── gitbranch/          is a branch safe to delete, and delete it (Herdr has no branches)
 ├── notify/             bus consumer: dismiss stale "blocked" pushes
@@ -52,6 +53,7 @@ config; `pair`/`devices` are localhost clients of the running daemon's admin API
 | GET  | `/diff/expand` | device bearer or admin | the unchanged lines around a hunk, for the diff viewer's collapsed regions |
 | GET  | `/agent-transcript` | device bearer or admin (`?token=`) | WS normalized transcript chat + backlog |
 | GET  | `/events` | device bearer or admin (`?token=`) | WS unified event bus (state changes, push lifecycle) |
+| GET  | `/browse` | device bearer or admin | host directory picker — read-only, directories-only, root-confined |
 | POST | `/herdr` | device bearer or admin | allowlisted Herdr CLI proxy (worktree/tab/pane parity) |
 | GET  | `/branch-info` | device bearer or admin | can this worktree's branch be deleted, and is it merged |
 | POST | `/branch-delete` | device bearer or admin | delete a local git branch (after its worktree is gone) |

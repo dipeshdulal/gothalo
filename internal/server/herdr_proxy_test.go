@@ -116,7 +116,12 @@ func TestHerdrProxyAllowlistCoversContract(t *testing.T) {
 	fake := &fakeRequester{result: json.RawMessage(`{}`)}
 	srv := newProxyServer(t, fake)
 	for _, m := range []string{
-		"worktree.create", "worktree.remove", "worktree.list",
+		"worktree.create", "worktree.open", "worktree.remove", "worktree.list",
+		// The two halves of "open a directory as a space" from the phone:
+		// workspace.create for any directory, worktree.open for one that is a
+		// git checkout. Losing either breaks the new-space flow, which is the
+		// only way to get a first space onto an empty session.
+		"workspace.create", "workspace.list", "workspace.get",
 		"tab.create", "tab.close", "tab.rename", "pane.split", "pane.close",
 		"pane.focus", "tab.focus", "agent.focus",
 		"pane.list", "pane.get", "agent.list", "session.snapshot",
@@ -146,6 +151,32 @@ func TestHerdrProxyDeliberateExclusions(t *testing.T) {
 		}
 		if fake.called {
 			t.Errorf("%s reached the requester — allowlist bypassed", m)
+		}
+	}
+}
+
+// workspace.create is the new-space flow's Herdr method, and it is the awkward
+// one for multi-session routing: its params are a bare `cwd`, so there is no
+// qualified id for the bridge to infer a session from. The explicit `session`
+// field is the ONLY handle, and the ids coming back must be qualified with it —
+// otherwise the app opens a space it cannot then address.
+func TestHerdrProxyWorkspaceCreateRoutesByExplicitSession(t *testing.T) {
+	fake := &fakeRequester{result: json.RawMessage(
+		`{"type":"workspace_created","workspace":{"workspace_id":"w3"},` +
+			`"tab":{"tab_id":"w3:t1"},"root_pane":{"pane_id":"w3:p1"}}`)}
+	srv := newProxyServer(t, fake)
+
+	rec := proxyRequest(t, srv, "admintok",
+		`{"method":"workspace.create","session":"acme","params":{"cwd":"/Users/x/projects/api"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(string(fake.lastParams), `"cwd":"/Users/x/projects/api"`) {
+		t.Errorf("cwd not forwarded verbatim: %s", fake.lastParams)
+	}
+	for _, want := range []string{`"acme/w3"`, `"acme/w3:t1"`, `"acme/w3:p1"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("result should carry %s, got %s", want, rec.Body.String())
 		}
 	}
 }

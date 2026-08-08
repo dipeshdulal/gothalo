@@ -9,7 +9,10 @@ available by adding them to the allowlist — no other bridge change.
 
 Verified end-to-end against **herdr 0.7.5, protocol 17** on the live socket
 (`tab.rename` and the `pane.rename` findings against **0.8.0, protocol 19**).
-Every example below is a real captured request/response.
+Every example below is a real captured request/response. The two space-opening
+methods (`workspace.create`, `worktree.open`) were likewise re-captured against
+**herdr 0.8.0, protocol 19**, via the `herdr` CLI — which returns the identical
+`result` object the proxy forwards verbatim.
 
 ---
 
@@ -19,7 +22,7 @@ Every example below is a real captured request/response.
 <bearer>` or `?token=`; the admin token also works for dev):
 
 ```json
-{ "method": "<herdr socket method>", "params": { … } }
+{ "method": "<herdr socket method>", "params": { … }, "session": "<name>" }
 ```
 
 - `method` — a Herdr **socket method id** from `herdr api schema --json`
@@ -28,6 +31,14 @@ Every example below is a real captured request/response.
 - `params` — forwarded to the socket **verbatim**. Use the exact shapes from the
   schema (documented per method below). Omit it or send `{}` for methods that
   take no params.
+- `session` — which Herdr session to run against (D14). Optional, and usually
+  unnecessary: the bridge **infers** it from any session-qualified id inside
+  `params` (`"pane_id": "acme/w1:p2"`), strips the prefix before forwarding, and
+  re-qualifies the ids in the result. Send it explicitly when `params` carries no
+  id to infer from — `workspace.create` takes a bare `cwd`, so without it the
+  space always lands in the **default** session. `"default"` and `""` mean the
+  same thing. An explicit session that contradicts the ids in `params`, or params
+  mixing ids from two sessions, is a `400`.
 
 **Success** `200`:
 
@@ -76,9 +87,9 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 | method | params | returns (`result.type`) | notes |
 |---|---|---|---|
 | `worktree.create` | `{ "cwd"?, "branch"?, "base"?, "path"?, "label"?, "workspace_id"?, "focus"?=false }` | `worktree_created` | creates a git worktree **and** opens it as a workspace |
-| `worktree.open` | `{ "cwd"?, "branch"?, "path"?, "label"?, "workspace_id"?, "focus"?=false }` | `worktree_*` | open an existing worktree as a workspace |
+| `worktree.open` | `{ "cwd", "path" \| "branch", "label"?, "workspace_id"?, "focus"?=false }` | `worktree_opened` | open an existing checkout as a workspace. **`cwd` is required** alongside `path` — see below. Idempotent (`already_open`) |
 | `worktree.remove` | `{ "workspace_id": "wN", "force"?=false }` | `worktree_removed` | **DESTRUCTIVE** — gate behind an in-app confirm. Removes the checkout only; the **branch is left behind** (see below) |
-| `workspace.create` | `{ "cwd"?, "label"?, "env"?, "focus"?=false }` | `workspace_*` | new empty workspace |
+| `workspace.create` | `{ "cwd"?, "label"?, "env"?, "focus"?=false }` | `workspace_created` | open **any** directory as a new workspace — the app's "open a project" |
 | `tab.create` | `{ "workspace_id"?, "cwd"?, "label"?, "env"?, "focus"?=false }` | `tab_created` | new tab + its root pane |
 | `tab.close` | `{ "tab_id": "wN:tM" }` | `ok` | **DESTRUCTIVE** — in-app confirm |
 | `tab.focus` | `{ "tab_id": "wN:tM" }` | `ok` | |
@@ -129,6 +140,26 @@ allowed: <method>"}`) without ever touching the socket. Source of truth:
 
 `focus` defaults to **`false`** everywhere, so app-created panes/tabs do not steal
 the operator's foreground pane on the host. Pass `"focus": true` to override.
+
+### Opening a directory as a space — which method
+
+`workspace.create` and `worktree.open` both turn a directory into a workspace,
+and the app picks between them on whether the directory is a git checkout (which
+`GET /browse` reports as `is_repo` — see [`CONTRACT-browse.md`](./CONTRACT-browse.md)):
+
+- **a repository → `worktree.open`.** It attaches the `worktree` block Herdr
+  groups a project and its worktrees by, so the space lands under the right
+  heading in the app's Spaces list, and it is **idempotent**: a second call
+  returns the existing workspace with `already_open: true` rather than opening a
+  duplicate space on the same tree.
+- **anything else → `workspace.create`.** It takes any directory. A project that
+  is not a repository still needs a space, and `worktree.open` refuses it with
+  `not_git_worktree`.
+
+`worktree.open` needs **both** `cwd` and `path`, even when they are the same
+directory. With `path` alone it answers `not_git_worktree` for a perfectly valid
+checkout — `cwd` is the resolution context Herdr looks the repository up from.
+Captured below.
 
 > Confirmed **not** allowlisted (→ `403`): `server.stop`, `server.reload_config`,
 > `pane.send_text`, `pane.send_keys`, `agent.prompt`, `events.subscribe`,
@@ -185,6 +216,78 @@ checkout, so it is where an agent for this worktree belongs. The app's
 create-and-launch flow feeds it straight to `POST /agent/start` rather than
 re-listing panes to find it — see
 [`CONTRACT-worktree-launch.md`](./CONTRACT-worktree-launch.md).
+
+### `workspace.create` — open a directory as a space
+
+Captured on the **live socket** (`herdr workspace create`), which returns the
+same `result` object the proxy passes through verbatim. Paths shortened.
+
+```json
+→ { "method": "workspace.create",
+    "params": { "cwd": "/…/demo-project", "label": "browse demo" } }
+
+← 200
+{ "result": {
+    "type": "workspace_created",
+    "workspace": {
+      "workspace_id": "w19", "number": 20, "label": "browse demo",
+      "focused": false, "pane_count": 1, "tab_count": 1,
+      "active_tab_id": "w19:t1", "agent_status": "unknown" },
+    "tab": { "tab_id": "w19:t1", "workspace_id": "w19", "number": 1,
+             "label": "1", "focused": false, "pane_count": 1,
+             "agent_status": "unknown" },
+    "root_pane": {
+      "pane_id": "w19:p1", "terminal_id": "term_65863840201fd8b",
+      "workspace_id": "w19", "tab_id": "w19:t1", "focused": false,
+      "cwd": "/…/demo-project", "foreground_cwd": "/…/demo-project",
+      "agent_status": "unknown", "revision": 0 } } }
+```
+
+Note the workspace has **no `worktree` block** even though the directory is a
+git repository — `workspace.create` does not look. That is the reason a
+repository goes through `worktree.open` instead.
+
+### `worktree.open` — open a checkout as a space
+
+```json
+→ { "method": "worktree.open",
+    "params": { "cwd": "/…/demo-project", "path": "/…/demo-project" } }
+
+← 200
+{ "result": {
+    "type": "worktree_opened", "already_open": false,
+    "workspace": {
+      "workspace_id": "w1A", "number": 20, "label": "demo-project",
+      "focused": false, "pane_count": 1, "tab_count": 1,
+      "active_tab_id": "w1A:t1", "agent_status": "unknown",
+      "worktree": {
+        "repo_key": "/…/demo-project/.git", "repo_name": "demo-project",
+        "repo_root": "/…/demo-project",
+        "checkout_path": "/…/demo-project", "is_linked_worktree": false } },
+    "tab": { "tab_id": "w1A:t1", "workspace_id": "w1A", "number": 1,
+             "label": "1", "focused": false, "pane_count": 1,
+             "agent_status": "unknown" },
+    "root_pane": {
+      "pane_id": "w1A:p1", "workspace_id": "w1A", "tab_id": "w1A:t1",
+      "cwd": "/…/demo-project", "agent_status": "unknown", "revision": 0 },
+    "worktree": {
+      "path": "/…/demo-project", "branch": "main", "is_bare": false,
+      "is_detached": false, "is_linked_worktree": false,
+      "is_prunable": false, "open_workspace_id": "w1A",
+      "label": "demo-project" } } }
+```
+
+Asked a second time for the same path it returns `"already_open": true` and the
+**same** `w1A` — the app can call it without checking first.
+
+Without `cwd`:
+
+```json
+→ { "method": "worktree.open", "params": { "path": "/…/demo-project" } }
+
+← 502
+{ "error": "herdr: not_git_worktree: Herdr worktree actions require a workspace inside a Git work tree" }
+```
 
 ### `tab.create`
 
@@ -314,6 +417,7 @@ An unknown tab is a `404`:
 |---|---|---|
 | `200` | success | `{ "result": <herdr result> }` |
 | `400` | malformed JSON body, or missing/empty `method` | `{ "error": "want {method, params}" }` |
+| `400` | `session` contradicts a qualified id in `params`, or `params` mixes ids from two sessions | `{ "error": "session \"x\" contradicts ids qualified with \"y\"" }` |
 | `401` | no / invalid bearer or token | `unauthorized` (plain text) |
 | `403` | `method` is not on the allowlist | `{ "error": "method not allowed: <method>" }` |
 | `404` | Herdr rejected with a `*_not_found` code (unknown pane/tab/workspace) | `{ "error": "herdr: <code>: <message>" }` |

@@ -1,0 +1,34 @@
+meta {
+  name: Browse
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/browse?path=&hidden=
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~path: /Users/you/projects
+  ~hidden: 1
+}
+
+auth:bearer {
+  token: {{bearer}}
+}
+
+docs {
+  Read-only, directories-only listing of the host, for picking a project to open
+  as a Herdr space. Leave `path` empty to start at the first root (home).
+
+  Roots are the operator's home directory plus the parents of already-open
+  spaces. Anything outside them is 403 whether it exists or not; files are never
+  listed; dot-directories need hidden=1; results cap at 500.
+
+  `entries[].is_repo` decides how to open it afterwards via POST /herdr:
+  worktree.open {cwd, path} for a repo, workspace.create {cwd, label} otherwise.
+
+  See docs/CONTRACT-browse.md.
+}
