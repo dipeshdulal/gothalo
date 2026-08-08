@@ -180,4 +180,75 @@ void main() {
     expect(find.text('permission-check'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('project rows align their counts and protect the branch', (
+    tester,
+  ) async {
+    // The counts are glyphs, so their words only exist in the semantics tree —
+    // which is not built unless a test asks for it.
+    final semantics = tester.ensureSemantics();
+    // Deliberately lopsided: one project with a lot open, one with a little,
+    // and a long branch name. This is the shape that made the count column
+    // zig-zag and truncated the branch to make room for the word "terminals".
+    const snap = Snapshot(
+      workspaces: [
+        WorkspaceInfo(workspaceId: 'w1', number: 1),
+        WorkspaceInfo(workspaceId: 'w2', number: 2),
+      ],
+      panes: [
+        Pane(paneId: 'w1:p1', workspaceId: 'w1', cwd: '/d/projects/gothalo'),
+        Pane(
+          paneId: 'w2:p1',
+          workspaceId: 'w2',
+          cwd: '/d/.herdr/worktrees/gothalo/feat-recent-agents',
+        ),
+        Pane(
+          paneId: 'w2:p2',
+          workspaceId: 'w2',
+          cwd: '/d/.herdr/worktrees/gothalo/feat-recent-agents',
+        ),
+        Pane(
+          paneId: 'w2:p3',
+          workspaceId: 'w2',
+          cwd: '/d/.herdr/worktrees/gothalo/feat-recent-agents',
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          bridgeClientProvider.overrideWithValue(null),
+          inbox.snapshotControllerProvider.overrideWith(
+            () => _FixedSnapshot(snap),
+          ),
+        ],
+        child: const MaterialApp(home: InboxScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.textContaining('Projects'));
+    await tester.pumpAndSettle();
+
+    // The long branch survives in full: the identifier gets the space, the
+    // counts are secondary.
+    expect(find.text('feat-recent-agents'), findsOneWidget);
+
+    // Every row's trailing column sits on the same edge. Sizing it off what
+    // the name left over is what spread it across 130px on the device.
+    final counts = find.byIcon(Icons.terminal);
+    expect(counts, findsNWidgets(2));
+    final rights = <int>{
+      for (final e in counts.evaluate())
+        tester.getRect(find.byWidget(e.widget)).right.round(),
+    };
+    expect(rights.length, 1, reason: 'the count column is a straight edge');
+
+    // And the spelled-out counts are gone from the rows: glyph plus number,
+    // with the words kept for a screen reader rather than printed eleven times
+    // down the page. ("New terminal" on the chip above is a different string
+    // and stays.)
+    expect(find.textContaining('3 terminals'), findsNothing);
+    expect(find.bySemanticsLabel('3 terminals'), findsOneWidget);
+    semantics.dispose();
+  });
 }

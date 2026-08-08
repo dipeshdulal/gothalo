@@ -216,7 +216,10 @@ class _QuickActions extends ConsumerWidget {
         AppActionChip(
           icon: Icons.rocket_launch_outlined,
           label: 'Start agent',
-          detail: project,
+          // Named on purpose. This screen covers every project on the server,
+          // so a bare "Start agent" would silently pick one of eleven. The chip
+          // acts on the project Herdr has focused, and says which.
+          detail: 'in $project',
           onTap: () => showStartAgentSheet(
             context,
             ref,
@@ -552,8 +555,14 @@ class _ProjectTile extends StatelessWidget {
     return InkWell(
       onTap: () =>
           context.push('/overview/${Uri.encodeComponent(space.workspaceId)}'),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(child ? 0 : 11, 9, 11, 9),
+      child: Container(
+        // The repo's own checkout is the group's head, so it carries the raised
+        // fill; its branches sit on the resting one. Weight, fill, the rail and
+        // the branch glyph all say the same thing at once — any one of them
+        // alone was not carrying it, which is why two rounds of "indent it
+        // more" did not read.
+        color: child ? null : scheme.panelFillRaised,
+        padding: EdgeInsets.fromLTRB(child ? 0 : 11, 9, 8, 9),
         child: Row(
           children: [
             if (child) ...[
@@ -569,18 +578,6 @@ class _ProjectTile extends StatelessWidget {
               ),
               Icon(Icons.call_split, size: 13, color: scheme.primary),
               const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  branch!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: scheme.primary,
-                    fontWeight: FontWeight.w500,
-                  ).mono,
-                ),
-              ),
             ] else ...[
               Icon(
                 Icons.folder_outlined,
@@ -588,18 +585,27 @@ class _ProjectTile extends StatelessWidget {
                 color: scheme.onSurfaceVariant,
               ),
               const SizedBox(width: Space.md),
-              Flexible(
-                child: Text(
-                  repo,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13.5,
-                  ),
-                ),
-              ),
             ],
+            // The identifier takes every pixel the counts do not need, and is
+            // the last thing to truncate — it is what tells one row from
+            // another.
+            Expanded(
+              child: Text(
+                child ? branch! : repo,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: child
+                    ? TextStyle(
+                        fontSize: 12.5,
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w500,
+                      ).mono
+                    : const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5,
+                      ),
+              ),
+            ),
             // The focused project on the host — the "you are here" marker.
             if (space.focused) ...[
               const SizedBox(width: Space.md),
@@ -623,16 +629,12 @@ class _ProjectTile extends StatelessWidget {
                 ),
               ),
             ],
-            const Spacer(),
             const SizedBox(width: Space.md),
-            Text(
-              _contents(agents, terminals),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 10.5,
-                color: scheme.onSurfaceVariant,
-              ).mono,
+            // Fixed width, right-aligned: the column is a straight edge rather
+            // than a function of how much happens to be open in each project.
+            SizedBox(
+              width: _countColumn,
+              child: _Contents(agents: agents, terminals: terminals),
             ),
           ],
         ),
@@ -668,16 +670,104 @@ class _RailPainter extends CustomPainter {
   bool shouldRepaint(_RailPainter old) => old.color != color;
 }
 
-/// "2 agents · 1 terminal" — what a project actually contains, in place of the
-/// pane and tab counts it used to show. A project with neither reads as "empty"
-/// rather than as "0 agents · 0 terminals", which is three words to say nothing.
-String _contents(int agents, int terminals) {
-  final parts = <String>[
-    if (agents > 0) '$agents agent${agents == 1 ? '' : 's'}',
-    if (terminals > 0) '$terminals terminal${terminals == 1 ? '' : 's'}',
-  ];
-  return parts.isEmpty ? 'empty' : parts.join(' · ');
+/// What a project contains, as glyph + number rather than words.
+///
+/// It was spelled out — "1 agent · 7 terminals" — which cost twenty characters
+/// on every row and repeated the same two nouns eleven times down the page,
+/// while the row's actual *identifier* was being truncated to `gothalo
+/// permissi…` to make room. The branch is the only thing telling one worktree
+/// row from another, so the words go and the space goes to the name.
+///
+/// Both glyphs are ones the app already uses for these things — the chat bubble
+/// is the agent shortcut on every pane card, and the terminal glyph marks a
+/// non-agent pane everywhere — so a terminal looks like a terminal on every
+/// screen. The numbers are set in JetBrains Mono, which is monospaced, so
+/// 1 and 11 occupy the same column instead of jittering.
+///
+/// A zero is omitted rather than shown: a project with only terminals shows
+/// only the terminal pair.
+class _Contents extends StatelessWidget {
+  const _Contents({required this.agents, required this.terminals});
+
+  final int agents;
+  final int terminals;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (agents == 0 && terminals == 0) {
+      return Text(
+        'empty',
+        textAlign: TextAlign.right,
+        style: TextStyle(fontSize: 10.5, color: scheme.onSurfaceVariant).mono,
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        if (agents > 0)
+          _CountPair(
+            icon: Icons.chat_bubble_outline,
+            count: agents,
+            semantics: '$agents agent${agents == 1 ? '' : 's'}',
+          ),
+        if (agents > 0 && terminals > 0) const SizedBox(width: Space.md),
+        if (terminals > 0)
+          _CountPair(
+            icon: Icons.terminal,
+            count: terminals,
+            semantics: '$terminals terminal${terminals == 1 ? '' : 's'}',
+          ),
+      ],
+    );
+  }
 }
+
+/// One glyph and its number. [semantics] carries the words the glyph replaced,
+/// so a screen reader still hears "4 agents".
+class _CountPair extends StatelessWidget {
+  const _CountPair({
+    required this.icon,
+    required this.count,
+    required this.semantics,
+  });
+
+  final IconData icon;
+  final int count;
+  final String semantics;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      // Its own node, not merged into the row's: a screen reader should hear
+      // "4 agents" as a fact about the project, not have it run together with
+      // the repo name into one sentence.
+      container: true,
+      label: semantics,
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 3),
+          Text(
+            '$count',
+            style: TextStyle(
+              fontSize: 10.5,
+              color: scheme.onSurfaceVariant,
+            ).mono,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The width every project row reserves for its counts, so the column is a
+/// straight edge rather than a function of how much is open in each project.
+const double _countColumn = 62;
 
 /// The nothing-here state, in its two meaningfully different flavours.
 ///
