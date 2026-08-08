@@ -59,6 +59,8 @@ class AgentRow extends StatelessWidget {
     this.trailing,
     this.showActivity = false,
     this.onApprove,
+    this.menu,
+    this.focused = false,
   }) : compact = false;
 
   /// The dense variant, for agents that want nothing from you.
@@ -71,7 +73,9 @@ class AgentRow extends StatelessWidget {
        starred = false,
        trailing = null,
        showActivity = false,
-       onApprove = null;
+       onApprove = null,
+       menu = null,
+       focused = false;
 
   final Agent agent;
   final VoidCallback onTap;
@@ -96,6 +100,17 @@ class AgentRow extends StatelessWidget {
 
   /// One-tap approve for a blocked agent (D7/D8). Null leaves the button off.
   final VoidCallback? onApprove;
+
+  /// The overflow control at the end of the title line — restart, stop, split,
+  /// close. Only the project view has one; it is a **flag on this row** rather
+  /// than a reason to keep a second row implementation, which is how the
+  /// project view ended up with a 250dp card for the same agent home showed in
+  /// 56dp.
+  final Widget? menu;
+
+  /// This is the pane Herdr has focused on the host. Lifts the fill and tints
+  /// the edge, the same "you are here" marker the project view always had.
+  final bool focused;
 
   /// Rendered as a dense single line rather than a card.
   final bool compact;
@@ -208,8 +223,13 @@ class AgentRow extends StatelessWidget {
     return PanelRow(
       onTap: onTap,
       // The one tinted edge in a list of agents: one that is waiting on you
-      // should be findable without reading a word of the row.
-      borderColor: blocked ? scheme.error : null,
+      // should be findable without reading a word of the row. Blocked beats
+      // focused — "this one is stuck" is more urgent than "this one is where
+      // your cursor is".
+      borderColor: blocked
+          ? scheme.error
+          : (focused ? scheme.primary : null),
+      selected: focused,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -245,6 +265,7 @@ class AgentRow extends StatelessWidget {
               ],
               const SizedBox(width: Space.md),
               StatusMark(agent.agentStatus),
+              if (menu case final m?) ...[const SizedBox(width: 2), m],
             ],
           ),
           const SizedBox(height: 3),

@@ -6,6 +6,10 @@ import 'package:gothalo/data/bridge/models/snapshot.dart';
 // Prefixed: Flutter's own `SnapshotController` (snapshot_widget.dart) is
 // unrelated and would shadow the app's.
 import 'package:gothalo/features/inbox/inbox_providers.dart' as inbox;
+import 'package:gothalo/core/widgets/action_chip.dart';
+import 'package:gothalo/core/widgets/flat_app_bar.dart';
+import 'package:gothalo/features/agents/widgets/agent_row.dart';
+import 'package:gothalo/features/agents/widgets/terminal_row.dart';
 import 'package:gothalo/features/overview/overview_screen.dart';
 
 /// The overview reads as **projects**, not as the multiplexer.
@@ -190,9 +194,11 @@ void main() {
       await _pump(tester);
 
       // Two workspaces of one repo: the checkout and the worktree, each named
-      // for the repo, the worktree additionally by its branch.
-      expect(find.text('gothalo'), findsNWidgets(2));
-      expect(find.text('feat-x'), findsOneWidget);
+      // for the repo, the worktree additionally by its branch. More than two
+      // matches now — the agent rows carry `project · branch` too, since this
+      // screen uses the shared row rather than its own pane card.
+      expect(find.text('gothalo'), findsAtLeastNWidgets(2));
+      expect(find.text('feat-x'), findsWidgets);
       // Never the workspace id.
       expect(_texts(tester), isNot(contains('w2')));
     });
@@ -230,6 +236,56 @@ void main() {
         headings.indexOf('feat-x'),
         lessThan(headings.indexOf('shell · gothalo')),
       );
+    });
+  });
+
+  group('the shared row and the top of the page', () {
+    testWidgets('an agent here is the same row as on home', (tester) async {
+      await _pump(tester, workspaceId: 'w1');
+
+      // Not a bespoke ~250dp pane card. The same agent was 56dp on home and a
+      // quarter of a screen here, which is exactly the drift the shared row
+      // exists to end.
+      expect(find.byType(AgentRow), findsOneWidget);
+      // A terminal legitimately differs — no status, no age, no approval — but
+      // is built from the same primitives so the two read as one family.
+      expect(find.byType(TerminalRow), findsNWidgets(2));
+    });
+
+    testWidgets('the page starts under the bar, not a fifth of the way down', (
+      tester,
+    ) async {
+      await _pump(tester, workspaceId: 'w1');
+
+      final barBottom = tester.getRect(find.byType(FlatAppBar)).bottom;
+      final firstChip = tester.getRect(find.byType(AppActionChip).first);
+      // `FlatAppBar.padding` used to ADD kToolbarHeight to a MediaQuery that
+      // Scaffold had already set to the bar's height, so every screen using
+      // this bar reserved the bar twice. Anything much over the chip row's own
+      // padding here means it is back.
+      expect(firstChip.top - barBottom, lessThan(20));
+    });
+
+    testWidgets('the quick actions act on this project', (tester) async {
+      await _pump(tester, workspaceId: 'w2');
+
+      // w2 is a worktree with an agent in it, so every chip can act.
+      expect(find.text('Changes'), findsOneWidget);
+      expect(find.text('Start agent'), findsOneWidget);
+      expect(find.text('New terminal'), findsOneWidget);
+      expect(find.text('Start new work'), findsOneWidget);
+      // Only a worktree can be finished — the repo's own checkout is not
+      // something the app removes.
+      expect(find.text('Finish this work'), findsOneWidget);
+    });
+
+    testWidgets('a chip that cannot act is left out, not shown dead', (
+      tester,
+    ) async {
+      await _pump(tester, workspaceId: 'w1');
+
+      // w1 is the plain checkout: nothing to finish.
+      expect(find.text('Finish this work'), findsNothing);
     });
   });
 }

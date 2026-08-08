@@ -541,7 +541,11 @@ class _ProjectTile extends StatelessWidget {
         // rail all say the same thing at once — any one alone was not carrying
         // it, which is why two earlier rounds of "indent it more" did not read.
         color: child ? null : scheme.panelFillRaised,
-        padding: EdgeInsets.fromLTRB(child ? 0 : 11, 9, 8, 9),
+        // Children sit tighter than their parent. A group has to look denser
+        // than the list it is part of, or it reads as three peers that happen
+        // to share a name — which is what the rail alone was not fixing.
+        padding: EdgeInsets.fromLTRB(child ? 0 : 11, child ? 5 : 9, 8,
+            child ? 5 : 9),
         child: Row(
           children: [
             if (child)
@@ -549,7 +553,7 @@ class _ProjectTile extends StatelessWidget {
               // under it.
               SizedBox(
                 width: _railGutter,
-                height: 22,
+                height: 18,
                 child: CustomPaint(
                   painter: _RailPainter(
                     color: scheme.hairlineStrong,

@@ -4,8 +4,10 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
+import '../../core/naming.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
+import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/inbox_providers.dart';
@@ -186,47 +188,46 @@ class _HourHeader extends _Row {
   }
 }
 
-class _EntryRow extends _Row {
-  const _EntryRow({
-    required this.entry,
-    required this.ongoing,
-    required this.openable,
-  });
-
-  final TimelineEntry entry;
-
-  /// This is the newest entry for its pane AND the live snapshot agrees the
-  /// agent is still in the status it names — so the span is still running and
-  /// its length is "how long until now", not a fixed number.
-  final bool ongoing;
-
-  /// The pane still exists, so the row can open it.
-  final bool openable;
-
-  @override
-  Widget build(BuildContext context) =>
-      _EntryTile(entry: entry, ongoing: ongoing, openable: openable);
-}
-
-/// Flattens the entries into headers + rows.
+/// Flatten the entries into day headers, hour headers and panels of rows.
 ///
-/// Grouped by **day** (the coarse "which sitting was this") and by **hour**
-/// within a day, which is the grain a phone screen holds — an unattended
-/// afternoon produces a handful of transitions an hour, so an hour block is
-/// roughly a screenful.
+/// Day and hour grouping is flattened into a single list (rather than nested
+/// `ListView`s or a `Column` per group) so the whole screen stays inside one
+/// lazily-built `ListView.builder`: a week of history costs the same to scroll
+/// as an hour of it, and only the visible rows are ever built.
 ///
-/// [live] is the current snapshot, consulted for one thing only: whether the
-/// newest entry for a pane is still true. The timeline records what the bridge
-/// SAW, and a status change it missed (a Herdr outage) leaves no row — so
-/// "newest row says blocked" is not on its own proof the agent is blocked now.
-/// Asking the live state closes that gap, and when there is no snapshot to ask
-/// (a cold start) nothing is claimed rather than something possibly false.
+/// [live] is the current snapshot, consulted for two things: whether the newest
+/// entry for a pane is still true, and where that pane lives. The timeline
+/// records what the bridge SAW, and a status change it missed (a Herdr outage)
+/// leaves no row — so "newest row says blocked" is not on its own proof the
+/// agent is blocked now. Asking the live state closes that gap, and when there
+/// is no snapshot to ask (a cold start) nothing is claimed rather than
+/// something possibly false.
 List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live) {
   final liveStatus = {
     for (final a in live?.agents ?? const <Agent>[]) a.paneId: a.agentStatus,
   };
+  // Where each pane lives, for the row's identifier. The timeline payload
+  // carries no cwd, so this is the only source of "which project" — and when a
+  // pane is gone the row simply says nothing rather than falling back to the
+  // pane id, which is the thing this screen was leaking.
+  final liveAgents = {
+    for (final a in live?.agents ?? const <Agent>[]) a.paneId: a,
+  };
+  final livePanes = {
+    for (final p in live?.panes ?? const <Pane>[]) p.paneId: p,
+  };
   final seenPanes = <String>{};
   final rows = <_Row>[];
+  // Consecutive entries share one panel, so the list reads like every other
+  // list in the app instead of bare rows on the page background. A header
+  // closes the run — the next entry starts a new panel under it.
+  var run = <_EntryTile>[];
+  void flush() {
+    if (run.isEmpty) return;
+    rows.add(_EntryGroup(run));
+    run = <_EntryTile>[];
+  }
+
   DateTime? day;
   DateTime? hour;
 
@@ -235,10 +236,12 @@ List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live) {
     if (day == null || !sameDay(day, at)) {
       day = at;
       hour = null;
+      flush();
       rows.add(_DayHeader(at));
     }
     if (hour == null || hour.hour != at.hour) {
       hour = at;
+      flush();
       rows.add(_HourHeader(at));
     }
 
@@ -246,15 +249,29 @@ List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live) {
     // recent transition — the only one that can still be running.
     final newest = seenPanes.add(e.pane);
     final current = liveStatus[e.pane];
-    rows.add(
-      _EntryRow(
+    final agent = liveAgents[e.pane];
+    final pane = livePanes[e.pane];
+    run.add(
+      _EntryTile(
         entry: e,
         ongoing: newest && !e.isGone && current != null && current.name == e.to,
         openable: current != null,
+        where: agent?.projectLine ?? '',
+        terminal: agent == null && pane != null ? pane : null,
       ),
     );
   }
+  flush();
   return rows;
+}
+
+/// A run of consecutive entries, sharing one panel.
+class _EntryGroup extends _Row {
+  const _EntryGroup(this.tiles);
+  final List<_EntryTile> tiles;
+
+  @override
+  Widget build(BuildContext context) => PanelList(rows: tiles);
 }
 
 /// One recorded transition.
@@ -266,11 +283,22 @@ class _EntryTile extends StatelessWidget {
     required this.entry,
     required this.ongoing,
     required this.openable,
+    required this.where,
+    required this.terminal,
   });
 
   final TimelineEntry entry;
   final bool ongoing;
   final bool openable;
+
+  /// `gothalo · feat/x` — the same identifier every agent row shows, in place
+  /// of the `wN:p42` this screen used to print on every line. Empty when the
+  /// pane is no longer live and there is nothing truthful to say.
+  final String where;
+
+  /// Set when the pane behind this entry has no agent in it, so the row can
+  /// name it as a terminal instead.
+  final Pane? terminal;
 
   @override
   Widget build(BuildContext context) {
@@ -281,9 +309,13 @@ class _EntryTile extends StatelessWidget {
         ? scheme.onSurfaceVariant
         : status.colors(scheme).fg;
 
+    final isTerminal = terminal != null;
     return InkWell(
       onTap: openable
-          ? () => context.push('/transcript/${Uri.encodeComponent(entry.pane)}')
+          ? () => context.push(
+              '${isTerminal ? '/terminal' : '/transcript'}'
+              '/${Uri.encodeComponent(entry.pane)}',
+            )
           : null,
       child: Container(
         // A block is the one transition that costs you time, so it gets the
@@ -301,7 +333,7 @@ class _EntryTile extends StatelessWidget {
             ),
           ),
         ),
-        padding: const EdgeInsets.fromLTRB(13, 9, 16, 9),
+        padding: const EdgeInsets.fromLTRB(8, 9, 11, 9),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -317,8 +349,21 @@ class _EntryTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            AgentAvatar(agent: entry.agent, radius: 13),
-            const SizedBox(width: 10),
+            // Same glyph sizes as the agent and terminal rows elsewhere, so the
+            // columns line up across screens.
+            if (isTerminal)
+              CircleAvatar(
+                radius: 11,
+                backgroundColor: scheme.wellFill,
+                child: Icon(
+                  Icons.terminal,
+                  size: 13,
+                  color: scheme.onSurfaceVariant,
+                ),
+              )
+            else
+              AgentAvatar(agent: entry.agent, radius: 11),
+            const SizedBox(width: Space.md),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -335,31 +380,37 @@ class _EntryTile extends StatelessWidget {
                           // running several Claudes otherwise reads "Claude",
                           // which identifies nothing. Fall back to the kind, and
                           // then to a generic label, only when there is no title.
-                          entry.title ??
-                              (entry.agent.isEmpty
-                                  ? 'Agent'
-                                  : brandFor(entry.agent).label),
+                          isTerminal
+                              ? terminalTitle(terminal!)
+                              : entry.title ??
+                                    (entry.agent.isEmpty
+                                        ? 'Agent'
+                                        : brandFor(entry.agent).label),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13.5,
                             fontWeight: FontWeight.w600,
+                            fontFamily: isTerminal ? AppTheme.monoFamily : null,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      // Sizes to its content — a pane id is short and fixed-ish,
-                      // so it never needs to compete with the title for width.
-                      Text(
-                        entry.pane,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: scheme.onSurfaceVariant,
-                          fontFamily: AppTheme.monoFamily,
-                          fontSize: 11,
+                      // The pane id used to sit here. It is an address, not a
+                      // name, and this screen was the last place it leaked.
+                      if (where.isNotEmpty) ...[
+                        const SizedBox(width: Space.md),
+                        Flexible(
+                          child: Text(
+                            where,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: scheme.onSurfaceVariant,
+                              fontSize: 11.5,
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 3),
@@ -400,8 +451,13 @@ class _Transition extends StatelessWidget {
       children: [
         if (entry.from != null) ...[
           Text(
-            statusFromWire(entry.from!).label,
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+            statusFromWire(entry.from!).label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              letterSpacing: 0.8,
+              fontWeight: FontWeight.w600,
+              color: scheme.onSurfaceVariant,
+            ).mono,
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -412,13 +468,29 @@ class _Transition extends StatelessWidget {
             ),
           ),
         ],
-        Text(
-          to,
-          style: TextStyle(
-            color: accent,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w700,
-          ),
+        // The state it landed in, drawn the way status is drawn everywhere
+        // else: a dot in the status colour plus a small uppercase mono mark.
+        // It was raw Material-blue bold text, which made "working" here look
+        // like nothing else called "working" in the app.
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: accent),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              to.toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+                color: accent,
+              ).mono,
+            ),
+          ],
         ),
       ],
     );

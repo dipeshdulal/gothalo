@@ -49,11 +49,23 @@ class FlatAppBar extends AppBar {
   /// behind it needs as top padding so its first row starts below the bar
   /// rather than under it.
   ///
-  /// [tabs] adds the [TabBar] row; pass true whenever the bar has a `bottom`.
-  static double padding(BuildContext context, {bool tabs = false}) =>
-      MediaQuery.paddingOf(context).top +
-      kToolbarHeight +
-      (tabs ? kTextTabBarHeight : 0);
+  /// **Read it from the MediaQuery; do not compute it.** A `Scaffold` with
+  /// `extendBodyBehindAppBar: true` already rewrites its body's
+  /// `MediaQuery.padding.top` to the app bar's full height — status bar and
+  /// `bottom` widget included — precisely so a body laid out behind the bar can
+  /// clear it. This used to *add* `kToolbarHeight` on top of that, which
+  /// counted the bar twice: 112 where the bar was 56, and about 180 on a phone
+  /// with a status inset once a section header's own padding was added.
+  ///
+  /// It was visible on every screen that uses this bar, and stark on the
+  /// project view, where the first heading sat a fifth of the way down an
+  /// otherwise empty page. A missing widget was blamed for it twice before the
+  /// number was actually measured.
+  ///
+  /// No `tabs` parameter any more: the value already includes the `TabBar`,
+  /// because Scaffold takes it from the bar's `preferredSize`.
+  static double padding(BuildContext context) =>
+      MediaQuery.paddingOf(context).top;
 }
 
 /// How much of the page's own colour is laid over the blurred content.

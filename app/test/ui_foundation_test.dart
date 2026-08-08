@@ -103,25 +103,43 @@ void main() {
     }
   });
 
-  testWidgets('FlatAppBar.padding accounts for the tab row', (tester) async {
+  testWidgets('FlatAppBar.padding is the bar\'s height, counted once', (
+    tester,
+  ) async {
     late double plain;
     late double withTabs;
+    late double barHeight;
+
     await tester.pumpWidget(
       host(
         Builder(
           builder: (context) {
             plain = FlatAppBar.padding(context);
-            withTabs = FlatAppBar.padding(context, tabs: true);
             return const SizedBox.expand();
           },
         ),
       ),
     );
+    barHeight = tester.getRect(find.byType(FlatAppBar)).height;
+    // Exactly the bar, not the bar plus a second helping of it. Adding
+    // kToolbarHeight to a MediaQuery that Scaffold had already set to the bar's
+    // height put ~56 of nothing at the top of every screen using this bar.
+    expect(plain, barHeight);
 
-    expect(plain, greaterThanOrEqualTo(kToolbarHeight));
-    // A bar with tabs is taller by exactly the tab row — this is the number
-    // every list uses as its top padding, so an error here hides a row of
-    // content under the header on every screen at once.
+    await tester.pumpWidget(
+      host(
+        Builder(
+          builder: (context) {
+            withTabs = FlatAppBar.padding(context);
+            return const SizedBox.expand();
+          },
+        ),
+        tabs: true,
+      ),
+    );
+
+    // A bar with tabs is taller by exactly the tab row, and the value follows
+    // it without being told — Scaffold takes it from the bar's preferredSize.
     expect(withTabs - plain, kTextTabBarHeight);
   });
 
