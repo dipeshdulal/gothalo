@@ -276,6 +276,10 @@ void main() {
     expect(find.byType(AgentRow), findsNWidgets(kIdleVisibleRows));
     expect(find.text('Show 6 more'), findsOneWidget);
 
+    // The expander sits at the foot of a long list on a short test viewport;
+    // tapping it blind would hit whatever is actually at those coordinates.
+    await tester.ensureVisible(find.text('Show 6 more'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Show 6 more'));
     await tester.pump();
 
@@ -292,6 +296,11 @@ void main() {
     await _pumpHome(tester, agents: working);
 
     expect(find.byType(AgentRow), findsNWidgets(kSectionVisibleRows));
+    await tester.scrollUntilVisible(
+      find.text('Show 3 more'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Show 3 more'), findsOneWidget);
   });
 

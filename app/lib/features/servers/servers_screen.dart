@@ -8,7 +8,6 @@ import '../../core/theme.dart';
 import '../../core/tokens.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../core/widgets/entrance.dart';
-import '../../core/widgets/flat_app_bar.dart';
 import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/agent_groups.dart';
@@ -144,33 +143,13 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     return AppBackground(
       asset: Backgrounds.servers,
       child: Scaffold(
-        extendBodyBehindAppBar: true,
-        appBar: FlatAppBar(
-          title: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              AppMark(radius: 14),
-              SizedBox(width: 10),
-              Text('gothalo'),
-            ],
-          ),
-          // No QR shortcut here. Pairing is a setup action, not something you
-          // reach for on a populated home screen, and it is not stranded: the
-          // "+" opens the add-server sheet, which offers "Scan QR" beside
-          // manual entry. The empty state keeps both as its primary actions —
-          // a device with nothing paired cannot use the app until it pairs, so
-          // redundant-when-populated is not redundant on a fresh install.
-        ),
+        // No app bar: the greeting header owns the top of this screen. The
+        // scroll view handles its own top inset below.
         floatingActionButton: FloatingActionButton(
           onPressed: () => showAddServerSheet(context),
           tooltip: 'Add server manually',
           child: const Icon(Icons.add),
         ),
-        // Builder, so everything below is built from a context *inside* the
-        // Scaffold body. `FlatAppBar.padding` reads the MediaQuery that
-        // `extendBodyBehindAppBar` rewrites, and this closure would otherwise
-        // capture the screen's own context, above the Scaffold — which is how
-        // the PRIORITY header ended up permanently behind the bar at rest.
         body: Builder(
           builder: (context) => servers.when(
             loading: () => const Center(child: CircularProgressIndicator()),
@@ -188,7 +167,9 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                 onRefresh: () async => ref.invalidate(serverAgentsProvider),
                 child: ListView(
                   padding: EdgeInsets.only(
-                    top: FlatAppBar.padding(context),
+                    // The screen's own top inset (status bar etc.) now that
+                    // there is no app bar to absorb it.
+                    top: MediaQuery.paddingOf(context).top,
                     // Clear of the FAB, and clear of it on a gesture-nav phone
                     // too. A flat 96 was measured from the viewport, which sits
                     // *above* the system inset the FAB is also lifted by — so on
@@ -198,6 +179,13 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                         _fabClearance + MediaQuery.paddingOf(context).bottom,
                   ),
                   children: [
+                    // --- Greeting ---
+                    enter(
+                      _GreetingHeader(
+                        needsYou: hits.where((h) => h.needsYou).length,
+                      ),
+                    ),
+
                     // --- Priority (needs you + starred) ---
                     enter(
                       SectionLabel(
@@ -289,6 +277,135 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
       ),
     );
   }
+}
+
+/// The greeting at the top of home: time-of-day hello, today's date, and one
+/// line about whether anything needs you. It is the screen's headline — the one
+/// thing shown before any list — so it reads at a glance, then gets out of the
+/// way. The state line reuses the terminal-native idiom from [StatusMark]: a
+/// status dot (red = needs you, teal = all clear) beside a small uppercase mono
+/// label.
+class _GreetingHeader extends StatelessWidget {
+  const _GreetingHeader({required this.needsYou});
+
+  /// Blocked agents across all servers — the thing the greeting should own up
+  /// to immediately, because it's the one reason to look at this screen.
+  final int needsYou;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final greeting = switch (now.hour) {
+      < 12 => 'Good morning',
+      < 17 => 'Good afternoon',
+      _ => 'Good evening',
+    };
+
+    final needs = needsYou > 0;
+    final color = needs ? scheme.error : scheme.primary;
+    final stateLabel = needs
+        ? '$needsYou NEED YOU'
+        : 'ALL CLEAR';
+
+    return Padding(
+      // Roomier up top — this is the screen's headline, so it wants to sit
+      // clear of the status bar rather than pressed against it. The bottom is
+      // tighter than a section label's own top pad: the greeting owns the
+      // spacing down to the Priority heading, so it doesn't double it.
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter,
+        Space.xl + Space.md,
+        Space.gutter,
+        Space.sm,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // The circular brand mark beside the greeting — the only place it
+          // reads on this screen now that the bar is gone.
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: AppMark(radius: 22),
+          ),
+          const SizedBox(width: Space.lg),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  greeting,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: Space.xs),
+                Text(
+                  _friendlyDate(now),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ).mono,
+                ),
+                const SizedBox(height: Space.md),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: color,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      stateLabel,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                        color: color,
+                      ).mono,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Today's date as a phrase, e.g. "Saturday, Aug 8". Hand-rolled rather than
+/// intl so the header needs no date-package dependency or locale setup.
+String _friendlyDate(DateTime d) {
+  const weekdays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${weekdays[d.weekday - 1]}, ${months[d.month - 1]} ${d.day}';
 }
 
 /// How much room the floating "add server" button needs at the foot of the
