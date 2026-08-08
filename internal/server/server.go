@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/approve", s.handleApprove)
 	mux.HandleFunc("/agent-state", s.handleAgentState)
 	mux.HandleFunc("/diff", s.handleDiff)
+	mux.HandleFunc("/diff/expand", s.handleDiffExpand)
 	mux.HandleFunc("/image", s.handleImage)
 	mux.HandleFunc("/agent-mode/cycle", s.handleAgentModeCycle)
 	mux.HandleFunc("/agent-transcript", s.handleAgentTranscript)
@@ -343,7 +344,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 //	    answering rather than on this number — an older bridge 404s and the
 //	    remove dialog is exactly what it was before — so again this records the
 //	    capability without being what unlocks it.
-const BridgeVersion = 6
+//	9 — GET /diff/expand: the unchanged lines around a hunk, so the diff viewer
+//	    can expand a collapsed region. Same gating story as the others — the app
+//	    offers the expand row on its own and an older bridge simply 404s the tap,
+//	    which degrades to a diff with three lines of context, exactly what it
+//	    showed before.
+const BridgeVersion = 9
 
 // GET /info -> this bridge's identity and capability level.
 //

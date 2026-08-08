@@ -34,7 +34,8 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       phone's real viewport (`internal/server/attach.go`)
 - ✅ Idempotent `POST /approve` guarded on `state_change_seq` (stale
       lock-screen taps are no-ops)
-- ✅ `GET /diff?pane=…` (`internal/gitdiff`, `docs/CONTRACT-diff.md`)
+- ✅ `GET /diff?pane=…` + `GET /diff/expand` (`internal/gitdiff`,
+      `docs/CONTRACT-diff.md`)
 - ✅ Navigation passthroughs via `/herdr` proxy, `/pane/new`, `/pane/close`
 - ✅ Beyond the original plan: `/agent-state`, `/agent-mode/cycle`,
       `/agent-transcript`, `WS /events`, device pairing (`/pair`, `/admin/*`)
@@ -56,7 +57,9 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ## Phase 4 — Polish
 - ✅ Actionable notification buttons (`features/push/notification_actions.dart`)
-- ✅ Diff viewer UI (`features/diff`)
+- ✅ Diff viewer UI (`features/diff`) — collapsible directory tree with
+      per-directory +/− rollups, word-level intra-line highlighting, collapsed
+      unchanged regions backed by `/diff/expand`, per-file collapse/expand
 - ✅ Notification **auto-clear**: stale `blocked` pushes are dismissed when the
       bus shows the pane leaving blocked, whoever resolved it
       (`internal/notify/clearer.go`, `docs/CONTRACT-notif-clear.md`)

@@ -435,3 +435,43 @@ never touches the remote, so `upstream` and `remote_deleted:false` come back in
 the payload and the UI states it. Pushing a branch deletion from a phone affects
 everyone and reaches outside the host; nothing else on this bridge does that, and
 this does not either.
+
+## D28 — The diff viewer derives everything it can from the payload; only the lines git never sent are an endpoint
+The Changes screen shows a directory tree, per-line numbering, word-level
+intra-line highlighting, and collapsed unchanged regions. Exactly one of those
+needed the bridge.
+
+**Everything derivable stays in the app.** The tree, the hunk/line structure and
+the word diff are all computed from `files[].diff`, which `/diff` already
+returned (`app/lib/features/diff/diff_model.dart`, `diff_tree.dart`). Moving any
+of it to the bridge would have meant a richer payload for every file of every
+request — on a phone, over a tailnet — to save work the client does once per file
+*it actually opens*, and would have coupled a rendering decision to a bridge
+version. A bridge that predates all of this still renders correctly in the new
+app, which is the test that matters.
+
+**The one thing that could not be derived: the unchanged lines.** `git diff`
+ships three lines of context per hunk, so everything else in a changed file is
+absent from the payload. No amount of parsing recovers it. The alternative to a
+new endpoint was `git diff -U20` — paying for context on every file of every
+request, to serve a tap most files never get, and still answering "what's the
+rest of this file?" with a bigger fixed guess. So `GET /diff/expand` fetches a
+bounded slice per tap (see [`CONTRACT-diff.md`](CONTRACT-diff.md)), and `/diff`
+itself is untouched.
+
+It reads the **working tree**, not git history, which is only correct because of
+what it is for: the endpoint fills gaps *between* hunks, and a line no hunk
+touches is identical on both sides of the diff. That also fixes its two blind
+spots by construction — a deleted file's content exists only in `HEAD`, and an
+untracked file's synthetic diff already *is* the whole file — and the app offers
+no expand affordance for either rather than one that does nothing. Same reason
+an older bridge's 404 retires the affordance silently instead of raising an
+error: the honest fallback is the three lines of context git gave us, which is
+what the screen showed before.
+
+**Unified, not side-by-side.** At 390pt with a line-number gutter, two columns
+leave roughly twenty characters each — narrower than the identifiers in this
+repo. Diff lines wrap into a fixed gutter instead of scrolling horizontally,
+which also keeps the whole screen renderable as one lazy list: a horizontally
+scrollable code block has to lay out every line of a file to measure the widest
+one, which is precisely what must not happen on a several-thousand-line diff.
