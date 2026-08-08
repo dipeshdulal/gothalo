@@ -5,11 +5,12 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_background.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
-import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../core/widgets/entrance.dart';
-import '../../core/widgets/glass_app_bar.dart';
+import '../../core/widgets/flat_app_bar.dart';
 import '../../core/widgets/live_activity_line.dart';
+import '../../core/widgets/panel_row.dart';
+import '../../core/widgets/status_mark.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -18,7 +19,6 @@ import '../approvals/approve_action.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../inbox/widgets/agent_avatar.dart';
-import '../inbox/widgets/status_badge.dart';
 import '../worktrees/new_worktree_sheet.dart';
 
 /// The Overview — the active server's multiplexer laid out like the desktop:
@@ -78,10 +78,9 @@ class OverviewScreen extends ConsumerWidget {
     }
 
     return AppBackground(
-      asset: Backgrounds.flock,
       child: Scaffold(
         extendBodyBehindAppBar: true,
-        appBar: GlassAppBar(
+        appBar: FlatAppBar(
           title: workspaceId == null
               ? Row(
                   mainAxisSize: MainAxisSize.min,
@@ -110,6 +109,7 @@ class OverviewScreen extends ConsumerWidget {
                             branch,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                            // The branch is an identifier: mono, per the rule.
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.primary,
                               fontFamily: AppTheme.monoFamily,
@@ -263,9 +263,9 @@ class _SpaceTabbedView extends ConsumerWidget {
     return DefaultTabController(
       length: tabs.length,
       child: Padding(
-        // Clears the glass header — this Column starts at the top of the
+        // Clears the flat header — this Column starts at the top of the
         // screen, behind it.
-        padding: EdgeInsets.only(top: GlassAppBar.padding(context)),
+        padding: EdgeInsets.only(top: FlatAppBar.padding(context)),
         child: Column(
           children: [
             Align(
@@ -287,11 +287,6 @@ class _SpaceTabbedView extends ConsumerWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (t.focused)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 6),
-                                child: Icon(Icons.my_location, size: 14),
-                              ),
                             Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
                             const SizedBox(width: 6),
                             Text(
@@ -300,8 +295,8 @@ class _SpaceTabbedView extends ConsumerWidget {
                                 color: Theme.of(context)
                                     .colorScheme
                                     .onSurfaceVariant,
-                                fontSize: 12,
-                              ),
+                                fontSize: 11,
+                              ).mono,
                             ),
                           ],
                         ),
@@ -377,7 +372,7 @@ Future<void> _showTabMenu(
   }
 }
 
-/// The panes of one tab, laid out as cards (splits) in a scrollable grid.
+/// The panes of one tab, laid out as panels (splits) in a scrollable list.
 class _PaneGrid extends StatelessWidget {
   const _PaneGrid({
     required this.panes,
@@ -458,7 +453,7 @@ class _MultiplexerLayout extends StatelessWidget {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.only(
-        top: GlassAppBar.padding(context),
+        top: FlatAppBar.padding(context),
         bottom: Space.xl,
       ),
       children: [
@@ -522,6 +517,8 @@ class _StatusStrip extends StatelessWidget {
   }
 }
 
+/// One `N working` flat chip — status colour on the dot and a low-alpha tint on
+/// the fill, so the strip reads as status rather than decoration.
 class _StatusCount extends StatelessWidget {
   const _StatusCount({
     required this.status,
@@ -537,20 +534,24 @@ class _StatusCount extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = status.colors(scheme);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: c.bg,
-        borderRadius: Radii.pill,
-        border: Border.all(color: c.fg.withValues(alpha: 0.28)),
+        borderRadius: Radii.smAll,
+        border: Border.all(color: c.fg.withValues(alpha: 0.30)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(status.icon, size: 14, color: c.fg),
-          const SizedBox(width: 6),
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: c.fg),
+          ),
+          const SizedBox(width: 5),
           Text(
             '$count ${status.label}',
-            style: TextStyle(color: c.fg, fontWeight: FontWeight.w600, fontSize: 12.5),
+            style: TextStyle(color: c.fg, fontWeight: FontWeight.w600, fontSize: 11.5),
           ),
         ],
       ),
@@ -574,27 +575,15 @@ class _NeedsYouSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            Space.gutter + 2,
-            Space.lg,
-            Space.gutter,
-            Space.xs,
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.pan_tool_outlined, size: 14, color: scheme.error),
-              const SizedBox(width: Space.sm),
-              Text(
-                'NEEDS YOU',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.9,
-                  color: scheme.error,
-                ),
-              ),
-            ],
+        // The one section that gets a colour: it is the reason to open the
+        // screen at all, and it reads at a glance in the accentless row of
+        // labels above the tree.
+        SectionLabel(
+          'Needs you',
+          color: scheme.error,
+          trailing: Text(
+            '${agents.length}',
+            style: TextStyle(fontSize: 10.5, color: scheme.error).mono,
           ),
         ),
         for (final a in agents)
@@ -629,37 +618,28 @@ class _WorkspaceBlock extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            Space.gutter + 2,
-            Space.xl,
-            Space.gutter,
-            Space.xs,
-          ),
-          child: Row(
+        SectionLabel(
+          label,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.workspaces_outline, size: 14, color: scheme.primary),
-              const SizedBox(width: Space.sm),
-              Flexible(
-                child: Text(
-                  label.toUpperCase(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.9,
-                  ),
-                ),
-              ),
-              const SizedBox(width: Space.sm),
               Text(
-                '${workspace.paneCount} pane${workspace.paneCount == 1 ? '' : 's'}',
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
+                '${workspace.paneCount} ${workspace.paneCount == 1 ? 'pane' : 'panes'}',
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: scheme.onSurfaceVariant,
+                ).mono,
               ),
               if (workspace.focused) ...[
-                const SizedBox(width: Space.sm),
-                Icon(Icons.my_location, size: 13, color: scheme.primary),
+                const SizedBox(width: 6),
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.primary,
+                  ),
+                ),
               ],
             ],
           ),
@@ -756,8 +736,8 @@ class _PaneCard extends ConsumerWidget {
   final Agent? agent;
   final bool focused;
 
-  /// Overrides the card's default gutter — the workspace tree indents its
-  /// cards under a tab label column, so they cannot also carry a full gutter.
+  /// Overrides the panel's default gutter — the workspace tree indents its
+  /// panels under a tab label column, so they cannot also carry a full gutter.
   final EdgeInsetsGeometry? margin;
 
   @override
@@ -780,15 +760,15 @@ class _PaneCard extends ConsumerWidget {
     final headlineIcon = isAgent
         ? null
         : (cmd != null ? Icons.play_arrow_rounded : Icons.folder_outlined);
-    // The focused pane is tinted teal and the blocked one red — accent does
+    // The focused pane is tinted teal and the blocked one red — the border does
     // double duty here, and blocked wins, because "this one is stuck" is more
     // urgent than "this one is where your cursor is".
-    return AppCard(
+    return PanelRow(
       selected: focused,
-      accent: blocked
+      borderColor: blocked
           ? scheme.error
           : (focused ? scheme.primary : null),
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       margin:
           margin ??
           const EdgeInsets.fromLTRB(
@@ -813,20 +793,26 @@ class _PaneCard extends ConsumerWidget {
               else
                 CircleAvatar(
                   radius: 13,
-                  backgroundColor: scheme.surfaceContainerHighest,
+                  backgroundColor: scheme.wellFill,
                   child: Icon(Icons.terminal,
                       size: 15, color: scheme.onSurfaceVariant),
                 ),
               const SizedBox(width: 8),
-              // Agents: their status chip. Non-agents: a "running" or
-              // "shell" chip so the pane's kind reads at a glance.
+              // Agents: their status dot. Non-agents: a small mono kind tag.
               if (isAgent)
-                StatusBadge(pane.agentStatus)
+                StatusMark(pane.agentStatus)
               else
-                _KindChip(running: cmd != null),
+                _KindTag(running: cmd != null),
               const Spacer(),
               if (focused)
-                Icon(Icons.my_location, size: 15, color: scheme.primary),
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.primary,
+                  ),
+                ),
               // Agent panes get a shortcut into the chat/transcript view.
               if (isAgent) ...[
                 const SizedBox(width: 4),
@@ -947,8 +933,10 @@ class _PaneCard extends ConsumerWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
-                    fontSize: isAgent ? 14 : 13,
+                    fontSize: isAgent ? 14 : 12.5,
                     height: 1.25,
+                    // A command/location headline is an identifier; a task
+                    // title is prose.
                     fontFamily: isAgent ? null : AppTheme.monoFamily,
                   ),
                 ),
@@ -959,9 +947,9 @@ class _PaneCard extends ConsumerWidget {
           // list carries, from the same widget and the same
           // `/agent-state` source, so a space and the flock can never
           // disagree about whether an agent is alive. It sits under the
-          // task rather than beside the status chip, and stays one
+          // task rather than beside the status dot, and stays one
           // ellipsized line with its height reserved, so a long message
-          // can't reflow the card or shove the Approve button around.
+          // can't reflow the panel or shove the Approve button around.
           if (isAgent)
             LiveActivityLine(
               paneId: pane.paneId,
@@ -1046,41 +1034,37 @@ Future<void> _newTerminal(
   }
 }
 
-/// A small pill marking a non-agent pane as actively **running** a command
-/// (accent-tinted with a dot) or an idle **shell**.
-class _KindChip extends StatelessWidget {
-  const _KindChip({required this.running});
+/// A small mono tag marking a non-agent pane as actively **running** a command
+/// (accent dot + label) or an idle **shell**.
+class _KindTag extends StatelessWidget {
+  const _KindTag({required this.running});
   final bool running;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = running ? scheme.primary : scheme.onSurfaceVariant;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: running
-            ? scheme.primary.withValues(alpha: 0.14)
-            : scheme.surfaceContainerHighest,
-        borderRadius: Radii.pill,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (running) ...[
-            Icon(Icons.circle, size: 7, color: color),
-            const SizedBox(width: 4),
-          ],
-          Text(
-            running ? 'running' : 'shell',
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (running) ...[
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
           ),
+          const SizedBox(width: 5),
         ],
-      ),
+        Text(
+          running ? 'RUNNING' : 'SHELL',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8,
+            color: color,
+          ).mono,
+        ),
+      ],
     );
   }
 }

@@ -3,9 +3,16 @@ import 'package:flutter/material.dart';
 import '../data/bridge/models/snapshot.dart';
 import 'tokens.dart';
 
-/// gothalo's Material 3 themes. Dark-first (a terminal remote lives in the
-/// dark), but a light theme is provided too and [ThemeMode.system] lets the OS
-/// decide. Seeded from a single teal so both modes stay in family.
+/// gothalo's themes. Dark-first (a terminal remote lives in the dark), but a
+/// light theme is provided too and [ThemeMode.system] lets the OS decide.
+/// Seeded from a single teal so both modes stay in family.
+///
+/// The language is terminal-native: flat opaque surfaces held by hairlines,
+/// tight corners, dense type. Colour is one accent (the seed teal) plus status
+/// colours reserved for status dots. The bundled typefaces (Inter for prose,
+/// JetBrains Mono for identifiers) are declared here and applied to every
+/// style — the earlier build hardcoded Roboto via `Typography.material2021()`
+/// and quietly overrode the family the pubspec already shipped.
 class AppTheme {
   AppTheme._();
 
@@ -20,72 +27,55 @@ class AppTheme {
   static ThemeData get dark => _build(Brightness.dark);
   static ThemeData get light => _build(Brightness.light);
 
-  /// A subtle full-screen backdrop gradient, painted behind every screen (see
-  /// [GothaloApp]). Kept low-contrast so content and cards still read clearly —
-  /// a faint teal glow up top fading to near-black.
-  static Gradient backgroundGradient(Brightness brightness) {
-    // Diagonal rather than straight down: a top-to-bottom ramp behind a
-    // top-to-bottom list reads as banding, while an off-axis one never lines up
-    // with the content and just reads as depth.
-    if (brightness == Brightness.dark) {
-      return const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF0F2325), Color(0xFF0A1113), Color(0xFF0C1517)],
-        stops: [0.0, 0.55, 1.0],
-      );
-    }
-    return const LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [Color(0xFFF3F8F7), Color(0xFFE9F1F0), Color(0xFFE3EDEC)],
-      stops: [0.0, 0.6, 1.0],
-    );
-  }
-
-  /// A flat, **opaque** backdrop colour matching the gradient's base — for
-  /// utility screens that just need a solid, transition-safe background rather
-  /// than the full [AppBackground] gradient/artwork. Near-identical to the
-  /// gradient's midpoint, so pages read consistently either way.
+  /// The one flat colour every screen sits on. Kept a hair apart from
+  /// [AppSurfaces.panelFill] so a panel's fill is distinguishable from the
+  /// page itself, and dark enough (light enough) that hairlines read in both
+  /// modes.
   static Color scaffoldBase(Brightness brightness) =>
       brightness == Brightness.dark
-      ? const Color(0xFF0A0E0F)
-      : const Color(0xFFECF2F1);
+      ? const Color(0xFF0B0F10)
+      : const Color(0xFFF4F5F4);
 
   /// The type scale.
   ///
   /// Two rules, applied everywhere: display and title sizes get **negative**
   /// tracking (large text set at default tracking reads loose and webby), and
   /// body/label sizes get slightly positive tracking so small UI text stays
-  /// legible over translucent surfaces. Weight tops out at w600 — w700 headings
-  /// over a dark gradient bloom, and the app has plenty of other ways to say
-  /// "important".
-  static TextTheme _typography(TextTheme base) => base.copyWith(
-    headlineSmall: base.headlineSmall?.copyWith(
-      fontWeight: FontWeight.w600,
-      letterSpacing: -0.5,
-    ),
-    titleLarge: base.titleLarge?.copyWith(
-      fontSize: 19,
-      fontWeight: FontWeight.w600,
-      letterSpacing: -0.3,
-    ),
-    titleMedium: base.titleMedium?.copyWith(
-      fontWeight: FontWeight.w600,
-      letterSpacing: -0.2,
-    ),
-    titleSmall: base.titleSmall?.copyWith(
-      fontWeight: FontWeight.w500,
-      letterSpacing: -0.1,
-    ),
-    bodyMedium: base.bodyMedium?.copyWith(height: 1.35),
-    bodySmall: base.bodySmall?.copyWith(height: 1.35, letterSpacing: 0.1),
-    labelLarge: base.labelLarge?.copyWith(
-      fontWeight: FontWeight.w500,
-      letterSpacing: 0.1,
-    ),
-    labelSmall: base.labelSmall?.copyWith(letterSpacing: 0.3),
-  );
+  /// legible on dense rows. Weight tops out at w600 — the bundled faces stop
+  /// there, and the app has plenty of other ways to say "important".
+  static TextTheme _typography(TextTheme base) => base
+      .copyWith(
+        headlineSmall: base.headlineSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.5,
+        ),
+        titleLarge: base.titleLarge?.copyWith(
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.3,
+        ),
+        titleMedium: base.titleMedium?.copyWith(
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.2,
+        ),
+        titleSmall: base.titleSmall?.copyWith(
+          fontWeight: FontWeight.w500,
+          letterSpacing: -0.1,
+        ),
+        bodyMedium: base.bodyMedium?.copyWith(height: 1.3),
+        bodySmall: base.bodySmall?.copyWith(height: 1.3, letterSpacing: 0.1),
+        labelLarge: base.labelLarge?.copyWith(
+          fontWeight: FontWeight.w500,
+          letterSpacing: 0.1,
+        ),
+        labelSmall: base.labelSmall?.copyWith(letterSpacing: 0.4),
+      )
+      // The pubspec has shipped Inter since the scaffold; the theme was the
+      // thing not using it. Applied LAST, after every copyWith override: a
+      // TextStyle.merge replaces fontFamily wholesale, so a family stamped on
+      // the base is lost the moment any style is overridden from it. Stamping
+      // the finished theme is what actually keeps Roboto out.
+      .apply(fontFamily: fontFamily);
 
   static ThemeData _build(Brightness brightness) {
     final scheme = ColorScheme.fromSeed(
@@ -93,12 +83,12 @@ class AppTheme {
       brightness: brightness,
     );
     final dark = brightness == Brightness.dark;
-    // The edge every translucent surface is drawn with. Light-on-dark rather
-    // than an outline colour, so a card looks lit from above rather than
-    // outlined in pen.
+    // The edge every flat surface is drawn with. Light-on-dark rather than an
+    // outline colour, so a panel looks lit from above rather than outlined in
+    // pen.
     final hairline = dark
         ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.07);
+        : Colors.black.withValues(alpha: 0.08);
 
     return ThemeData(
       useMaterial3: true,
@@ -118,7 +108,7 @@ class AppTheme {
         },
       ),
       // Transparent by default so an [AppBackground]-wrapped screen shows its
-      // own gradient/artwork through the Scaffold. Utility screens that aren't
+      // own flat backdrop through the Scaffold. Utility screens that aren't
       // wrapped set an opaque [AppTheme.scaffoldBase] on their Scaffold so they
       // still slide as a solid layer.
       scaffoldBackgroundColor: Colors.transparent,
@@ -127,72 +117,71 @@ class AppTheme {
         surfaceTintColor: Colors.transparent,
         centerTitle: false,
         elevation: 0,
+        scrolledUnderElevation: 0,
         // Set HERE, not per screen. Three screens had already picked 12 while
         // the rest kept Material's 16, so headers drifted apart before anyone
         // looked; a per-screen override is how that happens. Flutter has no
         // themeable leadingWidth, which is exactly why nothing should override
-        // it locally either — one screen tightening its back button is
-        // immediately visible as inconsistent when you move between them.
+        // it locally either.
         titleSpacing: 12,
+        titleTextStyle: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.2,
+        ),
       ),
+      // Raw Card chrome, for the stray Card that still slips into a sheet.
+      // Everything deliberate lives in [PanelRow]. Flat, opaque, hairline,
+      // tight — the same rules the deliberate surfaces follow.
       cardTheme: CardThemeData(
         clipBehavior: Clip.antiAlias,
         elevation: 0,
-        // Translucent, so the page's gradient tints the card instead of being
-        // blocked by it — the same rule every surface in the app follows.
-        color: scheme.surfaceContainerHigh.withValues(alpha: dark ? 0.55 : 0.7),
+        color: scheme.panelFill,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
-          side: BorderSide(color: hairline, width: 0.5),
+          borderRadius: Radii.mdAll,
+          side: BorderSide(color: hairline, width: 1),
         ),
       ),
       listTileTheme: const ListTileThemeData(
-        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       ),
-      // Chips are the app's most repeated control (composer actions, quick
-      // commands, filters). Pill-shaped, translucent, hairline-edged: they read
-      // as tappable without four different chip looks across four screens.
+      // Chips are Material's most visible tell and the two restyled screens
+      // don't use them at all — this keeps the shape language for the screens
+      // that still do: tight corner, flat fill, hairline edge.
       chipTheme: ChipThemeData(
-        backgroundColor: scheme.surfaceContainerHighest.withValues(
-          alpha: dark ? 0.6 : 0.8,
-        ),
+        backgroundColor: scheme.panelFill,
         side: BorderSide(color: hairline),
-        shape: const StadiumBorder(),
+        shape: RoundedRectangleBorder(borderRadius: Radii.xsAll),
         labelStyle: TextStyle(
-          fontSize: 12.5,
+          fontSize: 12,
           fontWeight: FontWeight.w500,
           color: scheme.onSurface,
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         showCheckmark: false,
       ),
       dividerTheme: DividerThemeData(color: hairline, space: 1, thickness: 1),
-      // No underline chrome on inputs — fields are drawn as filled pills, the
-      // same shape language as chips and the composer.
+      // Fields are flat wells with a hairline edge; focus draws a single
+      // accent border.
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: scheme.surfaceContainerHigh.withValues(
-          alpha: dark ? 0.55 : 0.75,
-        ),
+        fillColor: scheme.wellFill,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: Radii.smAll,
           borderSide: BorderSide(color: hairline),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: Radii.smAll,
           borderSide: BorderSide(color: hairline),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
-          borderSide: BorderSide(color: scheme.primary, width: 1.5),
+          borderRadius: Radii.smAll,
+          borderSide: BorderSide(color: scheme.primary, width: 1.2),
         ),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 14,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       ),
       // A label-width underline instead of a full-width bar, and no divider
-      // beneath the tab row — the glass app bar already ends in a hairline, and
+      // beneath the tab row — the flat header already ends in a hairline, and
       // two lines a pixel apart look like a rendering bug.
       tabBarTheme: TabBarThemeData(
         indicatorSize: TabBarIndicatorSize.label,
@@ -200,77 +189,78 @@ class AppTheme {
         labelColor: scheme.primary,
         unselectedLabelColor: scheme.onSurfaceVariant,
         labelStyle: const TextStyle(
-          fontSize: 13.5,
+          fontSize: 12.5,
           fontWeight: FontWeight.w600,
-          letterSpacing: 0.1,
+          letterSpacing: 0.2,
         ),
         unselectedLabelStyle: const TextStyle(
-          fontSize: 13.5,
+          fontSize: 12.5,
           fontWeight: FontWeight.w500,
         ),
         indicator: UnderlineTabIndicator(
-          borderSide: BorderSide(color: scheme.primary, width: 2.5),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+          borderSide: BorderSide(color: scheme.primary, width: 2),
         ),
       ),
-      // Sheets and dialogs share the cards' corner language, one size up.
+      // Sheets and dialogs share the panels' flat, hairline-edged language.
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: scheme.surfaceContainerHigh,
+        backgroundColor: scheme.panelFill,
         surfaceTintColor: Colors.transparent,
-        showDragHandle: true,
+        showDragHandle: false,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.lg)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.md)),
         ),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: scheme.surfaceContainerHigh,
+        backgroundColor: scheme.panelFill,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.lg),
+          borderRadius: Radii.mdAll,
+          side: BorderSide(color: hairline, width: 1),
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: scheme.surfaceContainerHigh,
+        color: scheme.panelFill,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
-          side: BorderSide(color: hairline),
+          borderRadius: Radii.smAll,
+          side: BorderSide(color: hairline, width: 1),
         ),
       ),
-      // Floating, so it clears the composer and the bottom bars instead of
-      // pinning itself to the very edge of the screen underneath them.
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         backgroundColor: scheme.inverseSurface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: Radii.smAll),
       ),
+      // Flat, tight-cornered buttons; the stadium is a Material tell.
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          shape: const StadiumBorder(),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: Radii.smAll),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           textStyle: const TextStyle(
-            fontSize: 14.5,
+            fontSize: 13.5,
             fontWeight: FontWeight.w600,
+            letterSpacing: 0.1,
           ),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          shape: const StadiumBorder(),
-          side: BorderSide(color: scheme.outlineVariant),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+          shape: RoundedRectangleBorder(borderRadius: Radii.smAll),
+          side: BorderSide(color: scheme.hairlineStrong),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(shape: const StadiumBorder()),
+        style: TextButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: Radii.smAll),
+        ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        elevation: 2,
-        highlightElevation: 2,
+        elevation: 0,
+        highlightElevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: Radii.mdAll,
+          side: BorderSide(color: hairline, width: 1),
         ),
       ),
       textTheme: _typography(
@@ -280,6 +270,13 @@ class AppTheme {
       ),
     );
   }
+}
+
+/// Terminal-native rule: identifiers (branch names, pane ids, paths, ports,
+/// SHAs, commands) are set in the mono face; prose stays proportional. Apply
+/// this to any [TextStyle] that will carry an identifier.
+extension IdentifierText on TextStyle {
+  TextStyle get mono => copyWith(fontFamily: AppTheme.monoFamily);
 }
 
 /// The app's page transition: the incoming route slides in from the right and
@@ -334,7 +331,13 @@ extension AgentStatusUi on AgentStatus {
     AgentStatus.unknown => Icons.help_outline,
   };
 
-  /// Background/foreground for the badge, tuned per brightness.
+  /// The dot colour for this status — vivid where the status means something,
+  /// muted where it doesn't. In this language the dot is the whole badge, so
+  /// it does not share the pill's translucent background.
+  Color dot(ColorScheme scheme) => colors(scheme).fg;
+
+  /// Background/foreground for the small flat chips the tallies use, tuned per
+  /// brightness.
   ({Color bg, Color fg}) colors(ColorScheme scheme) {
     final dark = scheme.brightness == Brightness.dark;
     Color pair(Color base) =>

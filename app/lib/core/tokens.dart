@@ -2,93 +2,91 @@ import 'package:flutter/material.dart';
 
 /// The app's shared visual constants — corner radii, spacing, motion.
 ///
-/// These exist because the same values were being re-typed per screen and drifted:
-/// card corners ranged 8–16 across four screens, and row padding came in five
-/// flavours. A token is not about saving keystrokes; it is what makes two screens
-/// look like the same app when neither author is looking at the other.
+/// The language is terminal-native: flat surfaces held by hairlines, tight
+/// corners, dense rows. Radii never pass 8 — the 18–22dp card corner is the
+/// Material tell this design removes, not something it approximates.
 class Radii {
   Radii._();
 
-  /// Chips, badges, small inline surfaces.
-  static const sm = 10.0;
+  /// Chips, tags, small inline surfaces.
+  static const xs = 4.0;
 
-  /// The default for list cards and inline panels.
-  static const md = 16.0;
+  /// Buttons, inputs, menu rows.
+  static const sm = 6.0;
 
-  /// Large containers — sheets, hero cards.
-  static const lg = 22.0;
+  /// The default for list rows and panels — the largest radius in the language.
+  static const md = 8.0;
 
+  static const BorderRadius xsAll = BorderRadius.all(Radius.circular(xs));
   static const BorderRadius smAll = BorderRadius.all(Radius.circular(sm));
   static const BorderRadius mdAll = BorderRadius.all(Radius.circular(md));
-  static const BorderRadius lgAll = BorderRadius.all(Radius.circular(lg));
-
-  /// A fully rounded end — pills, avatars, the composer input.
-  static const BorderRadius pill = BorderRadius.all(Radius.circular(999));
 }
 
-/// Vertical/horizontal rhythm. Everything is a multiple of 4; the named steps
-/// are the ones actually used, so a screen reaching for `10` is a smell.
+/// Vertical/horizontal rhythm. Rows sit closer than a Material list — density
+/// is the point, a phone should show more agents per screen without feeling
+/// cramped. Everything is a multiple of 2; the named steps are the ones
+/// actually used.
 class Space {
   Space._();
 
-  static const xs = 4.0;
-  static const sm = 8.0;
-  static const md = 12.0;
-  static const lg = 16.0;
-  static const xl = 24.0;
+  static const xs = 2.0;
+  static const sm = 4.0;
+  static const md = 8.0;
+  static const lg = 12.0;
+  static const xl = 16.0;
 
   /// The gutter between a screen's content and its edges.
-  static const gutter = 14.0;
+  static const gutter = 12.0;
 }
 
 /// Motion. One family of durations and one curve, so nothing in the app moves
-/// at a speed nothing else moves at.
+/// at a speed nothing else moves at. Short on purpose: a dense terminal UI
+/// should flip, not glide.
 class Motion {
   Motion._();
 
-  /// State flips — a focus ring, a chip toggle.
-  static const fast = Duration(milliseconds: 150);
+  /// State flips — a toggle, a chevron.
+  static const fast = Duration(milliseconds: 120);
 
-  /// The default: something appearing, expanding, or sliding into place.
-  static const medium = Duration(milliseconds: 260);
+  /// The default: something appearing or expanding.
+  static const medium = Duration(milliseconds: 200);
 
   /// Deliberately slow — a full-screen or attention-seeking change.
-  static const slow = Duration(milliseconds: 420);
+  static const slow = Duration(milliseconds: 320);
 
   /// Decelerating: fast off the mark, gentle at rest. Reads as physical
   /// without the overshoot of a spring, which on dense lists looks nervous.
   static const curve = Curves.easeOutCubic;
 }
 
-/// Layered translucent fills, in place of ad-hoc `surfaceContainerHigh`.
-///
-/// Everything in this app sits over a gradient backdrop (see [AppBackground]),
-/// so a fully opaque card cuts a flat hole in it. Slight transparency lets the
-/// backdrop tint every surface, which is what makes the screens read as one
-/// continuous material rather than grey boxes on a picture.
+/// Flat, opaque fills for every surface, in place of Material's elevation and
+/// translucency. A panel reads as a panel because of its hairline, not because
+/// it floats or tints what is behind it.
 extension AppSurfaces on ColorScheme {
   bool get _dark => brightness == Brightness.dark;
 
-  /// A resting card or list row.
-  Color get cardFill =>
-      surfaceContainerHigh.withValues(alpha: _dark ? 0.55 : 0.70);
+  /// A resting panel or list row — a tone or two off the backdrop.
+  Color get panelFill =>
+      _dark ? const Color(0xFF11181A) : const Color(0xFFFBFCFC);
 
-  /// A card that is raised, selected, or being pressed.
-  Color get cardFillStrong =>
-      surfaceContainerHighest.withValues(alpha: _dark ? 0.75 : 0.88);
+  /// A raised/selected panel — the focused pane.
+  Color get panelFillRaised =>
+      _dark ? const Color(0xFF172022) : const Color(0xFFFFFFFF);
 
-  /// An inset well inside a card — a code line, a quoted command.
-  Color get sunkenFill => surface.withValues(alpha: _dark ? 0.45 : 0.65);
+  /// An inset well inside a panel — a code line, a quoted command.
+  Color get wellFill =>
+      _dark ? const Color(0xFF0B1011) : const Color(0xFFF1F3F2);
 
-  /// The hairline that defines a surface's edge. Light-on-dark and
+  /// The 1px hairline that holds every surface's edge. Light-on-dark and
   /// dark-on-light rather than an outline colour, so it reads as a lit edge
   /// instead of a drawn border.
   Color get hairline => _dark
       ? Colors.white.withValues(alpha: 0.08)
-      : Colors.black.withValues(alpha: 0.07);
+      : Colors.black.withValues(alpha: 0.08);
 
-  /// A stronger edge, for a surface that needs to hold its own shape.
+  /// A stronger edge, for a surface that needs to hold its own shape — the
+  /// header bar's rule, a focused control.
   Color get hairlineStrong => _dark
-      ? Colors.white.withValues(alpha: 0.14)
-      : Colors.black.withValues(alpha: 0.12);
+      ? Colors.white.withValues(alpha: 0.16)
+      : Colors.black.withValues(alpha: 0.14);
 }

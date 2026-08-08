@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme.dart';
+
 /// Renders how long an agent has been in its current state — the "50m" in
 /// "Blocked · 50m".
 ///
@@ -29,7 +31,10 @@ class AgentAge extends StatelessWidget {
     return Text(
       formatAgentAge(d),
       style: TextStyle(
-        fontSize: 11.5,
+        // A duration is an identifier-style value (it sits on the status line
+        // next to the dot), so it is set in mono like the rest of them.
+        fontFamily: AppTheme.monoFamily,
+        fontSize: 11,
         fontWeight: emphasize ? FontWeight.w600 : FontWeight.w500,
         color: emphasize ? scheme.error : scheme.onSurfaceVariant,
       ),

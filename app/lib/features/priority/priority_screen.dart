@@ -4,15 +4,16 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
+import '../../core/theme.dart';
 import '../../core/tokens.dart';
-import '../../core/widgets/app_card.dart';
-import '../../core/widgets/glass_app_bar.dart';
+import '../../core/widgets/agent_age.dart';
+import '../../core/widgets/flat_app_bar.dart';
 import '../../core/widgets/live_activity_line.dart';
+import '../../core/widgets/panel_row.dart';
+import '../../core/widgets/status_mark.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../inbox/widgets/agent_avatar.dart';
-import '../../core/widgets/agent_age.dart';
-import '../inbox/widgets/status_badge.dart';
 import 'priority_providers.dart';
 import 'widgets/priority_overflow_bar.dart';
 
@@ -38,6 +39,7 @@ class PriorityScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
     final servers = watchAllServerAgents(ref);
     final hits = ref.watch(priorityHitsProvider);
     // Same cap, same remembered state as the home surface — this is the same
@@ -52,7 +54,7 @@ class PriorityScreen extends ConsumerWidget {
     return AppBackground(
       child: Scaffold(
         extendBodyBehindAppBar: true,
-        appBar: GlassAppBar(title: const Text('Priority')),
+        appBar: FlatAppBar(title: const Text('Priority')),
         body: RefreshIndicator(
           onRefresh: () async => ref.invalidate(serverAgentsProvider),
           // No screen-wide loading state: each server resolves independently, so a
@@ -62,13 +64,22 @@ class PriorityScreen extends ConsumerWidget {
           // every blocked agent on every other machine.
           child: ListView(
             padding: EdgeInsets.only(
-              top: GlassAppBar.padding(context),
+              top: FlatAppBar.padding(context),
               bottom: Space.xl,
             ),
             children: [
-              _SectionHeader(
-                icon: Icons.star,
-                label: 'Priority${hits.isEmpty ? '' : '  ${hits.length}'}',
+              SectionLabel(
+                'Priority',
+                trailing: hits.isEmpty
+                    ? null
+                    : Text(
+                        '${hits.length}',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: scheme.onSurfaceVariant,
+                          letterSpacing: 0.4,
+                        ).mono,
+                      ),
               ),
               if (hits.isEmpty)
                 const _Hint(
@@ -94,16 +105,23 @@ class PriorityScreen extends ConsumerWidget {
                 ),
               ],
               // The divider that used to separate Priority from the servers list
-              // is gone: spaced cards already read as separate groups, and a rule
-              // between them lands as a second, weaker edge next to the card
-              // borders.
+              // is gone: spaced panels already read as separate groups, and a
+              // rule between them lands as a second, weaker edge next to the
+              // panel borders.
               const SizedBox(height: Space.sm),
               // All agents, grouped by server, with star toggles.
               for (final sa in servers) ...[
-                _SectionHeader(
-                  icon: Icons.dns_outlined,
-                  label: sa.server.name,
-                  trailing: sa.ok ? null : 'unreachable',
+                SectionLabel(
+                  sa.server.name,
+                  trailing: sa.ok
+                      ? null
+                      : Text(
+                          'unreachable',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: scheme.error,
+                          ).mono,
+                        ),
                 ),
                 if (!sa.ok)
                   _Hint('Couldn\'t reach ${sa.server.name}.')
@@ -167,9 +185,9 @@ class _AgentRow extends StatelessWidget {
     // column: on a phone the old row put age, badge and star into the space
     // left over after the title, which ellipsised the title to nothing on any
     // reasonably named task.
-    return AppCard(
+    return PanelRow(
       onTap: onTap,
-      accent: agent.agentStatus == AgentStatus.blocked ? scheme.error : null,
+      borderColor: agent.agentStatus == AgentStatus.blocked ? scheme.error : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -177,7 +195,7 @@ class _AgentRow extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AgentAvatar(agent: agent.agent, radius: 18),
+              AgentAvatar(agent: agent.agent, radius: 16),
               const SizedBox(width: Space.md),
               Expanded(
                 child: Column(
@@ -190,22 +208,18 @@ class _AgentRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontWeight: FontWeight.w600,
-                        fontSize: 15,
+                        fontSize: 14,
                         height: 1.25,
                         letterSpacing: -0.2,
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      showServer
-                          ? '${server.name}  ·  ${agent.gitLabel}'
-                          : agent.gitLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 12.5,
-                      ),
+                    // Prose keeps the proportional face; the git identity is an
+                    // identifier and is set in mono — the mono rule in action.
+                    _IdentityLine(
+                      server: server,
+                      gitLabel: agent.gitLabel,
+                      showServer: showServer,
                     ),
                   ],
                 ),
@@ -225,7 +239,7 @@ class _AgentRow extends StatelessWidget {
           ),
           if (client != null)
             Padding(
-              padding: const EdgeInsets.only(left: 48),
+              padding: const EdgeInsets.only(left: 40),
               child: LiveActivityLine(
                 paneId: agent.paneId,
                 status: agent.agentStatus,
@@ -234,11 +248,11 @@ class _AgentRow extends StatelessWidget {
             ),
           const SizedBox(height: Space.sm),
           Padding(
-            padding: const EdgeInsets.only(left: 48),
+            padding: const EdgeInsets.only(left: 40),
             child: Row(
               children: [
-                StatusBadge(agent.agentStatus),
-                const SizedBox(width: Space.sm),
+                StatusMark(agent.agentStatus),
+                const SizedBox(width: Space.lg),
                 // The wait itself, next to the state. "Blocked" tells you what;
                 // this tells you whether to care.
                 AgentAge(
@@ -254,47 +268,39 @@ class _AgentRow extends StatelessWidget {
   }
 }
 
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.icon,
-    required this.label,
-    this.trailing,
+/// The row's second line: the server name in prose, the git identity in mono.
+/// A single line of both, so the identifier part of it follows the mono rule
+/// without dragging the proper noun along.
+class _IdentityLine extends StatelessWidget {
+  const _IdentityLine({
+    required this.server,
+    required this.gitLabel,
+    required this.showServer,
   });
-  final IconData icon;
-  final String label;
-  final String? trailing;
+
+  final ServerSummary server;
+  final String gitLabel;
+  final bool showServer;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        Space.gutter + 2,
-        Space.lg,
-        Space.gutter,
-        Space.sm,
-      ),
-      child: Row(
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         children: [
-          Icon(icon, size: 14, color: scheme.primary),
-          const SizedBox(width: Space.sm),
-          Text(
-            label.toUpperCase(),
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.9,
-            ),
-          ),
-          if (trailing != null) ...[
-            const Spacer(),
-            Text(
-              trailing!,
-              style: TextStyle(color: scheme.error, fontSize: 11.5),
-            ),
+          if (showServer) ...[
+            TextSpan(text: server.name),
+            const TextSpan(text: '  ·  '),
           ],
+          TextSpan(
+            text: gitLabel,
+            style: TextStyle(fontSize: 11.5).mono,
+          ),
         ],
       ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }
@@ -306,7 +312,7 @@ class _Hint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.fromLTRB(Space.gutter, 4, Space.gutter, 8),
       child: Text(
         text,
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),

@@ -16,7 +16,7 @@ class Entrance extends StatefulWidget {
     super.key,
     required this.child,
     this.index = 0,
-    this.offset = 10,
+    this.offset = 6,
   });
 
   final Widget child;
