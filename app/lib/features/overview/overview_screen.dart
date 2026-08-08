@@ -4,7 +4,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_background.dart';
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
+import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_mark.dart';
+import '../../core/widgets/entrance.dart';
+import '../../core/widgets/glass_app_bar.dart';
 import '../../core/widgets/live_activity_line.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
@@ -76,7 +80,8 @@ class OverviewScreen extends ConsumerWidget {
     return AppBackground(
       asset: Backgrounds.flock,
       child: Scaffold(
-        appBar: AppBar(
+        extendBodyBehindAppBar: true,
+        appBar: GlassAppBar(
           title: workspaceId == null
               ? Row(
                   mainAxisSize: MainAxisSize.min,
@@ -257,65 +262,70 @@ class _SpaceTabbedView extends ConsumerWidget {
 
     return DefaultTabController(
       length: tabs.length,
-      child: Column(
-        children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TabBar(
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              tabs: [
-                for (final t in tabs)
-                  Tab(
-                    height: 44,
-                    // Long-press a tab for its actions (Herdr parity via
-                    // /herdr). This gesture used to close the tab outright —
-                    // it now opens the menu that offers closing, so the
-                    // destructive option is chosen rather than triggered.
-                    child: GestureDetector(
-                      onLongPressStart: (d) =>
-                          _showTabMenu(context, ref, t, d.globalPosition),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (t.focused)
-                            const Padding(
-                              padding: EdgeInsets.only(right: 6),
-                              child: Icon(Icons.my_location, size: 14),
+      child: Padding(
+        // Clears the glass header — this Column starts at the top of the
+        // screen, behind it.
+        padding: EdgeInsets.only(top: GlassAppBar.padding(context)),
+        child: Column(
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                tabs: [
+                  for (final t in tabs)
+                    Tab(
+                      height: 44,
+                      // Long-press a tab for its actions (Herdr parity via
+                      // /herdr). This gesture used to close the tab outright —
+                      // it now opens the menu that offers closing, so the
+                      // destructive option is chosen rather than triggered.
+                      child: GestureDetector(
+                        onLongPressStart: (d) =>
+                            _showTabMenu(context, ref, t, d.globalPosition),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (t.focused)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 6),
+                                child: Icon(Icons.my_location, size: 14),
+                              ),
+                            Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${t.paneCount}',
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontSize: 12,
+                              ),
                             ),
-                          Text(t.label.isEmpty ? _tabLabel(t.tabId) : t.label),
-                          const SizedBox(width: 6),
-                          Text(
-                            '${t.paneCount}',
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Expanded(
-            child: TabBarView(
-              children: [
-                for (final t in tabs)
-                  _PaneGrid(
-                    panes: panesByTab[t.tabId] ?? const [],
-                    agentByPane: agentByPane,
-                    focusedPaneId: snap.focusedPaneId,
-                    onRefresh: () =>
-                        ref.read(snapshotControllerProvider.notifier).refresh(),
-                  ),
-              ],
+            Expanded(
+              child: TabBarView(
+                children: [
+                  for (final t in tabs)
+                    _PaneGrid(
+                      panes: panesByTab[t.tabId] ?? const [],
+                      agentByPane: agentByPane,
+                      focusedPaneId: snap.focusedPaneId,
+                      onRefresh: () =>
+                          ref.read(snapshotControllerProvider.notifier).refresh(),
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -394,15 +404,17 @@ class _PaneGrid extends StatelessWidget {
     }
     return RefreshIndicator(
       onRefresh: onRefresh,
-      child: ListView.separated(
+      child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.only(top: Space.sm, bottom: Space.xl),
         itemCount: panes.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 10),
-        itemBuilder: (context, i) => _PaneCard(
-          pane: panes[i],
-          agent: agentByPane[panes[i].paneId],
-          focused: panes[i].paneId == focusedPaneId || panes[i].focused,
+        itemBuilder: (context, i) => Entrance(
+          index: i,
+          child: _PaneCard(
+            pane: panes[i],
+            agent: agentByPane[panes[i].paneId],
+            focused: panes[i].paneId == focusedPaneId || panes[i].focused,
+          ),
         ),
       ),
     );
@@ -445,7 +457,10 @@ class _MultiplexerLayout extends StatelessWidget {
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: EdgeInsets.only(
+        top: GlassAppBar.padding(context),
+        bottom: Space.xl,
+      ),
       children: [
         if (only == null) _StatusStrip(agents: snap.agents),
         if (needsYou.isNotEmpty)
@@ -488,10 +503,15 @@ class _StatusStrip extends StatelessWidget {
       AgentStatus.unknown,
     ];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter,
+        Space.md,
+        Space.gutter,
+        Space.xs,
+      ),
       child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+        spacing: Space.sm,
+        runSpacing: Space.sm,
         children: [
           for (final status in order)
             if (counts[status] != null)
@@ -518,7 +538,11 @@ class _StatusCount extends StatelessWidget {
     final c = status.colors(scheme);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(color: c.bg, borderRadius: BorderRadius.circular(999)),
+      decoration: BoxDecoration(
+        color: c.bg,
+        borderRadius: Radii.pill,
+        border: Border.all(color: c.fg.withValues(alpha: 0.28)),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -551,27 +575,31 @@ class _NeedsYouSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+          padding: const EdgeInsets.fromLTRB(
+            Space.gutter + 2,
+            Space.lg,
+            Space.gutter,
+            Space.xs,
+          ),
           child: Row(
             children: [
-              Icon(Icons.pan_tool_outlined, size: 16, color: scheme.error),
-              const SizedBox(width: 8),
+              Icon(Icons.pan_tool_outlined, size: 14, color: scheme.error),
+              const SizedBox(width: Space.sm),
               Text(
-                'Needs you',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                'NEEDS YOU',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.9,
+                  color: scheme.error,
+                ),
               ),
             ],
           ),
         ),
         for (final a in agents)
           if (paneById[a.paneId] case final pane?)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: _PaneCard(pane: pane, agent: a, focused: false),
-            ),
+            _PaneCard(pane: pane, agent: a, focused: false),
       ],
     );
   }
@@ -602,28 +630,35 @@ class _WorkspaceBlock extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
+          padding: const EdgeInsets.fromLTRB(
+            Space.gutter + 2,
+            Space.xl,
+            Space.gutter,
+            Space.xs,
+          ),
           child: Row(
             children: [
-              Icon(Icons.workspaces_outline, size: 16, color: scheme.primary),
-              const SizedBox(width: 8),
+              Icon(Icons.workspaces_outline, size: 14, color: scheme.primary),
+              const SizedBox(width: Space.sm),
               Flexible(
                 child: Text(
-                  label,
+                  label.toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.9,
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: Space.sm),
               Text(
                 '${workspace.paneCount} pane${workspace.paneCount == 1 ? '' : 's'}',
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
               ),
               if (workspace.focused) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: Space.sm),
                 Icon(Icons.my_location, size: 13, color: scheme.primary),
               ],
             ],
@@ -659,12 +694,12 @@ class _TabRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final label = tab.label.isNotEmpty ? tab.label : _tabLabel(tab.tabId);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+      padding: const EdgeInsets.fromLTRB(Space.gutter, Space.xs, 0, Space.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(top: 8, right: 10),
+            padding: const EdgeInsets.only(top: 10, right: 8),
             child: SizedBox(
               width: 34,
               child: Column(
@@ -690,12 +725,15 @@ class _TabRow extends StatelessWidget {
             child: Column(
               children: [
                 for (final p in panes)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _PaneCard(
-                      pane: p,
-                      agent: agentByPane[p.paneId],
-                      focused: p.paneId == focusedPaneId || p.focused,
+                  _PaneCard(
+                    pane: p,
+                    agent: agentByPane[p.paneId],
+                    focused: p.paneId == focusedPaneId || p.focused,
+                    margin: const EdgeInsets.fromLTRB(
+                      0,
+                      Space.xs,
+                      Space.gutter,
+                      Space.xs,
                     ),
                   ),
               ],
@@ -708,10 +746,19 @@ class _TabRow extends StatelessWidget {
 }
 
 class _PaneCard extends ConsumerWidget {
-  const _PaneCard({required this.pane, required this.focused, this.agent});
+  const _PaneCard({
+    required this.pane,
+    required this.focused,
+    this.agent,
+    this.margin,
+  });
   final Pane pane;
   final Agent? agent;
   final bool focused;
+
+  /// Overrides the card's default gutter — the workspace tree indents its
+  /// cards under a tab label column, so they cannot also carry a full gutter.
+  final EdgeInsetsGeometry? margin;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -733,236 +780,237 @@ class _PaneCard extends ConsumerWidget {
     final headlineIcon = isAgent
         ? null
         : (cmd != null ? Icons.play_arrow_rounded : Icons.folder_outlined);
-    return Material(
-        color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          // Agents open the chat/transcript view (with a terminal toggle);
-          // shells and other panes open the raw terminal directly.
-          onTap: () => context.push(
-            '${isAgent ? '/transcript' : '/terminal'}/${Uri.encodeComponent(pane.paneId)}',
+    // The focused pane is tinted teal and the blocked one red — accent does
+    // double duty here, and blocked wins, because "this one is stuck" is more
+    // urgent than "this one is where your cursor is".
+    return AppCard(
+      selected: focused,
+      accent: blocked
+          ? scheme.error
+          : (focused ? scheme.primary : null),
+      padding: const EdgeInsets.all(10),
+      margin:
+          margin ??
+          const EdgeInsets.fromLTRB(
+            Space.gutter,
+            Space.xs,
+            Space.gutter,
+            Space.xs,
           ),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: focused ? scheme.primary : Colors.transparent,
-                width: 2,
+      // Agents open the chat/transcript view (with a terminal toggle);
+      // shells and other panes open the raw terminal directly.
+      onTap: () => context.push(
+        '${isAgent ? '/transcript' : '/terminal'}/${Uri.encodeComponent(pane.paneId)}',
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // Agent panes get the agent avatar; other panes a terminal.
+              if (agent != null)
+                AgentAvatar(agent: agent!.agent, radius: 13)
+              else
+                CircleAvatar(
+                  radius: 13,
+                  backgroundColor: scheme.surfaceContainerHighest,
+                  child: Icon(Icons.terminal,
+                      size: 15, color: scheme.onSurfaceVariant),
+                ),
+              const SizedBox(width: 8),
+              // Agents: their status chip. Non-agents: a "running" or
+              // "shell" chip so the pane's kind reads at a glance.
+              if (isAgent)
+                StatusBadge(pane.agentStatus)
+              else
+                _KindChip(running: cmd != null),
+              const Spacer(),
+              if (focused)
+                Icon(Icons.my_location, size: 15, color: scheme.primary),
+              // Agent panes get a shortcut into the chat/transcript view.
+              if (isAgent) ...[
+                const SizedBox(width: 4),
+                InkResponse(
+                  onTap: () => context.push(
+                    '/transcript/${Uri.encodeComponent(pane.paneId)}',
+                  ),
+                  radius: 18,
+                  child: Icon(
+                    Icons.chat_bubble_outline,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+              // Split / close this pane (Herdr parity via /herdr), plus
+              // the agent lifecycle: an idle shell can host a new agent,
+              // and a pane already hosting one can restart or stop it.
+              PopupMenuButton<String>(
+                tooltip: 'Pane actions',
+                padding: EdgeInsets.zero,
+                iconSize: 18,
+                icon: Icon(Icons.more_horiz,
+                    color: scheme.onSurfaceVariant),
+                onSelected: (v) {
+                  switch (v) {
+                    case 'start-agent':
+                      showStartAgentSheet(
+                        context,
+                        ref,
+                        target: StartAgentTarget(
+                          placement: StartAgentPlacement.existingPane,
+                          id: pane.paneId,
+                          where: 'In this pane (${pane.paneId})',
+                          defaultCwd: pane.cwd,
+                        ),
+                      );
+                    case 'restart-agent':
+                      restartAgent(context, ref, pane.paneId,
+                          kind: agent!.agent);
+                    case 'stop-agent':
+                      stopAgent(context, ref, pane.paneId,
+                          kind: agent!.agent);
+                    case 'split':
+                      splitPane(context, ref, pane.paneId);
+                    case 'close':
+                      closePane(context, ref, pane.paneId);
+                  }
+                },
+                itemBuilder: (ctx) => [
+                  // Offered only on a pane with no agent in it. A pane
+                  // running a dev server is rejected by the bridge, but
+                  // it's a shell either way — only an agent pane is a
+                  // definitively wrong target, and it gets restart/stop
+                  // instead.
+                  if (!isAgent)
+                    const PopupMenuItem(
+                      value: 'start-agent',
+                      child: ListTile(
+                        leading: Icon(Icons.rocket_launch_outlined),
+                        title: Text('Start agent here'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  if (isAgent) ...[
+                    const PopupMenuItem(
+                      value: 'restart-agent',
+                      child: ListTile(
+                        leading: Icon(Icons.restart_alt),
+                        title: Text('Restart agent'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'stop-agent',
+                      child: ListTile(
+                        leading: Icon(Icons.stop_circle_outlined,
+                            color: Theme.of(ctx).colorScheme.error),
+                        title: const Text('Stop agent'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ],
+                  const PopupMenuItem(
+                    value: 'split',
+                    child: ListTile(
+                      leading: Icon(Icons.splitscreen_outlined),
+                      title: Text('Split'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'close',
+                    child: ListTile(
+                      leading: Icon(Icons.close,
+                          color: Theme.of(ctx).colorScheme.error),
+                      title: const Text('Close pane'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
               ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (headlineIcon != null) ...[
+                Icon(headlineIcon,
+                    size: 14, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 5),
+              ],
+              Expanded(
+                child: Text(
+                  headline,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: isAgent ? 14 : 13,
+                    height: 1.25,
+                    fontFamily: isAgent ? null : AppTheme.monoFamily,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          // The agent's most recent message — the same line the Flock
+          // list carries, from the same widget and the same
+          // `/agent-state` source, so a space and the flock can never
+          // disagree about whether an agent is alive. It sits under the
+          // task rather than beside the status chip, and stays one
+          // ellipsized line with its height reserved, so a long message
+          // can't reflow the card or shove the Approve button around.
+          if (isAgent)
+            LiveActivityLine(
+              paneId: pane.paneId,
+              status: agent!.agentStatus,
             ),
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          // A running command still shows *where* it runs, on a muted line
+          // beneath the command itself.
+          if (cmd != null && pane.locationLabel.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
               children: [
-                Row(
-                  children: [
-                    // Agent panes get the agent avatar; other panes a terminal.
-                    if (agent != null)
-                      AgentAvatar(agent: agent!.agent, radius: 13)
-                    else
-                      CircleAvatar(
-                        radius: 13,
-                        backgroundColor: scheme.surfaceContainerHighest,
-                        child: Icon(Icons.terminal,
-                            size: 15, color: scheme.onSurfaceVariant),
-                      ),
-                    const SizedBox(width: 8),
-                    // Agents: their status chip. Non-agents: a "running" or
-                    // "shell" chip so the pane's kind reads at a glance.
-                    if (isAgent)
-                      StatusBadge(pane.agentStatus)
-                    else
-                      _KindChip(running: cmd != null),
-                    const Spacer(),
-                    if (focused)
-                      Icon(Icons.my_location, size: 15, color: scheme.primary),
-                    // Agent panes get a shortcut into the chat/transcript view.
-                    if (isAgent) ...[
-                      const SizedBox(width: 4),
-                      InkResponse(
-                        onTap: () => context.push(
-                          '/transcript/${Uri.encodeComponent(pane.paneId)}',
-                        ),
-                        radius: 18,
-                        child: Icon(
-                          Icons.chat_bubble_outline,
-                          size: 16,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                    // Split / close this pane (Herdr parity via /herdr), plus
-                    // the agent lifecycle: an idle shell can host a new agent,
-                    // and a pane already hosting one can restart or stop it.
-                    PopupMenuButton<String>(
-                      tooltip: 'Pane actions',
-                      padding: EdgeInsets.zero,
-                      iconSize: 18,
-                      icon: Icon(Icons.more_horiz,
-                          color: scheme.onSurfaceVariant),
-                      onSelected: (v) {
-                        switch (v) {
-                          case 'start-agent':
-                            showStartAgentSheet(
-                              context,
-                              ref,
-                              target: StartAgentTarget(
-                                placement: StartAgentPlacement.existingPane,
-                                id: pane.paneId,
-                                where: 'In this pane (${pane.paneId})',
-                                defaultCwd: pane.cwd,
-                              ),
-                            );
-                          case 'restart-agent':
-                            restartAgent(context, ref, pane.paneId,
-                                kind: agent!.agent);
-                          case 'stop-agent':
-                            stopAgent(context, ref, pane.paneId,
-                                kind: agent!.agent);
-                          case 'split':
-                            splitPane(context, ref, pane.paneId);
-                          case 'close':
-                            closePane(context, ref, pane.paneId);
-                        }
-                      },
-                      itemBuilder: (ctx) => [
-                        // Offered only on a pane with no agent in it. A pane
-                        // running a dev server is rejected by the bridge, but
-                        // it's a shell either way — only an agent pane is a
-                        // definitively wrong target, and it gets restart/stop
-                        // instead.
-                        if (!isAgent)
-                          const PopupMenuItem(
-                            value: 'start-agent',
-                            child: ListTile(
-                              leading: Icon(Icons.rocket_launch_outlined),
-                              title: Text('Start agent here'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                        if (isAgent) ...[
-                          const PopupMenuItem(
-                            value: 'restart-agent',
-                            child: ListTile(
-                              leading: Icon(Icons.restart_alt),
-                              title: Text('Restart agent'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          PopupMenuItem(
-                            value: 'stop-agent',
-                            child: ListTile(
-                              leading: Icon(Icons.stop_circle_outlined,
-                                  color: Theme.of(ctx).colorScheme.error),
-                              title: const Text('Stop agent'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                        ],
-                        const PopupMenuItem(
-                          value: 'split',
-                          child: ListTile(
-                            leading: Icon(Icons.splitscreen_outlined),
-                            title: Text('Split'),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'close',
-                          child: ListTile(
-                            leading: Icon(Icons.close,
-                                color: Theme.of(ctx).colorScheme.error),
-                            title: const Text('Close pane'),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                      ],
+                Icon(Icons.folder_outlined,
+                    size: 12, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    pane.locationLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontSize: 11.5,
+                      fontFamily: AppTheme.monoFamily,
                     ),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (headlineIcon != null) ...[
-                      Icon(headlineIcon,
-                          size: 14, color: scheme.onSurfaceVariant),
-                      const SizedBox(width: 5),
-                    ],
-                    Expanded(
-                      child: Text(
-                        headline,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: isAgent ? 14 : 13,
-                          height: 1.25,
-                          fontFamily: isAgent ? null : AppTheme.monoFamily,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                // The agent's most recent message — the same line the Flock
-                // list carries, from the same widget and the same
-                // `/agent-state` source, so a space and the flock can never
-                // disagree about whether an agent is alive. It sits under the
-                // task rather than beside the status chip, and stays one
-                // ellipsized line with its height reserved, so a long message
-                // can't reflow the card or shove the Approve button around.
-                if (isAgent)
-                  LiveActivityLine(
-                    paneId: pane.paneId,
-                    status: agent!.agentStatus,
-                  ),
-                // A running command still shows *where* it runs, on a muted line
-                // beneath the command itself.
-                if (cmd != null && pane.locationLabel.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(Icons.folder_outlined,
-                          size: 12, color: scheme.onSurfaceVariant),
-                      const SizedBox(width: 4),
-                      Flexible(
-                        child: Text(
-                          pane.locationLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: scheme.onSurfaceVariant,
-                            fontSize: 11.5,
-                            fontFamily: AppTheme.monoFamily,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-                if (blocked) ...[
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.tonalIcon(
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        minimumSize: const Size(0, 30),
-                      ),
-                      onPressed: agent == null
-                          ? null
-                          : () => approveAgent(context, ref, agent!),
-                      icon: const Icon(Icons.check_circle_outline, size: 15),
-                      label: const Text('Approve'),
-                    ),
-                  ),
-                ],
               ],
             ),
-          ),
-        ),
-      );
+          ],
+          if (blocked) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  minimumSize: const Size(0, 30),
+                ),
+                onPressed: agent == null
+                    ? null
+                    : () => approveAgent(context, ref, agent!),
+                icon: const Icon(Icons.check_circle_outline, size: 15),
+                label: const Text('Approve'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -1014,7 +1062,7 @@ class _KindChip extends StatelessWidget {
         color: running
             ? scheme.primary.withValues(alpha: 0.14)
             : scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: Radii.pill,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

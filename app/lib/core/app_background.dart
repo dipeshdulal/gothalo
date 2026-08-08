@@ -50,29 +50,52 @@ class AppBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return DecoratedBox(
       // The opaque base — this is what makes the page a solid layer for a clean
       // slide transition.
       decoration: BoxDecoration(
         gradient: AppTheme.backgroundGradient(Theme.of(context).brightness),
       ),
-      child: asset == null
-          ? child
-          : Stack(
-              children: [
-                Positioned.fill(
-                  child: Opacity(
-                    opacity: opacity,
-                    child: Image.asset(
-                      asset!,
-                      fit: BoxFit.cover,
-                      alignment: Alignment.bottomCenter,
-                    ),
+      child: Stack(
+        children: [
+          // A single soft glow of the seed colour, off in one corner. It is the
+          // cheapest way to make a flat gradient feel like it has a light
+          // source, and it is what the blurred glass surfaces pick up and smear
+          // — without it, blurring a near-flat backdrop produces nothing.
+          Positioned(
+            top: -140,
+            right: -110,
+            child: IgnorePointer(
+              child: Container(
+                width: 380,
+                height: 380,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      scheme.primary.withValues(alpha: 0.14),
+                      scheme.primary.withValues(alpha: 0.0),
+                    ],
                   ),
                 ),
-                Positioned.fill(child: child),
-              ],
+              ),
             ),
+          ),
+          if (asset != null)
+            Positioned.fill(
+              child: Opacity(
+                opacity: opacity,
+                child: Image.asset(
+                  asset!,
+                  fit: BoxFit.cover,
+                  alignment: Alignment.bottomCenter,
+                ),
+              ),
+            ),
+          Positioned.fill(child: child),
+        ],
+      ),
     );
   }
 }
