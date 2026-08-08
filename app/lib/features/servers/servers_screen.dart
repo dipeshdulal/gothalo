@@ -198,6 +198,13 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                         _fabClearance + MediaQuery.paddingOf(context).bottom,
                   ),
                   children: [
+                    // --- Greeting ---
+                    enter(
+                      _GreetingHeader(
+                        needsYou: hits.where((h) => h.needsYou).length,
+                      ),
+                    ),
+
                     // --- Priority (needs you + starred) ---
                     enter(
                       SectionLabel(
@@ -289,6 +296,116 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
       ),
     );
   }
+}
+
+/// The greeting at the top of home: time-of-day hello, today's date, and one
+/// line about whether anything needs you. It is the screen's headline — the one
+/// thing shown before any list — so it reads at a glance, then gets out of the
+/// way. The state line reuses the terminal-native idiom from [StatusMark]: a
+/// status dot (red = needs you, teal = all clear) beside a small uppercase mono
+/// label.
+class _GreetingHeader extends StatelessWidget {
+  const _GreetingHeader({required this.needsYou});
+
+  /// Blocked agents across all servers — the thing the greeting should own up
+  /// to immediately, because it's the one reason to look at this screen.
+  final int needsYou;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final greeting = switch (now.hour) {
+      < 12 => 'Good morning',
+      < 17 => 'Good afternoon',
+      _ => 'Good evening',
+    };
+
+    final needs = needsYou > 0;
+    final color = needs ? scheme.error : scheme.primary;
+    final stateLabel = needs
+        ? '$needsYou NEED YOU'
+        : 'ALL CLEAR';
+
+    return Padding(
+      // Sits above the first SectionLabel, so it uses the label's own top
+      // rhythm rather than inventing one.
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter,
+        Space.lg,
+        Space.gutter,
+        Space.xl,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            greeting,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: Space.xs),
+          Text(
+            _friendlyDate(now),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ).mono,
+          ),
+          const SizedBox(height: Space.md),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                stateLabel,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.8,
+                  color: color,
+                ).mono,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Today's date as a phrase, e.g. "Saturday, Aug 8". Hand-rolled rather than
+/// intl so the header needs no date-package dependency or locale setup.
+String _friendlyDate(DateTime d) {
+  const weekdays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${weekdays[d.weekday - 1]}, ${months[d.month - 1]} ${d.day}';
 }
 
 /// How much room the floating "add server" button needs at the foot of the
