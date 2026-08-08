@@ -10,13 +10,15 @@ import '../../../core/widgets/status_mark.dart';
 import '../../../data/bridge/models/snapshot.dart';
 import '../../inbox/widgets/agent_avatar.dart';
 
-/// The height of a [AgentRow.compact] row.
+/// The floor for a [AgentRow.compact] row, and the height of the expander that
+/// follows a capped section.
 ///
-/// 48, not 44. 44 is the *minimum* comfortable tap target, and a list built
-/// exactly at the minimum is a list you have to aim at — the first pass landed
-/// there and read as cramped. Four pixels back is most of the comfort for
-/// almost none of the density.
-const double kCompactRowHeight = 48;
+/// A floor rather than a fixed height: the row now carries two lines and sizes
+/// to them. It matters when a row has almost nothing to say — no project, no
+/// age — and would otherwise collapse to something you have to aim at. 44 is
+/// the *minimum* comfortable tap target and a list built exactly at the minimum
+/// reads as cramped, so this sits above it.
+const double kCompactRowHeight = 52;
 
 /// One agent, as a row. **The** agent row — there is not a second one.
 ///
@@ -103,58 +105,85 @@ class AgentRow extends StatelessWidget {
     return compact ? _buildCompact(context) : _buildFull(context);
   }
 
+  /// The idle variant: the same two lines, at a lower rank.
+  ///
+  /// It was one line, and that was over-compressed — the title, the project,
+  /// the branch and the age all competed for one row's width, so the two things
+  /// that identify an agent both truncated at once ("Set up mlx serve for
+  /// Dee…", "feat/transcript-s…"). The branch is precisely what tells two rows
+  /// in the same repo apart, so losing it costs the row its point.
+  ///
+  /// So it is structurally the same as [_buildFull] now — title and status on
+  /// the first line, project and age on the second — and **the hierarchy comes
+  /// from weight instead of line count**: a smaller marker, a dimmer title, the
+  /// status as a bare dot with no label, a meta line without the accent on the
+  /// branch, tighter padding, and no card of its own (compact rows share one
+  /// panel). Everything that says "secondary" says it quietly, and the row
+  /// still reads.
   Widget _buildCompact(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Branch if the bridge knows it, else the project folder — the one piece of
-    // "where" that fits on a line, and the piece that tells two agents in the
-    // same repo apart.
-    final where = [
-      agent.gitLabel,
-      if (serverName != null && serverName!.isNotEmpty) serverName!,
-    ].where((s) => s.isNotEmpty).join(' · ');
-
     return InkWell(
       onTap: onTap,
-      child: SizedBox(
-        height: kCompactRowHeight,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: kCompactRowHeight),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 11),
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // A marker rather than the full avatar: still says which agent
-              // this is, at a size that does not set the row's height.
-              AgentAvatar(agent: agent.agent, radius: 9),
+              // A marker rather than the full-size avatar: still says which
+              // agent this is, at a weight that does not compete with the
+              // working rows above.
+              Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: AgentAvatar(agent: agent.agent, radius: 9),
+              ),
               const SizedBox(width: 10),
               Expanded(
-                flex: 3,
-                child: Text(
-                  agent.displayTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w500,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            agent.displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w500,
+                              // Dimmer than a working row's title. This is the
+                              // main carrier of the hierarchy now that the line
+                              // counts match.
+                              color: scheme.onSurface.withValues(alpha: 0.78),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: Space.md),
+                        // The dot, without its label: the section heading above
+                        // already says IDLE, so the word would be the same
+                        // word on every row.
+                        StatusMark(agent.agentStatus, withLabel: false),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _ProjectLine(
+                            agent: agent,
+                            serverName: serverName,
+                            muted: true,
+                          ),
+                        ),
+                        const SizedBox(width: Space.md),
+                        AgentAge(agent.sinceLastActivity),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              if (where.isNotEmpty) ...[
-                const SizedBox(width: Space.md),
-                Flexible(
-                  flex: 2,
-                  child: Text(
-                    where,
-                    maxLines: 1,
-                    textAlign: TextAlign.right,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: scheme.onSurfaceVariant,
-                    ).mono,
-                  ),
-                ),
-              ],
-              const SizedBox(width: Space.md),
-              AgentAge(agent.sinceLastActivity),
             ],
           ),
         ),
@@ -265,10 +294,19 @@ class AgentRow extends StatelessWidget {
 /// the subject of it. The branch is set in mono and the accent because it is a
 /// git ref; the repo and the server are prose, because they are names.
 class _ProjectLine extends StatelessWidget {
-  const _ProjectLine({required this.agent, required this.serverName});
+  const _ProjectLine({
+    required this.agent,
+    required this.serverName,
+    this.muted = false,
+  });
 
   final Agent agent;
   final String? serverName;
+
+  /// Drop the accent from the branch. The mono face still marks it as an
+  /// identifier — which is the part doing the work of telling two rows apart —
+  /// but an idle row should not carry the same colour as a working one.
+  final bool muted;
 
   @override
   Widget build(BuildContext context) {
@@ -293,7 +331,7 @@ class _ProjectLine extends StatelessWidget {
           text: branch,
           style: TextStyle(
             fontSize: 12,
-            color: scheme.primary,
+            color: muted ? scheme.onSurfaceVariant : scheme.primary,
             fontWeight: FontWeight.w500,
           ).mono,
         ),

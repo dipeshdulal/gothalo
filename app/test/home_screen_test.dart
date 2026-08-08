@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/connection/connection_providers.dart';
 import 'package:gothalo/core/widgets/panel_row.dart';
+import 'package:gothalo/core/widgets/status_mark.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
 import 'package:gothalo/features/agents/agent_groups.dart';
 import 'package:gothalo/features/agents/widgets/agent_row.dart';
@@ -322,5 +323,55 @@ void main() {
         .padding as EdgeInsets;
     // Enough for the FAB (56) plus its margin, or it lands on the last row.
     expect(padding.bottom, greaterThanOrEqualTo(88));
+  });
+
+  testWidgets('an idle row keeps two lines, so the branch is not truncated', (
+    tester,
+  ) async {
+    final idle = _agent(
+      'w1:i0',
+      title: 'Set up mlx serve for Deepseek and wire the client',
+      branch: 'feat/transcript-search',
+    );
+    await _pumpHome(tester, agents: [_working, idle]);
+
+    final row = tester
+        .widgetList<AgentRow>(find.byType(AgentRow))
+        .firstWhere((r) => r.compact);
+    // Two lines' worth. The one-line version put the title, the project, the
+    // branch and the age on one row, so the two things that identify an agent
+    // both truncated at once — and the branch is exactly what tells two rows in
+    // the same repo apart.
+    expect(
+      tester.getSize(find.byWidget(row)).height,
+      greaterThanOrEqualTo(kCompactRowHeight),
+    );
+    expect(find.text(idle.displayTitle), findsOneWidget);
+  });
+
+  testWidgets('idle is quieter than working by weight, not by line count', (
+    tester,
+  ) async {
+    await _pumpHome(
+      tester,
+      agents: [_working, _agent('w1:i0', title: 'Parked', branch: 'main')],
+    );
+
+    // Both rows are two lines now, so the separation has to come from weight.
+    // The status is a bare dot on idle and a dot-plus-label on working: the
+    // section heading already says IDLE, so the word would be the same word on
+    // every row.
+    final marks = tester.widgetList<StatusMark>(find.byType(StatusMark));
+    expect(marks.where((m) => m.withLabel).length, 1);
+    expect(marks.where((m) => !m.withLabel).length, 1);
+
+    // And a dimmer title.
+    final idleTitle = tester.widget<Text>(find.text('Parked'));
+    final workingTitle = tester.widget<Text>(
+      find.text('Refactoring the client'),
+    );
+    expect(idleTitle.style!.color!.a, lessThan(1.0));
+    expect(idleTitle.style!.fontWeight!.value,
+        lessThan(workingTitle.style!.fontWeight!.value));
   });
 }
