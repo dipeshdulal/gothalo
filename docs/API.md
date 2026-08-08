@@ -408,12 +408,12 @@ implement — or a known one missing its required param — must be **dropped, n
 rendered**: that is what lets a newer bridge add a source without an app release.
 
 Six sources today: `git_conflict` (an unfinished merge/rebase/cherry-pick, which
-outranks and suppresses the rest), `dev_server` (a reachable listener attributed
-to this pane), `git_dirty` (uncommitted changes), `create_pr` (a feature branch
-with a remote and work on it — the only agent-performed one), `dev_server_local`
-(a listener bound to loopback — a dimmed chip whose tap explains and names
-`--host`), and `shell_idle` (no agent, shell at its prompt, cwd inside a git work
-tree). The git-shaped ones require an agent in the pane; the dev-server ones do
+outranks and suppresses the rest), `dev_server` (a listener bound wide, reachable
+directly), `git_dirty` (uncommitted changes), `create_pr` (a feature branch with a
+remote and work on it — the only agent-performed one), `dev_server_local` (a
+listener bound to loopback: an `open_url` through a relay the bridge opens on the
+host, or a `show_note` explaining `--host` when no relay could be started), and
+`shell_idle` (no agent, shell at its prompt, cwd inside a git work tree). The git-shaped ones require an agent in the pane; the dev-server ones do
 not, since a server usually runs in a pane split off beside the agent.
 
 Errors: `400` missing `pane` · `401` bad bearer · `404` no such pane, or a bridge

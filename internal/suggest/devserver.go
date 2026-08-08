@@ -21,15 +21,22 @@ const maxDevServerChips = 2
 // the observation reached here. What is left is presentation and ranking, which
 // is exactly the part that belongs in the same place as every other chip.
 //
-// Two outcomes, and the split is the same one the port scan already made:
+// Three outcomes now, and the middle one is what the relay bought:
 //
-//   - Reachable (`url` present) → "Open :5173", straight to the system browser.
-//   - Loopback (`url` absent) → a note. The server is genuinely up, and "vite is
-//     on :5174, it's just bound to 127.0.0.1" is the answer to the question the
-//     user is actually asking when the preview chip they expected isn't there.
-//     Hiding it would leave them guessing; showing it as a tappable chip that
-//     does nothing would break the rule the whole surface rests on. So it is a
-//     chip whose action is to explain, and the note names the fix.
+//   - Bound wide, reachable directly (`url` present, not relayed) → "Open :5173",
+//     straight to the system browser. The fastest path, and it stays the one
+//     taken whenever it exists.
+//   - Bound to loopback but relayed (`url` present, relayed) → "Open :8124", via
+//     a listener the bridge opened and splices to 127.0.0.1. The chip is a link
+//     rather than an explanation. The explanation survives in `note`, because a
+//     user who would rather rebind than proxy still wants to know about
+//     `--host` — the app hangs it off a long press.
+//   - Bound to loopback with no relay (`url` absent) → a note, as before. The
+//     server is genuinely up, and "vite is on :5174, it's just bound to
+//     127.0.0.1" is the answer to the question the user is actually asking when
+//     the chip they expected isn't a link. Hiding it would leave them guessing;
+//     showing it as a tappable chip that does nothing would break the rule the
+//     whole surface rests on.
 func devServers(p Pane) []Suggestion {
 	out := make([]Suggestion, 0, len(p.Servers))
 	for _, s := range p.Servers {
@@ -40,7 +47,9 @@ func devServers(p Pane) []Suggestion {
 			break
 		}
 		port := ":" + strconv.Itoa(s.Port)
-		if s.Loopback || s.URL == "" {
+		switch {
+		case s.URL == "":
+			// Up, and nothing can reach it — not even through the bridge.
 			out = append(out, Suggestion{
 				Kind:      KindDevServerLocal,
 				Performer: PerformerApp,
@@ -53,20 +62,37 @@ func devServers(p Pane) []Suggestion {
 				},
 				Rank: RankDevServerLocal,
 			})
-			continue
+		case s.Loopback:
+			// Reachable only because the bridge is dialling 127.0.0.1 for you.
+			// Still KindDevServerLocal: the icon stays distinct, the chip ranks
+			// below a direct one, and the app knows a note is attached.
+			out = append(out, Suggestion{
+				Kind:      KindDevServerLocal,
+				Performer: PerformerApp,
+				Label:     "Open " + port,
+				Detail:    detail(s.Proc, "via the bridge"),
+				Action:    ActionOpenURL,
+				Params: map[string]string{
+					"url":  s.URL,
+					"port": strconv.Itoa(s.Port),
+					"note": relayedNote(s),
+				},
+				Rank: RankDevServerLocal,
+			})
+		default:
+			out = append(out, Suggestion{
+				Kind:      KindDevServer,
+				Performer: PerformerApp,
+				Label:     "Open " + port,
+				Detail:    detail(s.Proc, "serving"),
+				Action:    ActionOpenURL,
+				Params: map[string]string{
+					"url":  s.URL,
+					"port": strconv.Itoa(s.Port),
+				},
+				Rank: RankDevServer,
+			})
 		}
-		out = append(out, Suggestion{
-			Kind:      KindDevServer,
-			Performer: PerformerApp,
-			Label:     "Open " + port,
-			Detail:    detail(s.Proc, "serving"),
-			Action:    ActionOpenURL,
-			Params: map[string]string{
-				"url":  s.URL,
-				"port": strconv.Itoa(s.Port),
-			},
-			Rank: RankDevServer,
-		})
 	}
 	// Listeners arrive sorted by port, and the ranks above are per-kind
 	// constants, so a pane serving on 5173 and 5174 keeps that order through
@@ -93,6 +119,26 @@ func detail(proc, state string) string {
 // is already on the chip. A phone is the worst place to work out that Vite
 // defaults to 127.0.0.1 and that `--host` is the fix, and it is the best place
 // to be told.
+// relayedNote is what a long press on a relayed chip says: the link works, here
+// is what it is actually doing, and here is how to stop needing it.
+//
+// Kept rather than dropped once the chip became a link, because "your server is
+// bound to localhost" is still true and still worth acting on — the relay is a
+// convenience, and a direct bind is faster, has no extra hop, and survives the
+// bridge restarting.
+func relayedNote(s Server) string {
+	who := "This server"
+	if s.Proc != "" {
+		who = s.Proc
+	}
+	return who + " is bound to 127.0.0.1, so the phone cannot reach it directly. " +
+		"The bridge is relaying it: your browser talks to the bridge, and the " +
+		"bridge dials 127.0.0.1 on the host.\n\n" +
+		"That works, including hot reload. To skip the extra hop, restart the " +
+		"server bound to all interfaces (most dev servers take --host, or a " +
+		"host of 0.0.0.0) and the chip will link straight to it."
+}
+
 func localOnlyNote(s Server) string {
 	who := "This server"
 	if s.Proc != "" {

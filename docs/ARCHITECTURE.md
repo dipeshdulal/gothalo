@@ -26,6 +26,7 @@ internal/
 ├── imagedrop/          land an uploaded image in the agent's cwd -> a path it can read
 ├── gitbranch/          is a branch safe to delete, and delete it (Herdr has no branches)
 ├── ports/              lsof + probe + process-tree walk -> the host's dev servers, per pane
+├── preview/            relays a loopback-bound dev server onto the tailnet (auth + WS)
 ├── suggest/            pane observation (servers + git + foreground) -> one-tap actions (GET /suggestions)
 ├── notify/             bus consumer: dismiss stale "blocked" pushes
 └── web/                embedded web-push receiver page (go:embed)

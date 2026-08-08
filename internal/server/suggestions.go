@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -197,11 +198,59 @@ func (s *Server) paneServers(ctx context.Context, pane, clientHost string) []sug
 		if l.Pane != pane {
 			continue
 		}
-		out = append(out, suggest.Server{
+		srv := suggest.Server{
 			Port: l.Port, Proc: l.Proc, URL: l.URL, Loopback: l.Loopback,
-		})
+		}
+		// A loopback-bound server has no URL of its own — nothing off this host
+		// can reach it however it is addressed. The bridge can, because it runs
+		// here, so it opens a relay and hands back a link to that instead.
+		//
+		// Only for loopback: a server already bound wide keeps its DIRECT url.
+		// Relaying it would add a hop, a listener and a token exchange to reach
+		// something the phone can already dial, which is worse on every axis.
+		if srv.Loopback && srv.URL == "" {
+			if u := s.previews.URLFor(listenAddrFor(clientHost), clientHost, l.Port); u != "" {
+				srv.URL, srv.Relayed = u, true
+			}
+		}
+		out = append(out, srv)
 	}
 	return out
+}
+
+// listenAddrFor resolves the host the caller reached us on to a literal address
+// the bridge can bind a relay to.
+//
+// Binding *that* address rather than 0.0.0.0 is the point: it exposes the relay
+// exactly where the bridge is already reachable and no wider. A bridge behind
+// `tailscale serve` is not on the LAN, and its previews should not be either —
+// a wildcard bind would put a dev server on every interface the machine has,
+// including whatever café network it is on.
+//
+// A name resolves through the host's own resolver, which is what makes a
+// MagicDNS name work: it answers with this node's tailnet address. Failure
+// returns "", which means no relay and a chip that explains itself instead —
+// the honest degradation.
+func listenAddrFor(host string) string {
+	if host == "" {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return host
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		log.Warn("preview: could not resolve the caller's host", "host", host, "err", err)
+		return ""
+	}
+	for _, a := range addrs {
+		// Skip a resolver that answers with loopback: binding there would give
+		// a relay only the host itself could reach, which is where we started.
+		if !ports.IsLoopbackHost(a) {
+			return a
+		}
+	}
+	return ""
 }
 
 // foregroundCwd picks the pane's working directory out of `pane.process_info`.

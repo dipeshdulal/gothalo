@@ -54,6 +54,15 @@ class PaneSuggestionsBar extends ConsumerWidget {
           itemBuilder: (context, i) => _SuggestionChip(
             suggestion: suggestions[i],
             onTap: () => runSuggestion(context, ref, suggestions[i]),
+            // A chip that carries BOTH an action and a note has something to
+            // explain beyond what it does — today that is a relayed dev server,
+            // where the link works but rebinding the server is still the better
+            // fix. Long press rather than a second chip: the row must not grow
+            // a column of asterisks.
+            onLongPress: suggestions[i].note.isNotEmpty &&
+                    suggestions[i].action != 'show_note'
+                ? () => showSuggestionNote(context, suggestions[i])
+                : null,
           ),
         ),
       ),
@@ -123,23 +132,34 @@ Future<void> runSuggestion(
             : null,
       );
     case 'show_note':
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(suggestion.label),
-          content: Text(suggestion.note),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
+      await showSuggestionNote(context, suggestion);
     // No default: an unknown action never reaches here (the client drops it),
     // and if one ever did, doing nothing beats guessing.
   }
 }
+
+/// Show a suggestion's [PaneSuggestion.note].
+///
+/// Reached two ways, which is why it is a function rather than a case: as the
+/// whole action of a `show_note` chip, and as the long press on a chip that
+/// also does something — a relayed dev server opens, and explains what the
+/// relay is doing and how to stop needing it.
+Future<void> showSuggestionNote(
+  BuildContext context,
+  PaneSuggestion suggestion,
+) => showDialog<void>(
+  context: context,
+  builder: (ctx) => AlertDialog(
+    title: Text(suggestion.label),
+    content: SingleChildScrollView(child: Text(suggestion.note)),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(ctx).pop(),
+        child: const Text('OK'),
+      ),
+    ],
+  ),
+);
 
 /// The agent kind running in [pane] ("claude"), for a sheet that says who will
 /// carry the instruction out. Falls back to the generic word rather than
@@ -172,10 +192,18 @@ String _paneLabel(WidgetRef ref, String pane) {
 /// directly above the keyboard accessory bar — two-line chips would push the
 /// terminal itself around every time an agent finished a turn.
 class _SuggestionChip extends StatelessWidget {
-  const _SuggestionChip({required this.suggestion, required this.onTap});
+  const _SuggestionChip({
+    required this.suggestion,
+    required this.onTap,
+    this.onLongPress,
+  });
 
   final PaneSuggestion suggestion;
   final VoidCallback onTap;
+
+  /// Set when the chip has something to say beyond what it does. Null leaves
+  /// the long press unhandled rather than showing an empty dialog.
+  final VoidCallback? onLongPress;
 
   /// Icons are keyed off the KIND, not the action: `git_conflict` and
   /// `git_dirty` both open the diff, and drawing them identically would throw
@@ -200,15 +228,16 @@ class _SuggestionChip extends StatelessWidget {
     // the one chip allowed to use the error colour. Everything else stays
     // neutral — a row where every chip shouts is a row you stop reading.
     final urgent = suggestion.kind == 'git_conflict';
-    // A localhost-bound dev server is dimmed: it is real information, but it is
-    // the only chip in the row that cannot take you anywhere, and it should not
-    // compete with the ones that can. Still tappable — the tap is what tells
-    // you how to fix it.
+    // A localhost-bound dev server is dimmed whether or not the bridge is
+    // relaying it. Relayed, the link works but goes through an extra hop and
+    // rebinding is still the better fix; unrelayed, it cannot take you anywhere
+    // at all. Either way it should not compete with a server the phone reaches
+    // directly. Always tappable — the tap either opens it or explains it.
     final dimmed = suggestion.kind == 'dev_server_local';
     final fg = urgent
         ? scheme.error
         : (dimmed ? scheme.onSurfaceVariant : null);
-    return ActionChip(
+    final chip = ActionChip(
       avatar: Icon(_icon, size: 15, color: fg),
       visualDensity: VisualDensity.compact,
       onPressed: onTap,
@@ -234,5 +263,10 @@ class _SuggestionChip extends StatelessWidget {
         ],
       ),
     );
+    if (onLongPress == null) return chip;
+    // GestureDetector rather than a Chip parameter: ActionChip has no
+    // onLongPress, and wrapping keeps the tap on the chip itself so the ink
+    // splash still reads as one control.
+    return GestureDetector(onLongPress: onLongPress, child: chip);
   }
 }

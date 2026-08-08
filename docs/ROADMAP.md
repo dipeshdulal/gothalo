@@ -126,13 +126,18 @@ Status legend: ✅ done · 🚧 in progress · ⬜ not started
       own loopback (caught on a real device; both layers now carry a tested
       no-loopback invariant, see D29).
 
-      Loopback-bound servers come back with no `url` and render as a dimmed chip
-      whose tap explains the bind and names `--host`. Relaying them (a bridge-side
-      TCP splice, `ssh -L` without the SSH) is deliberately deferred until that
-      chip shows how often the case actually comes up — it would open ports
-      outside the bearer check, so it should be an explicit per-server "Expose"
-      tap. When it lands it is one more `action` on an existing chip, not a new
-      mechanism, which is the point of having merged the two.
+      Loopback-bound servers are **relayed** (`internal/preview`): the bridge
+      runs on the host, so it dials `127.0.0.1` when the phone cannot, and the
+      chip becomes a link instead of an explanation. A listener per previewed
+      port rather than a path prefix — root-absolute asset paths, HMR sockets and
+      redirects to `/` all break under a prefix and cannot be rewritten
+      reliably — proxied with the target's own `Host` so dev-server host checks
+      pass, with WebSocket upgrades carried end to end so hot reload works. The
+      grant is a cookie obtained from a one-shot query parameter, because the
+      client is a browser. Relays are reaped after five minutes idle. A directly
+      reachable server is never relayed: the direct URL is faster. The
+      explanation survives on a long press, since rebinding is still the better
+      fix. See D29.
 
       The design constraint that mattered most was **restraint**: the row renders
       nothing at all for a pane with nothing to offer, which on the development

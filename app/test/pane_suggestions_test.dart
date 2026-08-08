@@ -93,6 +93,28 @@ void main() {
       expect(s.isActionable, isFalse);
     });
 
+    // A relayed loopback server: it is a link now, and it still carries the
+    // explanation for a long press. Both must survive the parse.
+    test('accepts a relayed localhost server carrying url AND note', () {
+      final s = PaneSuggestion.fromJson(
+        json(
+          kind: 'dev_server_local',
+          label: 'Open :8124',
+          detail: 'node · via the bridge',
+          action: 'open_url',
+          params: {
+            'pane': 'w1:p2',
+            'url': 'http://host.ts.net:54321/?gothalo_preview=abc',
+            'note': 'bound to 127.0.0.1 — the bridge is relaying it; use --host to skip the hop',
+          },
+        ),
+      );
+      expect(s.isActionable, isTrue);
+      expect(s.url, contains('54321'));
+      // The long press keys off this being non-empty on a non-show_note chip.
+      expect(s.note, contains('--host'));
+    });
+
     test('accepts a localhost-only server as a note', () {
       final s = PaneSuggestion.fromJson(
         json(

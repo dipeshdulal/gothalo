@@ -132,9 +132,10 @@ const Max = 3
 //
 // The order reads: something is stuck and needs a person; something is serving
 // that you probably came here to look at; something changed that you probably
-// came here to read; something is finished enough to ship; something is up but
-// unreachable, which is worth knowing but not urgent; and finally an empty pane
-// you could put an agent in.
+// came here to read; something is finished enough to ship; something is serving
+// but only through the bridge's relay — a link, but a slower one than a direct
+// bind, and rebinding remains the better fix; and finally an empty pane you
+// could put an agent in.
 //
 // Create-PR sits just under review-changes on purpose. When both fire they are
 // the two halves of one moment — the agent has finished and you are deciding
@@ -162,12 +163,21 @@ type Server struct {
 	Port int
 	// Proc is the executable name ("node", "python3") — the chip's detail line.
 	Proc string
-	// URL is where the phone should point. Empty for a loopback bind, which is
-	// the whole client-side decision: either a working URL or none, never one
-	// that cannot connect.
+	// URL is where the phone should point, and it is the whole client-side
+	// decision: either a working URL or none, never one that cannot connect.
+	//
+	// For a wildcard-bound server it is the host's own address. For a
+	// loopback-bound one it is a relay the bridge opened on the caller's behalf
+	// (see internal/preview) — and empty when no relay could be started, which
+	// is what drops the chip back to explaining the bind instead of linking to
+	// it.
 	URL string
 	// Loopback reports a bind only the host itself can reach.
 	Loopback bool
+	// Relayed is true when URL goes through the bridge rather than straight to
+	// the server. It is not cosmetic: the extra hop is worth saying out loud,
+	// and rebinding the server remains the better fix.
+	Relayed bool
 }
 
 // Pane is everything the sources are allowed to look at: the observations the

@@ -19,6 +19,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 	"github.com/dipeshdulal/gothalo/internal/pairing"
 	"github.com/dipeshdulal/gothalo/internal/ports"
+	"github.com/dipeshdulal/gothalo/internal/preview"
 	"github.com/dipeshdulal/gothalo/internal/push"
 	"github.com/dipeshdulal/gothalo/internal/store"
 	"github.com/dipeshdulal/gothalo/internal/suggest"
@@ -51,6 +52,10 @@ type Server struct {
 	// polls it alongside /snapshot, so the scan is shared across callers rather
 	// than run per request.
 	portsCache ports.Cache
+	// previews relays loopback-bound dev servers onto the tailnet, so a server
+	// the phone cannot reach becomes a link it can open. Lazily populated: no
+	// listener exists until a suggestion actually needs one.
+	previews *preview.Manager
 	// paneMap memoises the pane -> shell-pid map that attribution joins against.
 	// Separate from portsCache and longer-lived: a pane's shell pid never
 	// changes, so it survives many scans.
@@ -84,7 +89,17 @@ type Server struct {
 
 // New constructs a Server. push, bus and tl may be nil.
 func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus, tl *timeline.Log) *Server {
-	return &Server{cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm, web: web, bus: bus, timeline: tl}
+	return &Server{
+		cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm,
+		web: web, bus: bus, timeline: tl,
+		previews: preview.New(),
+	}
+}
+
+// Close releases what the Server owns outside the HTTP handler set — today the
+// preview relays, which hold real listeners. Safe to call more than once.
+func (s *Server) Close() {
+	s.previews.Close()
 }
 
 // target resolves a possibly session-qualified id ("acme/w1:p2") to its

@@ -170,7 +170,7 @@ predicate, not the plumbing.
 | `dev_server` | a reachable HTTP listener attributed to this pane | 25 | `open_url` | app |
 | `git_dirty` | uncommitted changes in the pane's repo | 20 | `open_diff` | app |
 | `create_pr` | a feature branch with a remote and work on it | 18 | `prompt_agent` | **agent** |
-| `dev_server_local` | a listener attributed to this pane, bound to loopback | 15 | `show_note` | app |
+| `dev_server_local` | a listener attributed to this pane, bound to loopback | 15 | `open_url` (relayed) or `show_note` | app |
 | `shell_idle` | no agent, shell at its prompt, cwd inside a git work tree | 10 | `start_agent` | app |
 
 The ranks live in one block in `suggest` on purpose. Now that dev servers and
@@ -236,13 +236,23 @@ absent — never a URL that cannot connect.
 
 | Condition | `kind` | `action` | App |
 |---|---|---|---|
-| reachable | `dev_server` | `open_url` | live chip → `url_launcher` → system browser |
-| loopback bind | `dev_server_local` | `show_note` | dimmed chip; tap explains and names `--host` |
+| bound wide, reachable directly | `dev_server` | `open_url` | live chip → `url_launcher` → system browser |
+| loopback bind, **relayed** | `dev_server_local` | `open_url` | dimmed chip → the bridge's relay; long press explains it |
+| loopback bind, no relay | `dev_server_local` | `show_note` | dimmed chip; tap explains and names `--host` |
 
-The dimmed state is not a degraded failure — it is the answer to the question the
+**A directly reachable server is never relayed.** Relaying it would add a hop, a
+listener and a token exchange to reach something the phone can already dial.
+The direct URL is faster and simpler, so it wins whenever it exists.
+
+The third row is not a degraded failure — it is the answer to the question the
 user is actually asking. "Vite is up on :5174, it's just bound to 127.0.0.1" is
-what you need to know when the preview chip you expected isn't tappable, and the
+what you need to know when the preview chip you expected isn't a link, and the
 note tells you the fix without dropping to the terminal.
+
+Both loopback rows keep `kind: dev_server_local`, and that is deliberate: the
+icon stays distinct from a direct server, the chip ranks below one, and the app
+knows a note is attached. What changed is the `action`, which is the only field
+it branches on.
 
 ### How the `url` is built — and the bug that made this section necessary
 
@@ -304,16 +314,110 @@ of bind and caller host, and `server.reachableHost` never returns one.
 server directly, so a WebView would add nothing and take away the address bar,
 devtools, and the tab you want to keep open while you go back to the terminal.
 
-**Why there is no relay yet.** A loopback-bound server could be reached by having
-the bridge open a tailnet-side listener and splice bytes to 127.0.0.1 — `ssh -L`
-semantics, without the SSH. That is a deliberate later step, not an oversight: it
-opens ports that sit outside the bearer-token check (the tailnet is the auth
-boundary, as it already is for `WS /attach`), so it should be an explicit
-per-server "Expose" tap rather than something the bridge does on its own for
-every loopback listener it finds. Shipping the dimmed state first is what tells
-us how often the case actually comes up. When it is built it is one more action
-(`expose_url`) on an existing chip, not a new mechanism — which is the point of
-having merged the two.
+---
+
+## The relay — how a loopback server becomes a link
+
+The bridge runs **on** the Herdr host, so it can dial `127.0.0.1` when the phone
+cannot. `internal/preview` opens a listener the phone can reach and proxies it to
+the dev server: `ssh -L` semantics, without the SSH. That is what turns the
+"…is local-only" chip from an explanation into a link.
+
+### A listener per previewed port, not a path prefix
+
+A path-prefixed proxy on the bridge's own port (`/preview/8124/…`) is the
+cheaper-looking design and it does not work:
+
+- **Absolute asset paths escape the prefix.** Vite serves `/@vite/client` and
+  `/src/main.tsx`; Next serves `/_next/static/…`; Flutter web serves
+  `/main.dart.js` and `/flutter_service_worker.js`. All root-absolute. The
+  document loads from under the prefix, then every subresource asks the bridge's
+  own root and 404s.
+- **HMR computes its own socket URL** from `location` in the browser, so it
+  dials the origin's root rather than the prefix.
+- **Redirects to `/`** — every framework that bounces a trailing-slash or
+  unauthenticated request — leave the prefix entirely.
+
+Fixing that means rewriting HTML, CSS `url()`, JS string literals and `Location`
+headers: an arms race against every framework's output that fails silently and
+differently for each one. A dedicated listener gives the app a **real origin**,
+so absolute paths, redirects, cookies, HMR sockets and service workers all just
+work — nothing is unusual from the app's point of view. The cost is an open port,
+which is what the grant below is for.
+
+### WebSockets are not optional
+
+Vite, Next and Flutter web all hot-reload over WS. A proxy that serves the HTML
+and drops the upgrade produces a page that loads and then silently stops
+updating — **worse than no link**, because it looks like it works.
+`httputil.ReverseProxy` handles a `101` by hijacking and splicing both ways, so
+upgrades pass through end to end. There is a test that dials a real WebSocket
+server through a relay and round-trips a message, rather than an assumption.
+
+### The `Host` the dev server sees
+
+The proxied request carries `Host: 127.0.0.1:<port>` — the target's own
+authority, not the relay's. Dev servers increasingly reject unknown Hosts
+(Vite's `server.allowedHosts` since the 5.4.12/6.0.9 fix, Django's
+`ALLOWED_HOSTS`, Rails' host authorization), and the point of this proxy is to
+look to the dev server exactly like the local request it already serves happily.
+The outside authority is preserved in `X-Forwarded-Host`.
+
+The cost, stated rather than discovered later: an app that builds absolute
+self-URLs out of `Host` will emit `127.0.0.1:<port>` links the phone cannot
+follow. That is rare (root-relative is the norm in dev servers) and strictly
+less common than a host check refusing the request outright.
+
+### Auth, and an honest note on the boundary
+
+Every relayed request needs a grant. A **browser** is the client here — the
+phone opens this in Brave, not in the app — so there is no way to set an
+`Authorization` header and no way to attach a query parameter to the
+subresource requests the page then makes on its own. So:
+
+1. The URL handed to the phone carries `?gothalo_preview=<token>`.
+2. The first navigation exchanges it for an `HttpOnly` cookie and **302s to the
+   same URL without the token**, so the grant does not sit in the address bar,
+   in history, or in a `Referer` the dev server receives.
+3. Everything after that — subresources, XHR, and the HMR WebSocket handshake,
+   which sends cookies for its origin like any other request — carries the
+   cookie.
+
+**This is not a new hole, and a reader should not assume it is one.** A paired
+device already has `POST /send`: arbitrary typing into any pane, which includes
+`curl localhost:8124`. Reaching a loopback port is not an escalation of what
+that bearer can already do. The relay is also bound **only to the address the
+caller reached the bridge on** — resolved from that host — so a bridge behind
+`tailscale serve` does not put a dev server on the LAN or on whatever café
+network the laptop is on.
+
+Two limits worth naming:
+
+- The grant is **one token per bridge process**, not per device. Revoking a
+  paired device does not close a preview session it already opened; that waits
+  for a bridge restart. A per-device grant registry is the fix if it ever
+  matters.
+- Cookies ignore ports, so the grant is also sent to anything else the browser
+  talks to on that host. That is harmless here: anything **on** this host can
+  already dial `127.0.0.1` directly, so the token grants it nothing it did not
+  have.
+
+### Lifecycle
+
+A relay starts lazily, the first time a suggestion needs one, and is reused for
+that (address, port) pair. It is closed after **5 minutes with no traffic**.
+
+Idle timeout is the whole answer, deliberately: a dev server that dies stops
+being connected to, so its relay goes idle and is reaped. Tying reaping to the
+port scan instead would couple two caches and still need this as a backstop,
+since a scan that stopped running would leak every listener it had opened. It
+also bounds the one genuinely unpleasant failure — a relay outliving its server,
+and a *different* process later binding that port and inheriting the tunnel.
+Five minutes keeps a preview alive across reading a page and coming back, and
+keeps that window short. `Server.Close()` releases everything at shutdown.
+
+A dev server that has gone away answers `502` with a sentence naming the port,
+rather than hanging the tab.
 
 ---
 
@@ -449,8 +553,6 @@ most: a chip that has gone stale between being drawn and being tapped.
   run wants the command retyped, and the two are indistinguishable from the
   process list alone. `suggest.Pane.Foreground` is collected and unused, which is
   where that source will hang off when it is worth the flakiness budget.
-- **The loopback relay.** See above — an action, not a mechanism, and gated on
-  evidence the dimmed state actually comes up.
 - **Event-driven cache invalidation.** The bridge runs an event bus, so pane
   create/close could invalidate the pane map directly and retire its 30s TTL, and
   a pane status change could do the same for the suggestion entry. The TTLs are

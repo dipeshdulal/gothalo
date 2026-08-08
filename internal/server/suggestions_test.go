@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -576,5 +579,168 @@ func TestSuggestionsCacheIsPerClientHost(t *testing.T) {
 	}
 	if len(s.suggestions.entries) != 2 {
 		t.Errorf("cache holds %d entries for two client hosts, want 2", len(s.suggestions.entries))
+	}
+}
+
+// TestSuggestionsRelayALoopbackServer walks the relay end to end through the
+// endpoint the app calls: a dev server bound to 127.0.0.1 comes back as a
+// tappable link, served by a listener the bridge opened and spliced.
+func TestSuggestionsRelayALoopbackServer(t *testing.T) {
+	// A "dev server" on loopback, which is exactly what httptest gives us.
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "dev server says hi from "+r.Host)
+	}))
+	defer target.Close()
+	tu, _ := url.Parse(target.URL)
+	devPort, _ := strconv.Atoi(tu.Port())
+
+	s := newTestServer(t)
+	defer s.Close()
+	s.cfg.Transport = config.Transport{Addr: "127.0.0.1:8787"}
+	s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+		ShellPID:                 100,
+		ForegroundProcessGroupID: 100,
+		ForegroundProcesses:      []herdr.PaneProcess{{PID: 100, Cwd: t.TempDir()}},
+	}}
+	s.agents = fakeAgent{err: herdr.ErrAgentNotFound}
+	// The scan's shape for a loopback bind: no URL of its own, ever.
+	s.serversFor = func(_ context.Context, _, clientHost string) []suggest.Server {
+		srv := suggest.Server{Port: devPort, Proc: "python3", Loopback: true}
+		if u := s.previews.URLFor(listenAddrFor(clientHost), clientHost, devPort); u != "" {
+			srv.URL, srv.Relayed = u, true
+		}
+		return []suggest.Server{srv}
+	}
+
+	// A caller that reached us on a real interface. It has to be a real one:
+	// reachableHost refuses loopback (that is the whole point of the earlier
+	// fix), and the relay binds the address it is given.
+	iface := nonLoopbackAddr(t)
+	req := httptest.NewRequest(http.MethodGet, "/suggestions?pane=w1:p2", nil)
+	req.Host = net.JoinHostPort(iface, "8787")
+	req.Header.Set("Authorization", "Bearer admin-tok")
+	rec := httptest.NewRecorder()
+	s.handleSuggestions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var body suggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Suggestions) != 1 {
+		t.Fatalf("suggestions = %+v, want the relayed server", body.Suggestions)
+	}
+	got := body.Suggestions[0]
+	if got.Kind != suggest.KindDevServerLocal || got.Action != suggest.ActionOpenURL {
+		t.Fatalf("suggestion = %+v, want a dev_server_local that is now a link", got)
+	}
+	if got.Params["note"] == "" {
+		t.Error("the explanation was dropped once the chip became a link")
+	}
+
+	// The link actually serves the dev server — the whole claim, checked rather
+	// than asserted about a string.
+	res, err := (&http.Client{
+		Timeout: 5 * time.Second,
+		Jar:     &oneHostJar{},
+	}).Get(got.Params["url"])
+	if err != nil {
+		t.Fatalf("GET the relayed url: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d through the relay, want 200", res.StatusCode)
+	}
+	payload, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(payload), "dev server says hi") {
+		t.Errorf("body = %q, want the dev server's own response", payload)
+	}
+}
+
+// nonLoopbackAddr finds an address this machine actually has, so the relay can
+// bind it and the test can dial it. Skips rather than guesses when there is
+// none — a host with only loopback cannot serve a preview to anything, which is
+// exactly what the production code concludes too.
+func nonLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("no interface addresses: %v", err)
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.To4() == nil {
+			continue
+		}
+		return ipnet.IP.String()
+	}
+	t.Skip("this machine has no non-loopback IPv4 address")
+	return ""
+}
+
+// oneHostJar keeps the preview cookie across the token redirect, like a browser.
+type oneHostJar struct{ cookies []*http.Cookie }
+
+func (j *oneHostJar) SetCookies(_ *url.URL, cs []*http.Cookie) { j.cookies = append(j.cookies, cs...) }
+func (j *oneHostJar) Cookies(*url.URL) []*http.Cookie          { return j.cookies }
+
+// TestSuggestionsNeverEmitALoopbackURL extends the invariant added for the
+// bind-address bug to cover the relay: a relay URL is a BRIDGE host, so it must
+// pass the same test. A relay that handed out its own 127.0.0.1 listener would
+// be the original bug wearing a new hat.
+func TestSuggestionsNeverEmitALoopbackURL(t *testing.T) {
+	for _, clientHost := range []string{
+		"my-mac.tailnet.ts.net:5338", "100.88.0.122:8787",
+		"192.168.1.7:8787", "127.0.0.1:8787", "localhost:8787", "",
+	} {
+		s := newTestServer(t)
+		s.cfg.Transport = config.Transport{Addr: "127.0.0.1:8787"}
+		s.processInfo = &fakeProcessInfo{info: herdr.PaneProcessInfo{
+			ShellPID:                 100,
+			ForegroundProcessGroupID: 100,
+			ForegroundProcesses:      []herdr.PaneProcess{{PID: 100, Cwd: t.TempDir()}},
+		}}
+		s.agents = fakeAgent{err: herdr.ErrAgentNotFound}
+		s.serversFor = func(_ context.Context, _, host string) []suggest.Server {
+			// Both shapes at once: a wildcard bind and a loopback one.
+			direct := []ports.Listener{{Port: 5173, Bind: "*", Proc: "node"}}
+			ports.FillURLs(direct, host)
+			loop := suggest.Server{Port: 8124, Proc: "python3", Loopback: true}
+			if u := s.previews.URLFor(listenAddrFor(host), host, 8124); u != "" {
+				loop.URL, loop.Relayed = u, true
+			}
+			return []suggest.Server{
+				{Port: direct[0].Port, Proc: direct[0].Proc, URL: direct[0].URL},
+				loop,
+			}
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/suggestions?pane=w1:p2", nil)
+		req.Host = clientHost
+		req.Header.Set("Authorization", "Bearer admin-tok")
+		rec := httptest.NewRecorder()
+		s.handleSuggestions(rec, req)
+		s.Close()
+
+		var body suggestionsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("client=%q decode: %v", clientHost, err)
+		}
+		for _, sg := range body.Suggestions {
+			raw := sg.Params["url"]
+			if raw == "" {
+				continue
+			}
+			u, err := url.Parse(raw)
+			if err != nil {
+				t.Fatalf("client=%q unparseable url %q", clientHost, raw)
+			}
+			if ports.IsLoopbackHost(u.Hostname()) {
+				t.Errorf("client=%q kind=%s url=%q — a phone opening that reaches ITSELF",
+					clientHost, sg.Kind, raw)
+			}
+		}
 	}
 }

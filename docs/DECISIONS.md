@@ -658,9 +658,56 @@ The general lesson, worth stating because the same shape recurs: this feature
 already reasoned carefully about bind addresses — it distinguishes a
 loopback-bound server from a public one and renders them differently — and then
 composed the public one's URL out of the wrong machine's address anyway. Careful
-reasoning about a value does not transfer to code that merely *uses* it. Both
-layers now carry a tested invariant (no loopback host may ever appear in a
-`dev_server` URL) rather than an intention.
+reasoning about a value does not transfer to code that merely *uses* it. Every
+layer that produces a preview URL now carries a tested invariant (no loopback
+host may ever appear in one) rather than an intention.
+
+**A loopback-bound server is relayed, not merely explained.** The bridge runs on
+the Herdr host, so it can dial `127.0.0.1` when the phone cannot;
+`internal/preview` opens a listener the phone can reach and proxies it. The chip
+stops being an explanation and becomes a link.
+
+Three choices inside that, each of which could have gone the other way:
+
+- **A listener per previewed port, not a path prefix on the bridge.** A prefix
+  is cheaper to build and cannot be made to work: Vite, Next and Flutter web all
+  serve root-absolute asset paths, HMR computes its socket URL from `location`,
+  and every framework redirects to `/` somewhere. Making a prefix hold means
+  rewriting HTML, CSS `url()`, JS literals and `Location` headers — an arms race
+  against every framework's output that fails silently and differently for each.
+  A dedicated listener gives the app a real origin, and nothing is unusual from
+  its point of view.
+- **The proxied request carries the target's own `Host`**, not the relay's. Dev
+  servers increasingly refuse unknown Hosts (Vite's `allowedHosts`, Django's
+  `ALLOWED_HOSTS`, Rails' host authorization), and a rejected request is a hard,
+  confusing failure. Presenting as the local request the server already serves
+  happily is the predictable choice; the outside authority is preserved in
+  `X-Forwarded-Host`. The cost is an app that builds absolute self-URLs from
+  `Host`, which is rarer than a host check firing.
+- **The grant is a cookie, obtained from a one-shot query parameter.** The
+  client is a *browser*, not the app: it cannot set an `Authorization` header,
+  and it cannot attach a query parameter to the subresources the page fetches on
+  its own. So the first navigation trades the token for an `HttpOnly` cookie and
+  redirects the token out of the URL, and everything after that — including the
+  hot-reload WebSocket handshake — carries the cookie.
+
+**What the grant is honestly worth.** A paired device already has `POST /send`,
+which is arbitrary typing into any pane, which includes `curl localhost:8124`.
+Reaching a loopback port is not an escalation of what that bearer can do, and
+the gate exists so the relay is not a hole *wider* than the rest of the API —
+not because it is the only thing between the tailnet and this host. The relay
+also binds only the address the caller reached the bridge on, so a bridge behind
+`tailscale serve` does not put a dev server on the LAN.
+
+**Lifecycle is an idle timeout and nothing else.** A dev server that dies stops
+being connected to, so its relay goes idle and is reaped after five minutes.
+Tying reaping to the port scan would couple two caches and still need this as a
+backstop. It also bounds the one unpleasant failure: a relay outliving its
+server while a different process takes that port.
+
+**A directly reachable server is never relayed.** Adding a hop, a listener and a
+token exchange to reach something the phone can already dial is worse on every
+axis, so the direct URL wins whenever it exists.
 
 **What was deliberately not collapsed.** `/ports` is not folded into
 `/suggestions` as a `?host=1` mode: the host-wide list is a different question

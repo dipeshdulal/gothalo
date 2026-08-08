@@ -149,3 +149,90 @@ func TestNoServersNoChips(t *testing.T) {
 		t.Errorf("suggestions = %v, want a portless listener ignored", kinds(got))
 	}
 }
+
+// ---- the relay ----
+//
+// A loopback-bound server used to be an explanation. The bridge runs on the
+// host, so it can dial 127.0.0.1 when the phone cannot; these pin the three
+// outcomes that now exist and, above all, that the DIRECT path is unaffected.
+
+// TestRelayedLoopbackServerBecomesALink is what the relay bought.
+func TestRelayedLoopbackServerBecomesALink(t *testing.T) {
+	got := For(Pane{ID: "w1:p2", Servers: []Server{{
+		Port: 8124, Proc: "node", Loopback: true, Relayed: true,
+		URL: "http://host.ts.net:54321/?gothalo_preview=abc",
+	}}})
+	s := only(t, got, KindDevServerLocal)
+
+	if s.Action != ActionOpenURL {
+		t.Errorf("action = %q, want %q — the chip is a link now", s.Action, ActionOpenURL)
+	}
+	if s.Label != "Open :8124" {
+		t.Errorf("label = %q, want the server's own port", s.Label)
+	}
+	if s.Detail != "node · via the bridge" {
+		t.Errorf("detail = %q, want the extra hop said out loud", s.Detail)
+	}
+	if s.Params["url"] == "" {
+		t.Error("no url — the chip would be a dead button")
+	}
+	// The explanation survives: a user who would rather rebind than proxy still
+	// wants to know about --host.
+	note := s.Params["note"]
+	if !strings.Contains(note, "--host") {
+		t.Errorf("note = %q, want it to still name the fix", note)
+	}
+	if !strings.Contains(note, "relaying") {
+		t.Errorf("note = %q, want it to say what is actually happening", note)
+	}
+}
+
+// TestDirectServerIsNeverRelayed is the no-regression guarantee. A server
+// already bound wide must keep its direct URL: relaying it would add a hop, a
+// listener and a token exchange to reach something the phone can already dial.
+func TestDirectServerIsNeverRelayed(t *testing.T) {
+	got := For(Pane{ID: "w1:p2", Servers: []Server{
+		{Port: 5173, Proc: "node", URL: "http://host.ts.net:5173"},
+	}})
+	s := only(t, got, KindDevServer)
+	if s.Params["url"] != "http://host.ts.net:5173" {
+		t.Errorf("url = %q, want the direct one untouched", s.Params["url"])
+	}
+	if s.Rank != RankDevServer {
+		t.Errorf("rank = %d, want the direct rank %d", s.Rank, RankDevServer)
+	}
+	if s.Params["note"] != "" {
+		t.Errorf("a directly reachable server carries a note (%q) — nothing to explain",
+			s.Params["note"])
+	}
+}
+
+// No relay could be opened: back to explaining the bind, exactly as before.
+func TestUnrelayedLoopbackServerStillExplainsItself(t *testing.T) {
+	got := For(Pane{ID: "w1:p2", Servers: []Server{{Port: 8124, Proc: "node", Loopback: true}}})
+	s := only(t, got, KindDevServerLocal)
+	if s.Action != ActionShowNote {
+		t.Errorf("action = %q, want %q when there is no relay", s.Action, ActionShowNote)
+	}
+	if s.Params["url"] != "" {
+		t.Errorf("url = %q, want none", s.Params["url"])
+	}
+	if !strings.Contains(s.Params["note"], "--host") {
+		t.Errorf("note = %q, want it to name the fix", s.Params["note"])
+	}
+}
+
+// A relayed chip ranks below a direct one, so a pane serving both puts the
+// faster path first.
+func TestDirectOutranksRelayed(t *testing.T) {
+	got := For(Pane{ID: "w1:p2", Servers: []Server{
+		{Port: 5173, Proc: "node", URL: "http://host.ts.net:5173"},
+		{Port: 8124, Proc: "node", Loopback: true, Relayed: true, URL: "http://host.ts.net:54321/"},
+	}})
+	if len(got) != 2 {
+		t.Fatalf("suggestions = %v, want both servers", kinds(got))
+	}
+	if got[0].Kind != KindDevServer || got[1].Kind != KindDevServerLocal {
+		t.Errorf("order = %v, want the direct server first", kinds(got))
+	}
+}
