@@ -560,6 +560,19 @@ class _Breadcrumb extends StatelessWidget {
 /// "Open this directory itself", for a project you have navigated *into*. Kept
 /// as a bar rather than a row in the list because it acts on the current
 /// location, not on any of the things listed under it.
+/// The sheet's footer: what tapping it will do to the directory you are
+/// looking at, and the action.
+///
+/// Two states of one component — "X is already open → Go to it" and
+/// "Open X itself → Open here" — so they are built from one widget rather than
+/// looking like two.
+///
+/// It was a filled grey bar carrying a mint pill, which against a sheet of flat
+/// surfaces and hairlines read as a Material component nobody had converted —
+/// probably the loudest remaining Material tell in the app. It is now the same
+/// surface as the sheet, separated by a hairline rather than by a colour, with
+/// the action as a text affordance. Filled emphasis is for primary,
+/// irreversible things; going to a project you already have open is neither.
 class _OpenHereBar extends StatelessWidget {
   const _OpenHereBar({
     required this.listing,
@@ -574,32 +587,63 @@ class _OpenHereBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surfaceContainerHighest,
+    final leaf = _leaf(listing.path);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: scheme.hairline, width: 1)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 12, 10),
+        padding: const EdgeInsets.fromLTRB(20, 6, 12, 6),
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                listing.isOpen
-                    ? '${_leaf(listing.path)} is already open'
-                    : 'Open ${_leaf(listing.path)} itself',
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    if (!listing.isOpen)
+                      TextSpan(
+                        text: 'Open ',
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    // The directory is an identifier, so mono, like every other
+                    // identifier in the app.
+                    TextSpan(
+                      text: leaf,
+                      style: TextStyle(
+                        color: scheme.onSurface,
+                        fontWeight: FontWeight.w500,
+                      ).mono,
+                    ),
+                    TextSpan(
+                      text: listing.isOpen ? ' is already open' : ' itself',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: const TextStyle(fontSize: 12.5),
               ),
             ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: busy ? null : onOpen,
-              child: busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Text(listing.isOpen ? 'Go to it' : 'Open here'),
+            const SizedBox(width: Space.md),
+            // Visually light, physically not: 44dp of target under a text
+            // affordance.
+            SizedBox(
+              height: 44,
+              child: TextButton(
+                onPressed: busy ? null : onOpen,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: busy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(listing.isOpen ? 'Go to it' : 'Open here'),
+              ),
             ),
           ],
         ),

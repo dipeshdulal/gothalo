@@ -231,77 +231,85 @@ class AgentRow extends StatelessWidget {
           : (focused ? scheme.primary : null),
       selected: focused,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              AgentAvatar(agent: agent.agent, radius: 11),
-              const SizedBox(width: Space.md),
-              Expanded(
-                child: Text(
-                  agent.displayTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                    height: 1.25,
-                  ),
-                ),
-              ),
-              const SizedBox(width: Space.md),
-              if (starred) ...[
-                Icon(Icons.star, size: 12, color: scheme.primary),
-                const SizedBox(width: Space.sm),
-              ],
-              // The age and the status belong together — "done" is a state,
-              // "done · 4m" is a decision — so they share the end of the title
-              // line rather than each claiming a corner.
-              AgentAge(agent.sinceLastActivity, emphasize: blocked),
-              if (trailing case final t?) ...[
-                const SizedBox(width: Space.md),
-                t,
-              ],
-              const SizedBox(width: Space.md),
-              StatusMark(agent.agentStatus),
-              if (menu case final m?) ...[const SizedBox(width: 2), m],
-            ],
-          ),
-          const SizedBox(height: 3),
-          // Aligned under the title, not back under the avatar: the avatar
-          // column is the row's gutter, so this reads as part of the agent only
-          // when it lines up with the agent's text.
+          // Top-aligned, and outside the text column: a centred avatar — or
+          // worse, a menu button with a 48dp tap target — used to set the
+          // height of the *title line*, which pushed the meta line 18dp away
+          // from the title it belongs to while sitting flush against the
+          // activity line below it. The gap floated above the wrong thing.
           Padding(
-            padding: const EdgeInsets.only(left: 22 + Space.md),
-            child: _ProjectLine(agent: agent, serverName: serverName),
+            padding: const EdgeInsets.only(top: 1),
+            child: AgentAvatar(agent: agent.agent, radius: 11),
           ),
-          // The agent's most recent message, from the same widget and the same
-          // `/agent-state` source the project view uses, so no two screens can
-          // disagree about whether an agent is alive.
-          if (showActivity)
-            Padding(
-              padding: const EdgeInsets.only(left: 22 + Space.md),
-              child: LiveActivityLine(
-                paneId: agent.paneId,
-                status: agent.agentStatus,
-              ),
-            ),
-          if (blocked && onApprove != null) ...[
-            const SizedBox(height: Space.md),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.tonalIcon(
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  minimumSize: const Size(0, 28),
+          const SizedBox(width: Space.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        agent.displayTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                          height: 1.25,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: Space.md),
+                    if (starred) ...[
+                      Icon(Icons.star, size: 12, color: scheme.primary),
+                      const SizedBox(width: Space.sm),
+                    ],
+                    // The age and the status belong together — "done" is a
+                    // state, "done · 4m" is a decision — so they share the end
+                    // of the title line rather than each claiming a corner.
+                    AgentAge(agent.sinceLastActivity, emphasize: blocked),
+                    if (trailing case final t?) ...[
+                      const SizedBox(width: Space.md),
+                      t,
+                    ],
+                    const SizedBox(width: Space.md),
+                    StatusMark(agent.agentStatus),
+                  ],
                 ),
-                onPressed: onApprove,
-                icon: const Icon(Icons.check_circle_outline, size: 14),
-                label: const Text('Approve'),
-              ),
+                // Tight to the title: they are one thing, "this task, in this
+                // project". The activity line below gets the larger gap,
+                // because it is a different kind of content — what the agent
+                // is saying, not what it is.
+                const SizedBox(height: 2),
+                _ProjectLine(agent: agent, serverName: serverName),
+                // Carries its own 4dp top padding, which is that larger gap.
+                if (showActivity)
+                  LiveActivityLine(
+                    paneId: agent.paneId,
+                    status: agent.agentStatus,
+                  ),
+                if (blocked && onApprove != null) ...[
+                  const SizedBox(height: Space.md),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        minimumSize: const Size(0, 28),
+                      ),
+                      onPressed: onApprove,
+                      icon: const Icon(Icons.check_circle_outline, size: 14),
+                      label: const Text('Approve'),
+                    ),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
+          if (menu case final m?) ...[const SizedBox(width: 2), m],
         ],
       ),
     );

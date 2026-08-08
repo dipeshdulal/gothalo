@@ -330,10 +330,9 @@ class _OneProjectState extends ConsumerState<_OneProject> {
         ],
       );
     }
-    final tabs = snap.tabs
-        .where((t) => t.workspaceId == widget.workspaceId)
-        .toList()
-      ..sort((a, b) => a.number.compareTo(b.number));
+    final tabs =
+        snap.tabs.where((t) => t.workspaceId == widget.workspaceId).toList()
+          ..sort((a, b) => a.number.compareTo(b.number));
     // A filter pointing at a tab that has since been closed would silently show
     // nothing; fall back to everything.
     final active = tabs.any((t) => t.tabId == _onlyTab) ? _onlyTab : null;
@@ -432,8 +431,7 @@ class _ProjectQuickActions extends ConsumerWidget {
         AppActionChip(
           icon: Icons.difference_outlined,
           label: 'Changes',
-          onTap: () =>
-              context.push('/diff/${Uri.encodeComponent(agentPane!)}'),
+          onTap: () => context.push('/diff/${Uri.encodeComponent(agentPane!)}'),
         ),
       AppActionChip(
         icon: Icons.rocket_launch_outlined,
@@ -459,12 +457,8 @@ class _ProjectQuickActions extends ConsumerWidget {
         AppActionChip(
           icon: Icons.call_split,
           label: 'Start new work',
-          onTap: () => showNewWorktreeSheet(
-            context,
-            ref,
-            cwd: cwd,
-            repoLabel: project,
-          ),
+          onTap: () =>
+              showNewWorktreeSheet(context, ref, cwd: cwd, repoLabel: project),
         ),
       // Only a worktree can be finished — the repo's own checkout is not
       // something the app removes.
@@ -704,7 +698,9 @@ class _AllProjects extends StatelessWidget {
           project: named.project,
           branch: named.branch,
           needsAttention: panes.any(
-            (p) => index.agentByPane[p.paneId]?.agentStatus.needsAttention ?? false,
+            (p) =>
+                index.agentByPane[p.paneId]?.agentStatus.needsAttention ??
+                false,
           ),
         ),
       );
@@ -952,8 +948,9 @@ class _PaneIndex {
   // Terminals by what they are called, so the list is stable frame to frame
   // rather than shuffling with snapshot order.
   terminals.sort(
-    (a, b) =>
-        terminalTitle(a).toLowerCase().compareTo(terminalTitle(b).toLowerCase()),
+    (a, b) => terminalTitle(
+      a,
+    ).toLowerCase().compareTo(terminalTitle(b).toLowerCase()),
   );
   return (agents: agents, terminals: terminals);
 }
@@ -976,8 +973,7 @@ List<Widget> _paneSection({
         child: _PaneCard(
           pane: panes[i],
           agent: index.agentByPane[panes[i].paneId],
-          focused:
-              panes[i].paneId == snap.focusedPaneId || panes[i].focused,
+          focused: panes[i].paneId == snap.focusedPaneId || panes[i].focused,
           tab: index.tabById[panes[i].tabId],
           siblings: index.paneCountForTab(panes[i].tabId),
         ),
@@ -1177,15 +1173,9 @@ class _PaneCard extends ConsumerWidget {
         onApprove: a.agentStatus == AgentStatus.blocked
             ? () => approveAgent(context, ref, a)
             : null,
-        menu: _PaneMenu(
-          pane: pane,
-          agent: a,
-          tab: tab,
-          siblings: siblings,
-        ),
-        onTap: () => context.push(
-          '/transcript/${Uri.encodeComponent(pane.paneId)}',
-        ),
+        menu: _PaneMenu(pane: pane, agent: a, tab: tab, siblings: siblings),
+        onTap: () =>
+            context.push('/transcript/${Uri.encodeComponent(pane.paneId)}'),
       );
     }
     return TerminalRow(
@@ -1223,129 +1213,139 @@ class _PaneMenu extends ConsumerWidget {
     final headline = isAgent
         ? (pane.title.isNotEmpty ? pane.title : agent!.displayTitle)
         : terminalTitle(pane);
-    return PopupMenuButton<String>(
-      tooltip: isAgent ? 'Agent actions' : 'Terminal actions',
-      padding: EdgeInsets.zero,
-      iconSize: 18,
-      icon: Icon(Icons.more_horiz, color: scheme.onSurfaceVariant),
-      onSelected: (v) {
-        switch (v) {
-          case 'start-agent':
-            showStartAgentSheet(
-              context,
-              ref,
-              target: StartAgentTarget(
-                placement: StartAgentPlacement.existingPane,
-                id: pane.paneId,
-                where: 'In ${terminalTitle(pane)}',
-                defaultCwd: pane.cwd,
+    // Boxed. `PopupMenuButton` renders an `IconButton`, which keeps Material's
+    // 48dp minimum tap target however small its icon and padding — so dropped
+    // into a dense row it silently set the height of the title line, and the
+    // meta line under it drifted 18dp from the title it belongs to. A tight
+    // SizedBox wins over the IconButton's own minimum, and the row is a tap
+    // target in its own right, so the affordance is not lost.
+    return SizedBox(
+      width: 28,
+      height: 24,
+      child: PopupMenuButton<String>(
+        tooltip: isAgent ? 'Agent actions' : 'Terminal actions',
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        icon: Icon(Icons.more_horiz, color: scheme.onSurfaceVariant),
+        onSelected: (v) {
+          switch (v) {
+            case 'start-agent':
+              showStartAgentSheet(
+                context,
+                ref,
+                target: StartAgentTarget(
+                  placement: StartAgentPlacement.existingPane,
+                  id: pane.paneId,
+                  where: 'In ${terminalTitle(pane)}',
+                  defaultCwd: pane.cwd,
+                ),
+              );
+            case 'restart-agent':
+              restartAgent(context, ref, pane.paneId, kind: agent!.agent);
+            case 'stop-agent':
+              stopAgent(context, ref, pane.paneId, kind: agent!.agent);
+            case 'rename-tab':
+              renameTabDialog(
+                context,
+                ref,
+                pane.tabId,
+                currentLabel: tab?.label ?? '',
+              );
+            case 'split':
+              splitPane(context, ref, pane.paneId);
+            case 'close':
+              closePane(
+                context,
+                ref,
+                pane.paneId,
+                label: headline,
+                subject: isAgent ? 'agent' : 'terminal',
+              );
+            case 'close-tab':
+              closeTab(context, ref, pane.tabId, label: tab?.label);
+          }
+        },
+        itemBuilder: (ctx) => [
+          // Offered only on a pane with no agent in it. A pane running a dev
+          // server is rejected by the bridge, but it is a terminal either way —
+          // only an agent pane is a definitively wrong target, and it gets
+          // restart/stop instead.
+          if (!isAgent)
+            const PopupMenuItem(
+              value: 'start-agent',
+              child: ListTile(
+                leading: Icon(Icons.rocket_launch_outlined),
+                title: Text('Start an agent here'),
+                contentPadding: EdgeInsets.zero,
               ),
-            );
-          case 'restart-agent':
-            restartAgent(context, ref, pane.paneId, kind: agent!.agent);
-          case 'stop-agent':
-            stopAgent(context, ref, pane.paneId, kind: agent!.agent);
-          case 'rename-tab':
-            renameTabDialog(
-              context,
-              ref,
-              pane.tabId,
-              currentLabel: tab?.label ?? '',
-            );
-          case 'split':
-            splitPane(context, ref, pane.paneId);
-          case 'close':
-            closePane(
-              context,
-              ref,
-              pane.paneId,
-              label: headline,
-              subject: isAgent ? 'agent' : 'terminal',
-            );
-          case 'close-tab':
-            closeTab(context, ref, pane.tabId, label: tab?.label);
-        }
-      },
-      itemBuilder: (ctx) => [
-        // Offered only on a pane with no agent in it. A pane running a dev
-        // server is rejected by the bridge, but it is a terminal either way —
-        // only an agent pane is a definitively wrong target, and it gets
-        // restart/stop instead.
-        if (!isAgent)
+            ),
+          if (isAgent) ...[
+            const PopupMenuItem(
+              value: 'restart-agent',
+              child: ListTile(
+                leading: Icon(Icons.restart_alt),
+                title: Text('Restart agent'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'stop-agent',
+              child: ListTile(
+                leading: Icon(
+                  Icons.stop_circle_outlined,
+                  color: Theme.of(ctx).colorScheme.error,
+                ),
+                title: const Text('Stop agent'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ],
           const PopupMenuItem(
-            value: 'start-agent',
+            value: 'split',
             child: ListTile(
-              leading: Icon(Icons.rocket_launch_outlined),
-              title: Text('Start an agent here'),
+              leading: Icon(Icons.splitscreen_outlined),
+              title: Text('Split'),
               contentPadding: EdgeInsets.zero,
             ),
           ),
-        if (isAgent) ...[
-          const PopupMenuItem(
-            value: 'restart-agent',
-            child: ListTile(
-              leading: Icon(Icons.restart_alt),
-              title: Text('Restart agent'),
-              contentPadding: EdgeInsets.zero,
+          // A tab holding one pane is, to the user, this thing — so renaming it
+          // is unambiguous. On a split tab it is not offered, because it would
+          // silently rename the siblings too; the strip's own long-press is where
+          // a shared tab gets renamed.
+          if (pane.tabId.isNotEmpty && siblings == 1)
+            const PopupMenuItem(
+              value: 'rename-tab',
+              child: ListTile(
+                leading: Icon(Icons.drive_file_rename_outline),
+                title: Text('Rename tab'),
+                contentPadding: EdgeInsets.zero,
+              ),
             ),
-          ),
           PopupMenuItem(
-            value: 'stop-agent',
+            value: 'close',
             child: ListTile(
               leading: Icon(
-                Icons.stop_circle_outlined,
+                Icons.close,
                 color: Theme.of(ctx).colorScheme.error,
               ),
-              title: const Text('Stop agent'),
+              title: Text(isAgent ? 'Close agent' : 'Close terminal'),
               contentPadding: EdgeInsets.zero,
             ),
           ),
+          if (pane.tabId.isNotEmpty && siblings > 1)
+            PopupMenuItem(
+              value: 'close-tab',
+              child: ListTile(
+                leading: Icon(
+                  Icons.close_fullscreen,
+                  color: Theme.of(ctx).colorScheme.error,
+                ),
+                title: const Text('Close tab'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
         ],
-        const PopupMenuItem(
-          value: 'split',
-          child: ListTile(
-            leading: Icon(Icons.splitscreen_outlined),
-            title: Text('Split'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        // A tab holding one pane is, to the user, this thing — so renaming it
-        // is unambiguous. On a split tab it is not offered, because it would
-        // silently rename the siblings too; the strip's own long-press is where
-        // a shared tab gets renamed.
-        if (pane.tabId.isNotEmpty && siblings == 1)
-          const PopupMenuItem(
-            value: 'rename-tab',
-            child: ListTile(
-              leading: Icon(Icons.drive_file_rename_outline),
-              title: Text('Rename tab'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        PopupMenuItem(
-          value: 'close',
-          child: ListTile(
-            leading: Icon(
-              Icons.close,
-              color: Theme.of(ctx).colorScheme.error,
-            ),
-            title: Text(isAgent ? 'Close agent' : 'Close terminal'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        if (pane.tabId.isNotEmpty && siblings > 1)
-          PopupMenuItem(
-            value: 'close-tab',
-            child: ListTile(
-              leading: Icon(
-                Icons.close_fullscreen,
-                color: Theme.of(ctx).colorScheme.error,
-              ),
-              title: const Text('Close tab'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-      ],
+      ),
     );
   }
 }

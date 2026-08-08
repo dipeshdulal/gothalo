@@ -127,10 +127,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     final claimed = {
       for (final h in overflow.all) recentKey(h.server.id, h.agent.paneId),
     };
-    final recents = recentRows(
-      ref.watch(recentHitsProvider),
-      exclude: claimed,
-    );
+    final recents = recentRows(ref.watch(recentHitsProvider), exclude: claimed);
     claimed.addAll(recents.map((r) => r.key));
 
     // The rest of the flock, grouped by what it is doing. Ordered inside each
@@ -156,105 +153,113 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
               Text('gothalo'),
             ],
           ),
-          actions: [
-            IconButton(
-              tooltip: 'Pair via QR',
-              onPressed: () => context.push('/pair'),
-              icon: const Icon(Icons.qr_code_scanner),
-            ),
-          ],
+          // No QR shortcut here. Pairing is a setup action, not something you
+          // reach for on a populated home screen, and it is not stranded: the
+          // "+" opens the add-server sheet, which offers "Scan QR" beside
+          // manual entry. The empty state keeps both as its primary actions —
+          // a device with nothing paired cannot use the app until it pairs, so
+          // redundant-when-populated is not redundant on a fresh install.
         ),
         floatingActionButton: FloatingActionButton(
           onPressed: () => showAddServerSheet(context),
           tooltip: 'Add server manually',
           child: const Icon(Icons.add),
         ),
-        body: servers.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('$e')),
-          data: (list) {
-            if (list.isEmpty) return const _EmptyServers();
-            return RefreshIndicator(
-              onRefresh: () async => ref.invalidate(serverAgentsProvider),
-              child: ListView(
-                padding: EdgeInsets.only(
-                  top: FlatAppBar.padding(context),
-                  // Clear of the FAB, and clear of it on a gesture-nav phone
-                  // too. A flat 96 was measured from the viewport, which sits
-                  // *above* the system inset the FAB is also lifted by — so on
-                  // a device with a home indicator the button landed on the
-                  // last row. The inset has to be added, not assumed away.
-                  bottom: _fabClearance + MediaQuery.paddingOf(context).bottom,
+        // Builder, so everything below is built from a context *inside* the
+        // Scaffold body. `FlatAppBar.padding` reads the MediaQuery that
+        // `extendBodyBehindAppBar` rewrites, and this closure would otherwise
+        // capture the screen's own context, above the Scaffold — which is how
+        // the PRIORITY header ended up permanently behind the bar at rest.
+        body: Builder(
+          builder: (context) => servers.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('$e')),
+            data: (list) {
+              if (list.isEmpty) return const _EmptyServers();
+              return RefreshIndicator(
+                onRefresh: () async => ref.invalidate(serverAgentsProvider),
+                child: ListView(
+                  padding: EdgeInsets.only(
+                    top: FlatAppBar.padding(context),
+                    // Clear of the FAB, and clear of it on a gesture-nav phone
+                    // too. A flat 96 was measured from the viewport, which sits
+                    // *above* the system inset the FAB is also lifted by — so on
+                    // a device with a home indicator the button landed on the
+                    // last row. The inset has to be added, not assumed away.
+                    bottom:
+                        _fabClearance + MediaQuery.paddingOf(context).bottom,
+                  ),
+                  children: [
+                    // --- Priority (needs you + starred) ---
+                    SectionLabel(
+                      'Priority',
+                      trailing: _SectionAction(
+                        label: 'Manage',
+                        onTap: () => context.push('/priority'),
+                      ),
+                    ),
+                    if (hits.isEmpty)
+                      _PriorityEmpty(onManage: () => context.push('/priority'))
+                    else ...[
+                      for (final h in overflow.visible)
+                        AgentRow(
+                          agent: h.agent,
+                          starred: h.starred,
+                          serverName: showServer ? h.server.name : null,
+                          onTap: () => _openAgent(h.server, h.agent),
+                        ),
+                      PriorityOverflowBar(
+                        overflow: overflow,
+                        onToggle: () => ref
+                            .read(priorityExpandedProvider.notifier)
+                            .toggle(),
+                      ),
+                    ],
+
+                    // --- Recent (this device's own history) ---
+                    //
+                    // Absent entirely when empty. A device that has opened
+                    // nothing, or whose recents have all been claimed above,
+                    // gets no header and no empty box — an empty shortcut is
+                    // worse than no shortcut.
+                    if (recents.isNotEmpty) ...[
+                      const SectionLabel('Recent'),
+                      for (final r in recents)
+                        AgentRow(
+                          agent: r.agent,
+                          serverName: showServer ? r.server.name : null,
+                          trailing: _ViewMark(view: r.view),
+                          onTap: () => _open(r.server, r.route),
+                        ),
+                    ],
+
+                    // --- Everything else, by state ---
+                    //
+                    // The same builder the Flock screen uses, so an agent looks
+                    // identical whichever way you reached it.
+                    ...buildAgentSections(
+                      context,
+                      ref,
+                      groups: groups,
+                      showServer: showServer,
+                      onOpen: (hit) => _openAgent(hit.server, hit.agent),
+                    ),
+
+                    // --- Servers ---
+                    const SectionLabel('Servers'),
+                    for (final s in list)
+                      _ServerTile(
+                        server: s,
+                        summary: byServer[s.id],
+                        onTap: () => _openServer(s),
+                        onEdit: () => showEditServerSheet(context, s.id),
+                        onDelete: () => _confirmDelete(s),
+                      ),
+                  ],
                 ),
-                children: [
-                  // --- Priority (needs you + starred) ---
-                  SectionLabel(
-                    'Priority',
-                    trailing: _SectionAction(
-                      label: 'Manage',
-                      onTap: () => context.push('/priority'),
-                    ),
-                  ),
-                  if (hits.isEmpty)
-                    _PriorityEmpty(onManage: () => context.push('/priority'))
-                  else ...[
-                    for (final h in overflow.visible)
-                      AgentRow(
-                        agent: h.agent,
-                        starred: h.starred,
-                        serverName: showServer ? h.server.name : null,
-                        onTap: () => _openAgent(h.server, h.agent),
-                      ),
-                    PriorityOverflowBar(
-                      overflow: overflow,
-                      onToggle: () =>
-                          ref.read(priorityExpandedProvider.notifier).toggle(),
-                    ),
-                  ],
-
-                  // --- Recent (this device's own history) ---
-                  //
-                  // Absent entirely when empty. A device that has opened
-                  // nothing, or whose recents have all been claimed above,
-                  // gets no header and no empty box — an empty shortcut is
-                  // worse than no shortcut.
-                  if (recents.isNotEmpty) ...[
-                    const SectionLabel('Recent'),
-                    for (final r in recents)
-                      AgentRow(
-                        agent: r.agent,
-                        serverName: showServer ? r.server.name : null,
-                        trailing: _ViewMark(view: r.view),
-                        onTap: () => _open(r.server, r.route),
-                      ),
-                  ],
-
-                  // --- Everything else, by state ---
-                  //
-                  // The same builder the Flock screen uses, so an agent looks
-                  // identical whichever way you reached it.
-                  ...buildAgentSections(
-                    context,
-                    ref,
-                    groups: groups,
-                    showServer: showServer,
-                    onOpen: (hit) => _openAgent(hit.server, hit.agent),
-                  ),
-
-                  // --- Servers ---
-                  const SectionLabel('Servers'),
-                  for (final s in list)
-                    _ServerTile(
-                      server: s,
-                      summary: byServer[s.id],
-                      onTap: () => _openServer(s),
-                      onEdit: () => showEditServerSheet(context, s.id),
-                      onDelete: () => _confirmDelete(s),
-                    ),
-                ],
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -497,7 +502,14 @@ class _StatsLine extends StatelessWidget {
       );
     }
     final count = summary!.agents.length;
-    return Row(
+    // Wrap, not Row: with "update bridge" *and* "N need you" on a 360dp phone
+    // this overflowed by 15px, because a Row of unbounded Texts inside a fixed
+    // column has nowhere to go. Both notes are short and both matter, so they
+    // fold onto a second line rather than one of them being clipped.
+    return Wrap(
+      spacing: 6,
+      runSpacing: 2,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(
           '$count agent${count == 1 ? '' : 's'}',
@@ -509,7 +521,6 @@ class _StatsLine extends StatelessWidget {
         // a nudge, not an alarm: everything else about the server works, so it
         // sits quietly next to the agent count rather than beside the name.
         if (needsUpgrade) ...[
-          const SizedBox(width: 6),
           const Tooltip(
             message:
                 'Update gothalo on this machine to route its notifications',
@@ -534,7 +545,6 @@ class _StatsLine extends StatelessWidget {
           ),
         ],
         if (attention > 0) ...[
-          const SizedBox(width: 8),
           Container(
             width: 6,
             height: 6,

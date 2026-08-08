@@ -7,6 +7,7 @@ import 'package:gothalo/data/bridge/models/snapshot.dart';
 // unrelated and would shadow the app's.
 import 'package:gothalo/features/inbox/inbox_providers.dart' as inbox;
 import 'package:gothalo/core/widgets/action_chip.dart';
+import 'package:gothalo/core/widgets/live_activity_line.dart';
 import 'package:gothalo/core/widgets/flat_app_bar.dart';
 import 'package:gothalo/features/agents/widgets/agent_row.dart';
 import 'package:gothalo/features/agents/widgets/terminal_row.dart';
@@ -286,6 +287,52 @@ void main() {
 
       // w1 is the plain checkout: nothing to finish.
       expect(find.text('Finish this work'), findsNothing);
+    });
+  });
+
+  group('row rhythm', () {
+    testWidgets('the meta line belongs to the title, not to what is below it', (
+      tester,
+    ) async {
+      await _pump(tester, workspaceId: 'w2');
+
+      final title = tester.getRect(find.text('Rework the vocabulary'));
+      final meta = tester.getRect(
+        find.byWidgetPredicate(
+          (w) =>
+              w is Text &&
+              (w.textSpan?.toPlainText() ?? '').contains('feat-x'),
+        ),
+      );
+      final activity = tester.getRect(find.byType(LiveActivityLine));
+
+      final toMeta = meta.top - title.bottom;
+      // A `PopupMenuButton` keeps Material's 48dp tap target however small its
+      // icon, so dropped inline it set the height of the title line and pushed
+      // the meta line 18dp below a title it sat 0dp above the next thing from.
+      // The gap floated above the wrong content.
+      expect(toMeta, lessThanOrEqualTo(4));
+      // Title and project are one thing. The activity line is a different kind
+      // of content — what the agent is *saying* rather than what it is — and
+      // gets the larger gap, which it carries as its own leading padding, so
+      // its box starts flush and its text does not.
+      expect(activity.top, greaterThanOrEqualTo(meta.bottom));
+    });
+
+    testWidgets('a terminal is never taller than an agent', (tester) async {
+      await _pump(tester, workspaceId: 'w1');
+
+      final agent = tester.getRect(find.byType(AgentRow)).height;
+      for (final t in find.byType(TerminalRow).evaluate()) {
+        // A terminal says less — a name and a location — so it cannot cost more
+        // room than an agent carrying a task, a project and a live message. It
+        // did, by half again, which on a project with five terminals is most of
+        // a screen.
+        expect(
+          tester.getRect(find.byWidget(t.widget)).height,
+          lessThan(agent),
+        );
+      }
     });
   });
 }

@@ -47,58 +47,67 @@ class TerminalRow extends StatelessWidget {
       selected: focused,
       borderColor: focused ? scheme.primary : null,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              // Sized to match the agent row's avatar so the two columns of
-              // glyphs line up rather than stepping in and out.
-              CircleAvatar(
-                radius: 11,
-                backgroundColor: scheme.wellFill,
-                child: Icon(
-                  running ? Icons.play_arrow_rounded : Icons.terminal,
-                  size: 13,
-                  color: running ? scheme.primary : scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(width: Space.md),
-              Expanded(
-                child: Text(
-                  terminalTitle(pane),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  // A command and a folder are both identifiers.
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                    height: 1.25,
-                  ).mono,
-                ),
-              ),
-              const SizedBox(width: Space.md),
-              _KindTag(running: running),
-              if (menu case final m?) ...[const SizedBox(width: 2), m],
-            ],
-          ),
-          // Where it is running, on the same indented meta line an agent row
-          // uses for its project.
-          if (pane.locationLabel.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            Padding(
-              padding: const EdgeInsets.only(left: 22 + Space.md),
-              child: Text(
-                pane.locationLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.onSurfaceVariant,
-                ).mono,
+          // Exactly the agent row's structure: glyph and menu outside the text
+          // column, so neither can inflate the title line and shove the meta
+          // line away from it. A terminal has less to say than an agent, so it
+          // must end up no taller — it was the other way round.
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: CircleAvatar(
+              radius: 11,
+              backgroundColor: scheme.wellFill,
+              child: Icon(
+                running ? Icons.play_arrow_rounded : Icons.terminal,
+                size: 13,
+                color: running ? scheme.primary : scheme.onSurfaceVariant,
               ),
             ),
-          ],
+          ),
+          const SizedBox(width: Space.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        terminalTitle(pane),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        // A command and a folder are both identifiers.
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          height: 1.25,
+                        ).mono,
+                      ),
+                    ),
+                    const SizedBox(width: Space.md),
+                    _KindTag(running: running),
+                  ],
+                ),
+                // Where it is running, tight under the name — the same pairing
+                // an agent row makes between its task and its project.
+                if (pane.locationLabel.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    pane.locationLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
+                    ).mono,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (menu case final m?) ...[const SizedBox(width: 2), m],
         ],
       ),
     );

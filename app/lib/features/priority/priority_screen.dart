@@ -55,100 +55,105 @@ class PriorityScreen extends ConsumerWidget {
       child: Scaffold(
         extendBodyBehindAppBar: true,
         appBar: FlatAppBar(title: const Text('Priority')),
-        body: RefreshIndicator(
-          onRefresh: () async => ref.invalidate(serverAgentsProvider),
-          // No screen-wide loading state: each server resolves independently, so a
-          // reachable one renders straight away instead of waiting behind a
-          // sleeping one, and each section shows that server's own reachability.
-          // A single spinner over the whole list meant one asleep machine hid
-          // every blocked agent on every other machine.
-          child: ListView(
-            padding: EdgeInsets.only(
-              top: FlatAppBar.padding(context),
-              bottom: Space.xl,
-            ),
-            children: [
-              SectionLabel(
-                'Priority',
-                trailing: hits.isEmpty
-                    ? null
-                    : Text(
-                        '${hits.length}',
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          color: scheme.onSurfaceVariant,
-                          letterSpacing: 0.4,
-                        ).mono,
-                      ),
+        // Builder: `FlatAppBar.padding` reads the MediaQuery that
+        // `extendBodyBehindAppBar` rewrites, so it has to be asked from inside
+        // the body. See `FlatAppBar.padding`.
+        body: Builder(
+          builder: (context) => RefreshIndicator(
+            onRefresh: () async => ref.invalidate(serverAgentsProvider),
+            // No screen-wide loading state: each server resolves independently, so a
+            // reachable one renders straight away instead of waiting behind a
+            // sleeping one, and each section shows that server's own reachability.
+            // A single spinner over the whole list meant one asleep machine hid
+            // every blocked agent on every other machine.
+            child: ListView(
+              padding: EdgeInsets.only(
+                top: FlatAppBar.padding(context),
+                bottom: Space.xl,
               ),
-              if (hits.isEmpty)
-                const _Hint(
-                  'Nothing needs you right now. Blocked agents appear here '
-                  'automatically; star any agent to always pin it.',
-                )
-              else ...[
-                for (final h in overflow.visible)
-                  _AgentRow(
-                    server: h.server,
-                    agent: h.agent,
-                    starred: h.starred,
-                    client: h.client,
-                    onTap: () => _open(context, ref, h.server, h.agent),
-                    onStar: () => ref
-                        .read(starredAgentsProvider.notifier)
-                        .toggle(h.server.id, h.agent.paneId),
-                  ),
-                PriorityOverflowBar(
-                  overflow: overflow,
-                  onToggle: () =>
-                      ref.read(priorityExpandedProvider.notifier).toggle(),
-                ),
-              ],
-              // The divider that used to separate Priority from the servers list
-              // is gone: spaced panels already read as separate groups, and a
-              // rule between them lands as a second, weaker edge next to the
-              // panel borders.
-              const SizedBox(height: Space.sm),
-              // All agents, grouped by server, with star toggles.
-              for (final sa in servers) ...[
+              children: [
                 SectionLabel(
-                  sa.server.name,
-                  trailing: sa.ok
+                  'Priority',
+                  trailing: hits.isEmpty
                       ? null
                       : Text(
-                          'unreachable',
+                          '${hits.length}',
                           style: TextStyle(
-                            fontSize: 10,
-                            color: scheme.error,
+                            fontSize: 10.5,
+                            color: scheme.onSurfaceVariant,
+                            letterSpacing: 0.4,
                           ).mono,
                         ),
                 ),
-                if (!sa.ok)
-                  _Hint('Couldn\'t reach ${sa.server.name}.')
-                else if (sa.agents.isEmpty)
-                  const _Hint('No agents.')
-                else
-                  for (final agent in sa.agents)
-                    Consumer(
-                      builder: (context, ref, _) {
-                        final starred = ref
-                            .watch(starredAgentsProvider.notifier)
-                            .isStarred(sa.server.id, agent.paneId);
-                        return _AgentRow(
-                          server: sa.server,
-                          agent: agent,
-                          starred: starred,
-                          client: sa.client,
-                          showServer: false,
-                          onTap: () => _open(context, ref, sa.server, agent),
-                          onStar: () => ref
-                              .read(starredAgentsProvider.notifier)
-                              .toggle(sa.server.id, agent.paneId),
-                        );
-                      },
+                if (hits.isEmpty)
+                  const _Hint(
+                    'Nothing needs you right now. Blocked agents appear here '
+                    'automatically; star any agent to always pin it.',
+                  )
+                else ...[
+                  for (final h in overflow.visible)
+                    _AgentRow(
+                      server: h.server,
+                      agent: h.agent,
+                      starred: h.starred,
+                      client: h.client,
+                      onTap: () => _open(context, ref, h.server, h.agent),
+                      onStar: () => ref
+                          .read(starredAgentsProvider.notifier)
+                          .toggle(h.server.id, h.agent.paneId),
                     ),
+                  PriorityOverflowBar(
+                    overflow: overflow,
+                    onToggle: () =>
+                        ref.read(priorityExpandedProvider.notifier).toggle(),
+                  ),
+                ],
+                // The divider that used to separate Priority from the servers list
+                // is gone: spaced panels already read as separate groups, and a
+                // rule between them lands as a second, weaker edge next to the
+                // panel borders.
+                const SizedBox(height: Space.sm),
+                // All agents, grouped by server, with star toggles.
+                for (final sa in servers) ...[
+                  SectionLabel(
+                    sa.server.name,
+                    trailing: sa.ok
+                        ? null
+                        : Text(
+                            'unreachable',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: scheme.error,
+                            ).mono,
+                          ),
+                  ),
+                  if (!sa.ok)
+                    _Hint('Couldn\'t reach ${sa.server.name}.')
+                  else if (sa.agents.isEmpty)
+                    const _Hint('No agents.')
+                  else
+                    for (final agent in sa.agents)
+                      Consumer(
+                        builder: (context, ref, _) {
+                          final starred = ref
+                              .watch(starredAgentsProvider.notifier)
+                              .isStarred(sa.server.id, agent.paneId);
+                          return _AgentRow(
+                            server: sa.server,
+                            agent: agent,
+                            starred: starred,
+                            client: sa.client,
+                            showServer: false,
+                            onTap: () => _open(context, ref, sa.server, agent),
+                            onStar: () => ref
+                                .read(starredAgentsProvider.notifier)
+                                .toggle(sa.server.id, agent.paneId),
+                          );
+                        },
+                      ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -187,7 +192,9 @@ class _AgentRow extends StatelessWidget {
     // reasonably named task.
     return PanelRow(
       onTap: onTap,
-      borderColor: agent.agentStatus == AgentStatus.blocked ? scheme.error : null,
+      borderColor: agent.agentStatus == AgentStatus.blocked
+          ? scheme.error
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -293,10 +300,7 @@ class _IdentityLine extends StatelessWidget {
             TextSpan(text: server.name),
             const TextSpan(text: '  ·  '),
           ],
-          TextSpan(
-            text: gitLabel,
-            style: TextStyle(fontSize: 11.5).mono,
-          ),
+          TextSpan(text: gitLabel, style: TextStyle(fontSize: 11.5).mono),
         ],
       ),
       maxLines: 1,

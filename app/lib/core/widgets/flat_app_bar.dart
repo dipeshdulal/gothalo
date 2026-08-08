@@ -49,21 +49,31 @@ class FlatAppBar extends AppBar {
   /// behind it needs as top padding so its first row starts below the bar
   /// rather than under it.
   ///
-  /// **Read it from the MediaQuery; do not compute it.** A `Scaffold` with
-  /// `extendBodyBehindAppBar: true` already rewrites its body's
-  /// `MediaQuery.padding.top` to the app bar's full height — status bar and
-  /// `bottom` widget included — precisely so a body laid out behind the bar can
-  /// clear it. This used to *add* `kToolbarHeight` on top of that, which
-  /// counted the bar twice: 112 where the bar was 56, and about 180 on a phone
-  /// with a status inset once a section header's own padding was added.
+  /// **Call it from inside the Scaffold's body**, and it is simply the
+  /// MediaQuery's top padding.
   ///
-  /// It was visible on every screen that uses this bar, and stark on the
-  /// project view, where the first heading sat a fifth of the way down an
-  /// otherwise empty page. A missing widget was blamed for it twice before the
-  /// number was actually measured.
+  /// This has now been wrong in both directions, for one reason: a `Scaffold`
+  /// with `extendBodyBehindAppBar: true` rewrites its body's MediaQuery — top
+  /// padding becomes the bar's full height (status inset, toolbar and any
+  /// `bottom` widget), and `viewPadding.top` is zeroed. So the answer depends
+  /// entirely on where the caller sits, and there is no formula that is right
+  /// from both sides:
   ///
-  /// No `tabs` parameter any more: the value already includes the `TabBar`,
-  /// because Scaffold takes it from the bar's `preferredSize`.
+  ///  - `padding.top + kToolbarHeight` double-counted the bar for a caller
+  ///    inside the body — 112 where the bar was 56, ~180 on a phone once a
+  ///    section header's own padding landed on top.
+  ///  - `padding.top` alone then broke every caller *outside* it. Home builds
+  ///    its list in a closure that captures the screen's own `context`, above
+  ///    the Scaffold, so it got the bare status inset and the PRIORITY header
+  ///    sat permanently behind the bar at rest.
+  ///  - `viewPadding.top + kToolbarHeight` fails the same way: Scaffold zeroes
+  ///    that too.
+  ///
+  /// So the contract is the position, not the arithmetic: **wrap the body in a
+  /// `Builder`** if the scroll view would otherwise be built from the screen's
+  /// own context. `test/app_bar_clearance_test.dart` asserts, on every screen
+  /// that uses this bar, that the first row sits below the bar at rest —
+  /// because this is invisible until someone scrolls to the top.
   static double padding(BuildContext context) =>
       MediaQuery.paddingOf(context).top;
 }
