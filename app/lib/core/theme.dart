@@ -33,8 +33,8 @@ class AppTheme {
   /// modes.
   static Color scaffoldBase(Brightness brightness) =>
       brightness == Brightness.dark
-      ? const Color(0xFF0B0F10)
-      : const Color(0xFFF4F5F4);
+      ? const Color(0xFF0A0E0F)
+      : const Color(0xFFECEEED);
 
   /// The type scale.
   ///

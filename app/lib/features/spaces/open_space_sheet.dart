@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
+import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../inbox/inbox_providers.dart';
@@ -26,10 +28,9 @@ Future<void> showOpenSpaceSheet(BuildContext context) {
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-    ),
+    // No `shape` override: the theme's own bottomSheetTheme carries the radius,
+    // and the literal 18 that used to be here disagreed with it — so this sheet
+    // was the one that did not match the others.
     builder: (_) => _OpenSpaceSheet(navContext: context),
   );
 }
@@ -215,7 +216,12 @@ class _OpenSpaceSheetState extends ConsumerState<_OpenSpaceSheet> {
                 onSelect: (s) => setState(() => _session = s),
               ),
             if (listing != null) _Breadcrumb(listing: listing),
-            const Divider(height: 1),
+            // A hairline, not a Material divider — the same edge every panel in
+            // the app is held by.
+            Container(
+              height: 1,
+              color: Theme.of(context).colorScheme.hairline,
+            ),
             Expanded(child: _body(listing)),
             if (listing != null && !_loading && _error == null)
               _OpenHereBar(
@@ -271,44 +277,50 @@ class _OpenSpaceSheetState extends ConsumerState<_OpenSpaceSheet> {
             // with a single root (the usual case) the header would be a list of
             // one naming the directory already on screen.
             if (listing.roots.length > 1)
-              for (final r in listing.roots)
-                ListTile(
-                  dense: true,
-                  leading: Icon(
-                    r.kind == 'home' ? Icons.home_outlined : Icons.folder_special_outlined,
-                    size: 20,
-                  ),
-                  title: Text(r.label),
-                  subtitle: Text(
-                    r.path,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontFamily: AppTheme.monoFamily, fontSize: 11),
-                  ),
-                  selected: r.path == listing.path,
-                  onTap: _opening ? null : () => _load(r.path),
-                ),
-            if (listing.roots.length > 1) const Divider(height: 1),
-            if (listing.canGoUp)
-              ListTile(
-                leading: const Icon(Icons.drive_folder_upload_outlined),
-                title: Text(_leaf(listing.parent)),
-                subtitle: const Text('Up one level'),
-                onTap: _opening ? null : () => _load(listing.parent),
+              PanelList(
+                rows: [
+                  for (final r in listing.roots)
+                    _BrowseRow(
+                      icon: r.kind == 'home'
+                          ? Icons.home_outlined
+                          : Icons.folder_special_outlined,
+                      label: r.label,
+                      detail: r.path,
+                      selected: r.path == listing.path,
+                      onTap: _opening ? null : () => _load(r.path),
+                    ),
+                ],
               ),
-            for (final e in listing.entries)
-              _EntryTile(
-                entry: e,
-                enabled: !_opening,
-                onOpenDir: () => _load(e.path),
-                onOpenSpace: () => _open(e.path, isRepo: e.isRepo, label: e.name),
-                onGoToSpace: () {
-                  Navigator.of(context).pop();
-                  widget.navContext.push(
-                    '/overview/${Uri.encodeComponent(e.openWorkspaceId)}',
-                  );
-                },
-              ),
+            // One panel for the whole listing, hairlines between rows. A border
+            // per row turned a directory of a dozen folders into a grid of
+            // boxes — the same density problem the projects list had, and the
+            // same fix: fewer edges, not fainter ones.
+            PanelList(
+              rows: [
+                if (listing.canGoUp)
+                  _BrowseRow(
+                    icon: Icons.drive_folder_upload_outlined,
+                    label: _leaf(listing.parent),
+                    detail: 'Up one level',
+                    monoDetail: false,
+                    onTap: _opening ? null : () => _load(listing.parent),
+                  ),
+                for (final e in listing.entries)
+                  _EntryTile(
+                    entry: e,
+                    enabled: !_opening,
+                    onOpenDir: () => _load(e.path),
+                    onOpenSpace: () =>
+                        _open(e.path, isRepo: e.isRepo, label: e.name),
+                    onGoToSpace: () {
+                      Navigator.of(context).pop();
+                      widget.navContext.push(
+                        '/overview/${Uri.encodeComponent(e.openWorkspaceId)}',
+                      );
+                    },
+                  ),
+              ],
+            ),
             if (listing.entries.isEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
@@ -369,43 +381,152 @@ class _EntryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
+    final note = entry.isOpen ? 'open' : (entry.isSymlink ? 'link' : null);
+    return InkWell(
       onTap: enabled ? onOpenDir : null,
-      leading: Icon(
-        entry.isRepo ? Icons.source_outlined : Icons.folder_outlined,
-        color: entry.isRepo ? scheme.primary : scheme.onSurfaceVariant,
-      ),
-      title: Text(
-        entry.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 15),
-      ),
-      subtitle: entry.isOpen
-          ? Text(
-              'Already open',
-              style: TextStyle(fontSize: 12, color: scheme.primary),
-            )
-          : (entry.isSymlink
-              ? Text(
-                  'Link',
-                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-                )
-              : null),
-      trailing: entry.isOpen
-          ? TextButton(
-              onPressed: enabled ? onGoToSpace : null,
-              child: const Text('Go to'),
-            )
-          : FilledButton.tonal(
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                minimumSize: const Size(0, 34),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: enabled ? onOpenSpace : null,
-              child: const Text('Open'),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(11, 4, 8, 4),
+        child: Row(
+          children: [
+            Icon(
+              entry.isRepo ? Icons.source_outlined : Icons.folder_outlined,
+              size: 16,
+              color: entry.isRepo ? scheme.primary : scheme.onSurfaceVariant,
             ),
+            const SizedBox(width: Space.md),
+            // The name takes whatever is left and truncates. It must NOT size
+            // the action beside it: sizing the trailing element off the name is
+            // what made the "Open" column zig-zag down the sheet, a different x
+            // on every row.
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      entry.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      // A directory name is an identifier — you are going to
+                      // type it, or recognise it as a path segment — so it is
+                      // set in mono like every other identifier in the app.
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 13,
+                      ).mono,
+                    ),
+                  ),
+                  if (note != null) ...[
+                    const SizedBox(width: Space.md),
+                    Text(
+                      note,
+                      style: TextStyle(
+                        fontSize: 10,
+                        letterSpacing: 0.8,
+                        fontWeight: FontWeight.w600,
+                        color: entry.isOpen
+                            ? scheme.primary
+                            : scheme.onSurfaceVariant,
+                      ).mono,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // A fixed-width, right-aligned slot: every row's action lands on
+            // the same edge whether it says "Open" or "Go to".
+            SizedBox(
+              width: _actionColumn,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 36),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: enabled
+                      ? (entry.isOpen ? onGoToSpace : onOpenSpace)
+                      : null,
+                  child: Text(entry.isOpen ? 'Go to' : 'Open'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The width every listing row reserves for its trailing action, so the column
+/// is a straight edge rather than a function of each folder's name length.
+const double _actionColumn = 62;
+
+/// A navigation row in the picker — a root, or "up one level". Same dense panel
+/// as the entries below it, so the whole listing reads as one list.
+class _BrowseRow extends StatelessWidget {
+  const _BrowseRow({
+    required this.icon,
+    required this.label,
+    required this.detail,
+    required this.onTap,
+    this.selected = false,
+    this.monoDetail = true,
+  });
+
+  final IconData icon;
+  final String label;
+  final String detail;
+  final VoidCallback? onTap;
+  final bool selected;
+  final bool monoDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final detailStyle = TextStyle(
+      fontSize: 10.5,
+      color: scheme.onSurfaceVariant,
+    );
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        color: selected ? scheme.panelFillRaised : null,
+        padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: selected ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: Space.md),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
+                  color: selected ? scheme.primary : scheme.onSurface,
+                ),
+              ),
+            ),
+            const Spacer(),
+            const SizedBox(width: Space.md),
+            Flexible(
+              child: Text(
+                detail,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textDirection: TextDirection.rtl,
+                style: monoDetail ? detailStyle.mono : detailStyle,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

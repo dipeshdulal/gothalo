@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/connection/connection_providers.dart';
 import 'package:gothalo/core/widgets/panel_row.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
+import 'package:gothalo/features/agents/agent_groups.dart';
 import 'package:gothalo/features/agents/widgets/agent_row.dart';
 import 'package:gothalo/features/priority/priority_providers.dart';
 import 'package:gothalo/features/recents/recent_providers.dart';
@@ -245,5 +246,81 @@ void main() {
     // for.
     expect(find.text('Buried but blocked'), findsOneWidget);
     expect(find.byType(AgentRow), findsNWidgets(6));
+  });
+
+  testWidgets('idle rows are dense lines in one shared panel', (tester) async {
+    final idle = [
+      for (var i = 0; i < 3; i++)
+        _agent('w1:i$i', title: 'Idle $i', branch: 'main'),
+    ];
+    await _pumpHome(tester, agents: [_working, ...idle]);
+
+    final rows = tester.widgetList<AgentRow>(find.byType(AgentRow)).toList();
+    // The working agent keeps its card; the three idle ones are compact.
+    expect(rows.where((r) => !r.compact).length, 1);
+    expect(rows.where((r) => r.compact).length, 3);
+    // One panel for all three, not three panels.
+    expect(find.byType(CompactAgentPanel), findsOneWidget);
+  });
+
+  testWidgets('a dozen idle agents are collapsed on open', (tester) async {
+    final idle = [
+      for (var i = 0; i < 12; i++)
+        _agent('w1:i$i', title: 'Idle $i', branch: 'main'),
+    ];
+    await _pumpHome(tester, agents: idle);
+
+    // Six shown, six behind the expander — nobody wants a wall of them.
+    expect(find.byType(AgentRow), findsNWidgets(kIdleVisibleRows));
+    expect(find.text('Show 6 more'), findsOneWidget);
+
+    await tester.tap(find.text('Show 6 more'));
+    await tester.pump();
+
+    expect(find.byType(AgentRow), findsNWidgets(12));
+    expect(find.text('Show less'), findsOneWidget);
+  });
+
+  testWidgets('the working section is capped too', (tester) async {
+    final working = [
+      for (var i = 0; i < 8; i++)
+        _agent('w1:w$i', title: 'Working $i',
+            status: AgentStatus.working, branch: 'main'),
+    ];
+    await _pumpHome(tester, agents: working);
+
+    expect(find.byType(AgentRow), findsNWidgets(kSectionVisibleRows));
+    expect(find.text('Show 3 more'), findsOneWidget);
+  });
+
+  testWidgets('a blocked agent past a section cap is still shown', (
+    tester,
+  ) async {
+    final rows = [
+      for (var i = 0; i < 6; i++)
+        _agent('w1:d$i', title: 'Finished $i',
+            status: AgentStatus.done, branch: 'main'),
+      _agent('w1:blocked', title: 'Buried but blocked',
+          status: AgentStatus.blocked, branch: 'main'),
+    ];
+    await _pumpHome(tester, agents: rows);
+
+    // Blocked sorts first, so it is inside the cap here — but the rule is
+    // pinned directly in vocabulary_test; this is the screen-level check that
+    // nothing needing a human is ever behind an expander.
+    expect(find.text('Buried but blocked'), findsOneWidget);
+  });
+
+  testWidgets('the list scrolls clear of the floating add button', (
+    tester,
+  ) async {
+    await _pumpHome(tester, agents: [_working]);
+
+    final padding = tester
+        .widgetList<ListView>(find.byType(ListView))
+        .first
+        .padding as EdgeInsets;
+    // Enough for the FAB (56) plus its margin, or it lands on the last row.
+    expect(padding.bottom, greaterThanOrEqualTo(88));
   });
 }

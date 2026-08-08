@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/tokens.dart';
+import '../../core/widgets/action_chip.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/start_agent_sheet.dart';
@@ -238,44 +238,12 @@ class _SuggestionChip extends StatelessWidget {
     final fg = urgent
         ? scheme.error
         : (dimmed ? scheme.onSurfaceVariant : null);
-    final chip = InkWell(
-      borderRadius: Radii.smAll,
+    final chip = AppActionChip(
+      icon: _icon,
+      label: suggestion.byAgent ? '${suggestion.label}…' : suggestion.label,
+      detail: suggestion.detail,
+      color: fg,
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          color: scheme.panelFill,
-          borderRadius: Radii.smAll,
-          border: Border.all(color: scheme.hairline),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(_icon, size: 15, color: fg),
-            const SizedBox(width: 6),
-            // The ellipsis marks an agent-performed chip: tapping it opens an
-            // editable prompt rather than doing the thing. Cheaper than a second
-            // icon, and it reads the way an ellipsis always has on a menu item.
-            Text(
-              suggestion.byAgent ? '${suggestion.label}…' : suggestion.label,
-              style: TextStyle(
-                color: fg,
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            if (suggestion.detail.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Text(
-                suggestion.detail,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
     );
     if (onLongPress == null) return chip;
     // GestureDetector rather than a Chip parameter: wrapping keeps the tap on

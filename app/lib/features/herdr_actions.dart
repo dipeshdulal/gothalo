@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/theme.dart';
 import '../data/bridge/bridge_client.dart';
@@ -154,24 +155,34 @@ Future<void> closePane(
       successMessage: 'Closed');
 }
 
-/// Close every terminal sharing one split (Herdr: a tab and all its panes).
-Future<void> closeTab(BuildContext context, WidgetRef ref, String tabId) async {
+/// Close a tab and everything in it.
+///
+/// [label] is the tab's own name when it has one, so the confirm can say which
+/// tab rather than quoting `wN:t2` — the id is an address, not a name.
+Future<void> closeTab(
+  BuildContext context,
+  WidgetRef ref,
+  String tabId, {
+  String? label,
+}) async {
+  final what = (label == null || label.trim().isEmpty)
+      ? 'this tab'
+      : 'the "${label.trim()}" tab';
   if (!await _confirm(
     context,
-    title: 'Close all in this split?',
-    message: 'This closes every terminal sharing this split on the host. '
+    title: 'Close this tab?',
+    message: 'This closes $what and every terminal in it on the host. '
         'Anything running in them stops.',
-    confirmLabel: 'Close all',
+    confirmLabel: 'Close tab',
   )) {
     return;
   }
   if (!context.mounted) return;
   await _run(context, ref, 'tab.close', {'tab_id': tabId},
-      successMessage: 'Closed');
+      successMessage: 'Tab closed');
 }
 
-/// The longest terminal name the app will send (Herdr stores it as the tab's
-/// label).
+/// The longest tab name the app will send.
 ///
 /// Herdr imposes no limit of its own and happily accepts an empty string —
 /// verified against the socket, where `tab.rename` with `""` blanks the label
@@ -193,16 +204,9 @@ String? normalizeTabLabel(String raw) {
 
 /// Prompt for a new name and rename [tabId].
 ///
-/// Herdr's unit here is the **tab**, and the app never says that word. It is
-/// only offered on a terminal whose tab holds exactly one pane — which is what
-/// everything the app creates looks like — so renaming that tab is precisely
-/// renaming that terminal, and the subject the user is given is the one they
-/// can see. The wire call is unchanged; see `_PaneCard` for where the
-/// one-pane rule is enforced.
-///
-/// Prefilled with the current name and selected, so the common case (replace
-/// it) is one keystroke and the rarer one (edit it) is still possible. No
-/// manual refresh: Herdr emits `tab.renamed`, which reaches the app over
+/// Prefilled with the tab's current name and selected, so the common case
+/// (replace it) is one keystroke and the rarer one (edit it) is still possible.
+/// No manual refresh: Herdr emits `tab.renamed`, which reaches the app over
 /// `/events` and re-snapshots like every other change.
 Future<void> renameTabDialog(
   BuildContext context,
@@ -223,7 +227,7 @@ Future<void> renameTabDialog(
     ref,
     'tab.rename',
     {'tab_id': tabId, 'label': label},
-    successMessage: 'Renamed to "$label"',
+    successMessage: 'Tab renamed to "$label"',
   );
 }
 
@@ -263,14 +267,14 @@ class _RenameTabDialogState extends State<_RenameTabDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Rename terminal'),
+      title: const Text('Rename tab'),
       content: TextField(
         controller: _controller,
         autofocus: true,
         maxLength: maxTabLabelLength,
         textInputAction: TextInputAction.done,
         decoration: const InputDecoration(
-          labelText: 'Terminal name',
+          labelText: 'Tab name',
           hintText: 'api server',
         ),
         onSubmitted: (_) => _submit(),
@@ -295,13 +299,19 @@ class _RenameTabDialogState extends State<_RenameTabDialog> {
   }
 }
 
-// `tab.create` is deliberately not wrapped here any more. It used to back a
-// "New tab" menu item sitting next to "New terminal", which was the same action
-// twice in the user's terms and Herdr's vocabulary leaking to explain the
-// difference. The one that survived is the one that also navigates you into
-// what it made: `BridgeClient.createPane(workspaceId:)`, which Herdr answers by
-// opening a tab with a shell in it — the same call, minus the second name for
-// it.
+/// Add a new tab (with its root shell) to [workspaceId].
+///
+/// **"Tab" is kept, deliberately.** The rest of this rework replaces Herdr's
+/// nouns — pane, workspace, space — because they are multiplexer vocabulary
+/// that means nothing to someone who has not run one. A tab is not that: it is
+/// a browser word, and a person who has never heard of tmux still knows what a
+/// tab is and that things live in them. Renaming it would cost the user a
+/// familiar word to save them an unfamiliar one, which is backwards. Tabs are a
+/// real feature and stay a real feature: create here, rename via
+/// [renameTabDialog], close via [closeTab], all reachable from a project.
+Future<void> newTab(BuildContext context, WidgetRef ref, String workspaceId) =>
+    _run(context, ref, 'tab.create', {'workspace_id': workspaceId},
+        successMessage: 'Tab created');
 
 /// Remove a git worktree workspace (deletes its checkout on the host), and
 /// optionally the branch it was on.
@@ -621,3 +631,40 @@ Future<bool> restartAgent(
 // agent into the checkout it just made: two calls, a partial-failure state
 // between them, and progress to show while the second one runs — none of which
 // fits [_run]'s one-call/one-snackbar shape.
+
+
+/// Create a fresh terminal in [workspaceId] and open it.
+///
+/// `/pane/new` rather than the `tab.create` proxy call, because this one hands
+/// back the pane id — which is what lets it drop you straight into what it just
+/// made instead of leaving you to find it. (Tabs are still a first-class thing;
+/// see [newTab].) No manual refresh: the live event stream surfaces the new
+/// pane on its own.
+Future<void> newTerminal(
+  BuildContext context,
+  WidgetRef ref,
+  String workspaceId,
+) async {
+  final client = ref.read(bridgeClientProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  final router = GoRouter.of(context);
+  if (client == null) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No bridge connection.')),
+    );
+    return;
+  }
+  messenger.showSnackBar(
+    const SnackBar(
+      content: Text('Opening a new terminal…'),
+      duration: Duration(seconds: 1),
+    ),
+  );
+  try {
+    final pane = await client.createPane(workspaceId: workspaceId);
+    if (!context.mounted) return;
+    router.push('/terminal/${Uri.encodeComponent(pane.paneId)}');
+  } on BridgeException catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(e.message)));
+  }
+}

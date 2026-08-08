@@ -62,31 +62,62 @@ class Motion {
 /// Flat, opaque fills for every surface, in place of Material's elevation and
 /// translucency. A panel reads as a panel because of its hairline, not because
 /// it floats or tints what is behind it.
+///
+/// **Which means the hairline has to actually read.** The first pass set the
+/// panel a hair off the page (contrast ratio 1.07) and the border at 8% (1.23
+/// against its own fill), and on a real phone six agent rows collapsed into one
+/// undifferentiated mass — you could not see where a row ended without reading
+/// the text. That is the known failure mode of dropping elevation and tinted
+/// fills: the edge inherits all the separation work, and an edge at 8% does
+/// none of it.
+///
+/// Both levers were moved, and each was tuned per theme rather than sharing a
+/// number, because they fail in opposite directions:
+///
+/// | | panel vs page | edge vs panel |
+/// |---|---|---|
+/// | dark, before | 1.073 | 1.234 |
+/// | dark, now | **1.146** | **1.908** |
+/// | light, before | 1.063 | 1.194 |
+/// | light, now | **1.123** | **1.447** |
+///
+/// (WCAG contrast ratios, `(L₁+0.05)/(L₂+0.05)`.) Dark takes a much stronger
+/// edge because a light-on-dark hairline loses far more of its apparent
+/// contrast than a dark-on-light one at the same alpha; light takes a gentler
+/// one because past roughly 1.5 a near-white surface starts reading as a
+/// wireframe — every box outlined, nothing quiet. The landed light edge
+/// resolves to `#d2d3d2` on its fill, which is ordinary border territory (a
+/// shade lighter than GitHub's `#d0d7de`), not a drawn cage.
+///
+/// `ui_foundation_test.dart` pins both ends of the range in both themes, so a
+/// future tweak that flattens this back out fails rather than shipping.
 extension AppSurfaces on ColorScheme {
   bool get _dark => brightness == Brightness.dark;
 
-  /// A resting panel or list row — a tone or two off the backdrop.
+  /// A resting panel or list row — a clear step off the backdrop.
   Color get panelFill =>
-      _dark ? const Color(0xFF11181A) : const Color(0xFFFBFCFC);
+      _dark ? const Color(0xFF161E20) : const Color(0xFFFAFBFA);
 
-  /// A raised/selected panel — the focused pane.
+  /// A raised/selected panel — the focused pane, the active server.
   Color get panelFillRaised =>
-      _dark ? const Color(0xFF172022) : const Color(0xFFFFFFFF);
+      _dark ? const Color(0xFF1F292B) : const Color(0xFFFFFFFF);
 
-  /// An inset well inside a panel — a code line, a quoted command.
+  /// An inset well inside a panel — a code line, a quoted command. Reads as
+  /// *below* the panel: darker in dark, greyer in light.
   Color get wellFill =>
-      _dark ? const Color(0xFF0B1011) : const Color(0xFFF1F3F2);
+      _dark ? const Color(0xFF0C1112) : const Color(0xFFEDEFEE);
 
   /// The 1px hairline that holds every surface's edge. Light-on-dark and
   /// dark-on-light rather than an outline colour, so it reads as a lit edge
   /// instead of a drawn border.
   Color get hairline => _dark
-      ? Colors.white.withValues(alpha: 0.08)
-      : Colors.black.withValues(alpha: 0.08);
+      ? Colors.white.withValues(alpha: 0.20)
+      : Colors.black.withValues(alpha: 0.16);
 
   /// A stronger edge, for a surface that needs to hold its own shape — the
-  /// header bar's rule, a focused control.
+  /// header bar's rule, a focused control, the divider between rows sharing
+  /// one panel.
   Color get hairlineStrong => _dark
-      ? Colors.white.withValues(alpha: 0.16)
-      : Colors.black.withValues(alpha: 0.14);
+      ? Colors.white.withValues(alpha: 0.32)
+      : Colors.black.withValues(alpha: 0.26);
 }

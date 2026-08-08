@@ -3,7 +3,7 @@ import 'package:gothalo/core/connection/connection_providers.dart';
 import 'package:gothalo/core/naming.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
 import 'package:gothalo/features/priority/priority_providers.dart';
-import 'package:gothalo/features/servers/servers_screen.dart';
+import 'package:gothalo/features/agents/agent_groups.dart';
 
 /// The vocabulary rules, as functions.
 ///
@@ -209,6 +209,86 @@ void main() {
 
     test('nothing paired is an empty list, not a crash', () {
       expect(groupAgentsByState(const []), isEmpty);
+    });
+  });
+
+  group('every section is capped, on every screen', () {
+    ServerAgentHit hit(String id, {AgentStatus status = AgentStatus.idle}) =>
+        ServerAgentHit(_server('s1'), _agent(id, status: status));
+
+    test('a collapsed section shows the cap and says what it holds back', () {
+      final rows = [for (var i = 0; i < 9; i++) hit('p$i')];
+
+      final split = SectionCap.of(rows, expanded: false, cap: 6);
+
+      expect(split.visible.length, 6);
+      expect(split.hidden, 3);
+      expect(split.hasOverflow, isTrue);
+      expect(split.capGaveWay, isFalse);
+    });
+
+    test('expanded shows everything, and keeps offering the way back', () {
+      final rows = [for (var i = 0; i < 9; i++) hit('p$i')];
+
+      final split = SectionCap.of(rows, expanded: true, cap: 6);
+
+      expect(split.visible.length, 9);
+      expect(split.hidden, 0);
+      // Still true: otherwise the control that opened the section disappears
+      // the moment it is used and there is no way to collapse it again.
+      expect(split.hasOverflow, isTrue);
+    });
+
+    test('a short section is not capped and needs no expander', () {
+      final split = SectionCap.of([hit('a'), hit('b')], expanded: false, cap: 6);
+
+      expect(split.visible.length, 2);
+      expect(split.hasOverflow, isFalse);
+    });
+
+    test('a blocked agent past the cap is never hidden — #107, everywhere', () {
+      final rows = [
+        for (var i = 0; i < 5; i++) hit('p$i'),
+        hit('buried', status: AgentStatus.blocked),
+      ];
+
+      final split = SectionCap.of(rows, expanded: false, cap: 3);
+
+      // The cut stretched from 3 to 6 to cover it, rather than burying the one
+      // row the app exists for.
+      expect(split.visible.map((h) => h.agent.paneId), contains('buried'));
+      expect(split.capGaveWay, isTrue);
+      expect(split.hidden, 0);
+    });
+
+    test('the cut is a prefix, never a re-sort', () {
+      final rows = [hit('first'), hit('second'), hit('third')];
+
+      final split = SectionCap.of(rows, expanded: false, cap: 2);
+
+      expect(split.visible.map((h) => h.agent.paneId), ['first', 'second']);
+    });
+
+    test('idle is capped more generously than the card sections', () {
+      // Idle rows are less than half the height and hide nothing urgent.
+      expect(kIdleVisibleRows, greaterThan(kSectionVisibleRows));
+      final groups = groupAgentsByState([
+        ServerAgents(
+          server: _server('s1'),
+          agents: [
+            _agent('a', status: AgentStatus.blocked),
+            _agent('b', status: AgentStatus.working),
+            _agent('c'),
+          ],
+        ),
+      ]);
+      expect(groups.map((g) => g.cap), [
+        kSectionVisibleRows,
+        kSectionVisibleRows,
+        kIdleVisibleRows,
+      ]);
+      // Only idle renders as dense shared-panel lines.
+      expect(groups.map((g) => g.compact), [false, false, true]);
     });
   });
 }

@@ -10,7 +10,10 @@ import '../../core/widgets/app_mark.dart';
 import '../../core/widgets/flat_app_bar.dart';
 import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/models/snapshot.dart';
+import '../agents/agent_groups.dart';
+import 'add_edit_server_sheet.dart';
 import '../agents/widgets/agent_row.dart';
+import '../agents/widgets/agent_sections.dart';
 import '../priority/priority_providers.dart';
 import '../priority/widgets/priority_overflow_bar.dart';
 import '../recents/recent_providers.dart';
@@ -162,7 +165,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
           ],
         ),
         floatingActionButton: FloatingActionButton(
-          onPressed: () => context.push('/servers/add'),
+          onPressed: () => showAddServerSheet(context),
           tooltip: 'Add server manually',
           child: const Icon(Icons.add),
         ),
@@ -176,7 +179,12 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
               child: ListView(
                 padding: EdgeInsets.only(
                   top: FlatAppBar.padding(context),
-                  bottom: 96,
+                  // Clear of the FAB, and clear of it on a gesture-nav phone
+                  // too. A flat 96 was measured from the viewport, which sits
+                  // *above* the system inset the FAB is also lifted by — so on
+                  // a device with a home indicator the button landed on the
+                  // last row. The inset has to be added, not assumed away.
+                  bottom: _fabClearance + MediaQuery.paddingOf(context).bottom,
                 ),
                 children: [
                   // --- Priority (needs you + starred) ---
@@ -222,24 +230,16 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                   ],
 
                   // --- Everything else, by state ---
-                  for (final group in groups) ...[
-                    SectionLabel(
-                      group.label,
-                      color: group.emphasize
-                          ? Theme.of(context).colorScheme.error
-                          : null,
-                      trailing: _Count(
-                        group.agents.length,
-                        emphasize: group.emphasize,
-                      ),
-                    ),
-                    for (final hit in group.agents)
-                      AgentRow(
-                        agent: hit.agent,
-                        serverName: showServer ? hit.server.name : null,
-                        onTap: () => _openAgent(hit.server, hit.agent),
-                      ),
-                  ],
+                  //
+                  // The same builder the Flock screen uses, so an agent looks
+                  // identical whichever way you reached it.
+                  ...buildAgentSections(
+                    context,
+                    ref,
+                    groups: groups,
+                    showServer: showServer,
+                    onOpen: (hit) => _openAgent(hit.server, hit.agent),
+                  ),
 
                   // --- Servers ---
                   const SectionLabel('Servers'),
@@ -248,7 +248,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                       server: s,
                       summary: byServer[s.id],
                       onTap: () => _openServer(s),
-                      onEdit: () => context.push('/servers/${s.id}/edit'),
+                      onEdit: () => showEditServerSheet(context, s.id),
                       onDelete: () => _confirmDelete(s),
                     ),
                 ],
@@ -261,103 +261,11 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   }
 }
 
-/// One agent on one server — the pair every home-screen section is a list of.
-class ServerAgentHit {
-  const ServerAgentHit(this.server, this.agent);
-  final ServerSummary server;
-  final Agent agent;
-
-  String get key => recentKey(server.id, agent.paneId);
-}
-
-/// A named group of agents on the home screen.
-class AgentGroup {
-  const AgentGroup({
-    required this.label,
-    required this.agents,
-    this.emphasize = false,
-  });
-
-  final String label;
-  final List<ServerAgentHit> agents;
-
-  /// Draw the header in the attention colour — true only for the group that is
-  /// waiting on a human.
-  final bool emphasize;
-}
-
-/// Every agent across every reachable server, minus [exclude], grouped by what
-/// it is doing.
+/// How much room the floating "add server" button needs at the foot of the
+/// list, before the device's own bottom inset is added on top.
 ///
-/// Three groups, in the order a person triages: **needs you** (blocked or
-/// finished), **working**, **idle**. An empty group is omitted rather than
-/// rendered as a heading with nothing under it.
-///
-/// This is a pure function of the servers it is handed so the grouping, the
-/// ordering and the exclusion can be pinned without a bridge. Ordering inside a
-/// group is [Agent.byAttentionThenRecency] — the same comparator the flock list
-/// and Priority use, because two lists of the same agents in two different
-/// orders is worse than either order is good.
-///
-/// Unreachable servers contribute nothing. Their state is reported once, in the
-/// Servers section, rather than as a hole in the middle of the agent list.
-List<AgentGroup> groupAgentsByState(
-  List<ServerAgents> servers, {
-  Set<String> exclude = const {},
-}) {
-  final needsYou = <ServerAgentHit>[];
-  final working = <ServerAgentHit>[];
-  final idle = <ServerAgentHit>[];
-
-  for (final sa in servers) {
-    if (!sa.ok) continue;
-    for (final agent in sa.agents) {
-      final hit = ServerAgentHit(sa.server, agent);
-      if (exclude.contains(hit.key)) continue;
-      switch (agent.agentStatus) {
-        case AgentStatus.blocked:
-        case AgentStatus.done:
-          needsYou.add(hit);
-        case AgentStatus.working:
-          working.add(hit);
-        case AgentStatus.idle:
-        case AgentStatus.unknown:
-          idle.add(hit);
-      }
-    }
-  }
-
-  for (final list in [needsYou, working, idle]) {
-    list.sort((a, b) => Agent.byAttentionThenRecency(a.agent, b.agent));
-  }
-
-  return [
-    if (needsYou.isNotEmpty)
-      AgentGroup(label: 'Needs you', agents: needsYou, emphasize: true),
-    if (working.isNotEmpty) AgentGroup(label: 'Working', agents: working),
-    if (idle.isNotEmpty) AgentGroup(label: 'Idle', agents: idle),
-  ];
-}
-
-/// A section header's count, in mono like every other number on the screen.
-class _Count extends StatelessWidget {
-  const _Count(this.value, {this.emphasize = false});
-
-  final int value;
-  final bool emphasize;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Text(
-      '$value',
-      style: TextStyle(
-        fontSize: 10.5,
-        color: emphasize ? scheme.error : scheme.onSurfaceVariant,
-      ).mono,
-    );
-  }
-}
+/// 16 (the FAB's margin) + 56 (the FAB) + 16 (breathing room under it).
+const double _fabClearance = 88;
 
 /// The text action that sits on a section header ("Manage"), sized to the
 /// header rather than as a full [TextButton], which would out-weigh the label
@@ -697,7 +605,7 @@ class _EmptyServers extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             TextButton.icon(
-              onPressed: () => context.push('/servers/add'),
+              onPressed: () => showAddServerSheet(context),
               icon: const Icon(Icons.add),
               label: const Text('Add manually'),
             ),

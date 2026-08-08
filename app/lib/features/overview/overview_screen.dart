@@ -13,7 +13,6 @@ import '../../core/widgets/live_activity_line.dart';
 import '../../core/widgets/panel_row.dart';
 import '../../core/widgets/status_mark.dart';
 import '../../data/bridge/bridge_client.dart';
-import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/start_agent_sheet.dart';
 import '../approvals/approve_action.dart';
@@ -142,7 +141,7 @@ class OverviewScreen extends ConsumerWidget {
             if (workspaceId != null)
               IconButton(
                 tooltip: 'New terminal',
-                onPressed: () => _newTerminal(context, ref, workspaceId!),
+                onPressed: () => newTerminal(context, ref, workspaceId!),
                 icon: const Icon(Icons.add),
               ),
             if (workspaceId != null)
@@ -158,10 +157,12 @@ class OverviewScreen extends ConsumerWidget {
                         target: StartAgentTarget(
                           placement: StartAgentPlacement.newTab,
                           id: workspaceId!,
-                          where: 'A new terminal in $project',
+                          where: 'A new tab in $project',
                           defaultCwd: projectCwd,
                         ),
                       );
+                    case 'tab':
+                      newTab(context, ref, workspaceId!);
                     case 'worktree':
                       showNewWorktreeSheet(
                         context,
@@ -186,6 +187,14 @@ class OverviewScreen extends ConsumerWidget {
                     child: ListTile(
                       leading: Icon(Icons.rocket_launch_outlined),
                       title: Text('Start an agent'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'tab',
+                    child: ListTile(
+                      leading: Icon(Icons.tab_outlined),
+                      title: Text('New tab'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
@@ -253,44 +262,90 @@ class OverviewScreen extends ConsumerWidget {
   }
 }
 
-/// One project's panes, split into the two things a person recognises: the
+/// One project's contents, split into the two things a person recognises: the
 /// **agents** working in it, and the **terminals** open in it.
 ///
-/// This replaces the tab strip. A tab is a layout detail of a screen nobody is
-/// looking at — grouping by it meant the same project's three agents could sit
-/// behind three different tabs and only one was ever visible at a time. Every
-/// pane in the project is now on one scroll, agents first because they are what
-/// you came for.
-class _OneProject extends StatelessWidget {
+/// The old layout was a `TabBar` with a `TabBarView` under it, so a project's
+/// three agents could sit behind three tabs with exactly one visible at a time —
+/// on a phone, where you came here to see what is running. Everything is now on
+/// one scroll, agents first.
+///
+/// **Tabs did not go away**; they stopped being the structure. They are a real
+/// feature and Herdr's word for them is a browser word, not multiplexer jargon,
+/// so they are a *filter* over the list: [_TabFilter] below, shown only when a
+/// project actually has more than one, and carrying rename and close on a
+/// long-press. A project with one tab shows no strip at all — a row reading "1"
+/// is a control that can do nothing.
+class _OneProject extends ConsumerStatefulWidget {
   const _OneProject({required this.snap, required this.workspaceId});
 
   final Snapshot snap;
   final String workspaceId;
 
   @override
+  ConsumerState<_OneProject> createState() => _OneProjectState();
+}
+
+class _OneProjectState extends ConsumerState<_OneProject> {
+  /// The tab being shown alone, or null for "everything in this project".
+  ///
+  /// Null is the default and the resting state: the reason for flattening the
+  /// tabs was that one-tab-at-a-time hid work. The filter is there for a
+  /// project with enough in it that you want to narrow — and for reaching a
+  /// tab's own actions.
+  String? _onlyTab;
+
+  @override
   Widget build(BuildContext context) {
-    final panes = snap.panes
-        .where((p) => p.workspaceId == workspaceId)
+    final snap = widget.snap;
+    final all = snap.panes
+        .where((p) => p.workspaceId == widget.workspaceId)
         .toList();
-    if (panes.isEmpty) {
+    if (all.isEmpty) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.only(top: FlatAppBar.padding(context)),
         children: const [
-          SizedBox(height: 96),
+          SizedBox(height: 64),
           Center(child: Text('Nothing open in this project')),
         ],
       );
     }
+    final tabs = snap.tabs
+        .where((t) => t.workspaceId == widget.workspaceId)
+        .toList()
+      ..sort((a, b) => a.number.compareTo(b.number));
+    // A filter pointing at a tab that has since been closed would silently show
+    // nothing; fall back to everything.
+    final active = tabs.any((t) => t.tabId == _onlyTab) ? _onlyTab : null;
+    final panes = active == null
+        ? all
+        : all.where((p) => p.tabId == active).toList();
+
     final index = _PaneIndex.of(snap);
     final split = _splitPanes(panes, index);
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.only(
+        // Exactly the bar's height and no more. The list starts immediately
+        // under the header — the gap that used to sit here was the tab strip's
+        // own generous chrome plus a `Column` that reserved room whether or not
+        // there was a strip to put in it.
         top: FlatAppBar.padding(context),
         bottom: Space.xl,
       ),
       children: [
+        if (tabs.length > 1)
+          _TabFilter(
+            tabs: tabs,
+            active: active,
+            counts: {
+              for (final t in tabs)
+                t.tabId: all.where((p) => p.tabId == t.tabId).length,
+            },
+            onSelect: (id) => setState(() => _onlyTab = id),
+          ),
         ..._paneSection(
           label: 'Agents',
           panes: split.agents,
@@ -307,6 +362,192 @@ class _OneProject extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// The tab strip, as a filter rather than as the page's structure.
+///
+/// `All` first and selected by default, then one chip per tab. Chips rather
+/// than a `TabBar`: a TabBar reads as "these are the only things there are",
+/// which is exactly the impression the flattening removed, and it cost ~44dp of
+/// chrome plus its own padding whether or not a project had tabs worth showing.
+///
+/// A tab's own actions — rename, close — hang off a long-press on its chip,
+/// the same gesture the old strip used, so nothing about tabs became
+/// unreachable when they stopped being the layout.
+class _TabFilter extends ConsumerWidget {
+  const _TabFilter({
+    required this.tabs,
+    required this.active,
+    required this.counts,
+    required this.onSelect,
+  });
+
+  final List<TabInfo> tabs;
+  final String? active;
+  final Map<String, int> counts;
+  final void Function(String? tabId) onSelect;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter,
+        Space.md,
+        Space.gutter,
+        Space.xs,
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _TabChip(
+              label: 'All',
+              count: counts.values.fold(0, (a, b) => a + b),
+              selected: active == null,
+              onTap: () => onSelect(null),
+            ),
+            for (final t in tabs) ...[
+              const SizedBox(width: Space.sm),
+              _TabChip(
+                label: tabLabelFor(t),
+                count: counts[t.tabId] ?? 0,
+                selected: active == t.tabId,
+                onTap: () => onSelect(t.tabId),
+                onLongPress: () => _showTabMenu(context, ref, t),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A tab's name for the strip: what it was renamed to, else `Tab 2` — never the
+/// bare `wN:t2`, and never a lone digit, which reads as a stray number rather
+/// than a control.
+String tabLabelFor(TabInfo tab) {
+  final label = tab.label.trim();
+  if (label.isNotEmpty) return label;
+  return tab.number > 0 ? 'Tab ${tab.number}' : 'Tab';
+}
+
+/// One chip in the tab strip — flat, tight-cornered, hairline-edged, in the
+/// same language as everything else. Selected lifts the fill and tints the edge
+/// with the accent rather than filling it, so colour stays on status.
+class _TabChip extends StatelessWidget {
+  const _TabChip({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+    this.onLongPress,
+  });
+
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      type: MaterialType.transparency,
+      borderRadius: Radii.smAll,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Container(
+          // 32 tall inside a 44 tap slot: the chip is small, the target is not.
+          constraints: const BoxConstraints(minHeight: 32),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? scheme.panelFillRaised : scheme.panelFill,
+            borderRadius: Radii.smAll,
+            border: Border.all(
+              color: selected ? scheme.primary : scheme.hairline,
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? scheme.primary : scheme.onSurface,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: scheme.onSurfaceVariant,
+                ).mono,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A tab's own actions, on a long-press of its chip.
+///
+/// A menu rather than a second visible control: renaming and closing a tab are
+/// occasional, and a strip of chips has no room for two affordances each. This
+/// is the same gesture the old `TabBar` used, so the capability moved with the
+/// control rather than being lost with it.
+Future<void> _showTabMenu(
+  BuildContext context,
+  WidgetRef ref,
+  TabInfo tab,
+) async {
+  final scheme = Theme.of(context).colorScheme;
+  final label = tabLabelFor(tab);
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    useSafeArea: true,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            dense: true,
+            title: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.drive_file_rename_outline),
+            title: const Text('Rename tab'),
+            onTap: () => Navigator.pop(ctx, 'rename'),
+          ),
+          ListTile(
+            leading: Icon(Icons.close, color: scheme.error),
+            title: const Text('Close tab'),
+            onTap: () => Navigator.pop(ctx, 'close'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  switch (choice) {
+    case 'rename':
+      await renameTabDialog(context, ref, tab.tabId, currentLabel: tab.label);
+    case 'close':
+      await closeTab(context, ref, tab.tabId, label: tab.label);
   }
 }
 
@@ -1086,37 +1327,6 @@ class _PaneCard extends ConsumerWidget {
         ],
       ),
     );
-  }
-}
-
-/// Create a fresh terminal in [workspaceId] and open it.
-Future<void> _newTerminal(
-  BuildContext context,
-  WidgetRef ref,
-  String workspaceId,
-) async {
-  final client = ref.read(bridgeClientProvider);
-  final messenger = ScaffoldMessenger.of(context);
-  final router = GoRouter.of(context);
-  if (client == null) {
-    messenger.showSnackBar(
-      const SnackBar(content: Text('No bridge connection.')),
-    );
-    return;
-  }
-  messenger.showSnackBar(
-    const SnackBar(
-      content: Text('Opening a new terminal…'),
-      duration: Duration(seconds: 1),
-    ),
-  );
-  try {
-    final pane = await client.createPane(workspaceId: workspaceId);
-    // No manual refresh: the live event stream surfaces the new pane on its own.
-    if (!context.mounted) return;
-    router.push('/terminal/${Uri.encodeComponent(pane.paneId)}');
-  } on BridgeException catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text(e.message)));
   }
 }
 

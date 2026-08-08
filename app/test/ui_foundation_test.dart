@@ -50,16 +50,57 @@ void main() {
         0.0722 * channel(c.b);
   }
 
-  testWidgets('a flat app bar renders and the body extends behind it', (
+  testWidgets('the app bar is frosted, and it is the only thing that blurs', (
     tester,
   ) async {
     await tester.pumpWidget(host(const SizedBox.expand()));
     await tester.pumpAndSettle();
 
     expect(find.byType(FlatAppBar), findsOneWidget);
-    // The glass era is over: no blur, no translucent material anywhere.
-    expect(find.byType(BackdropFilter), findsNothing);
+    // Exactly one blur in the whole tree, and it is inside the bar. The bar has
+    // moving content behind it by construction (the body extends underneath),
+    // and fully transparent read as broken on a phone — rows showing through
+    // the title. Everywhere else stays flat and opaque: this is a narrow
+    // reintroduction for one surface, not a return to glass.
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(FlatAppBar),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the bar scrims hard enough to read over any row', (
+    tester,
+  ) async {
+    for (final brightness in Brightness.values) {
+      await tester.pumpWidget(
+        host(const SizedBox.expand(), brightness: brightness),
+      );
+      await tester.pumpAndSettle();
+
+      final deco = tester
+          .widget<DecoratedBox>(
+            find
+                .descendant(
+                  of: find.byType(BackdropFilter),
+                  matching: find.byType(DecoratedBox),
+                )
+                .first,
+          )
+          .decoration as BoxDecoration;
+      // Blur alone leaves a red needs-you row as a red smear under the title.
+      // The scrim is what pulls any row back to a tint, so it is the number
+      // worth pinning — and it must not reach 1.0 either, or the bar is just
+      // opaque chrome and the blur is dead weight.
+      expect(deco.color!.a, greaterThan(0.8), reason: '$brightness');
+      expect(deco.color!.a, lessThan(1.0), reason: '$brightness');
+      // The hairline survived the change.
+      expect((deco.border as Border).bottom.width, 1);
+    }
   });
 
   testWidgets('FlatAppBar.padding accounts for the tab row', (tester) async {
@@ -100,15 +141,55 @@ void main() {
     }
   });
 
-  testWidgets('a panel hairline is visible against its surface in both themes', (
+  /// WCAG contrast ratio between two opaque colours.
+  double contrast(Color a, Color b) {
+    final la = luminance(a), lb = luminance(b);
+    final hi = la > lb ? la : lb;
+    final lo = la > lb ? lb : la;
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  testWidgets('a panel is separable from the page, in both themes', (
+    tester,
+  ) async {
+    // The failure this exists for: the first pass put the panel 1.07 off the
+    // page with a 1.23 edge, and six rows read as one undifferentiated mass on
+    // a real phone. When you drop elevation and tinted fills, these two numbers
+    // are the *only* things holding a row apart from its neighbour, so both are
+    // pinned rather than left to taste.
+    for (final theme in [AppTheme.dark, AppTheme.light]) {
+      final scheme = theme.colorScheme;
+      final page = AppTheme.scaffoldBase(scheme.brightness);
+      final fill = scheme.panelFill;
+      final label = '${scheme.brightness}';
+
+      expect(fill.a, 1.0, reason: label); // flat and opaque
+      expect(contrast(fill, page), greaterThan(1.09), reason: label);
+
+      final edge = Color.alphaBlend(scheme.hairline, fill);
+      expect(contrast(edge, fill), greaterThan(1.35), reason: label);
+      // And not a wireframe: past roughly 2.5 on a light surface every box
+      // reads as outlined and nothing is quiet.
+      expect(contrast(edge, fill), lessThan(2.5), reason: label);
+
+      // A selected row and an inset well both have to be tellable from the
+      // resting panel, or "focused" and "this is a code line" say nothing.
+      expect(contrast(scheme.panelFillRaised, fill), greaterThan(1.02),
+          reason: label);
+      expect(contrast(scheme.wellFill, fill), greaterThan(1.05), reason: label);
+      // The strong edge is strictly stronger than the resting one.
+      final strong = Color.alphaBlend(scheme.hairlineStrong, fill);
+      expect(contrast(strong, fill), greaterThan(contrast(edge, fill)),
+          reason: label);
+    }
+  });
+
+  testWidgets('a panel hairline renders as a 1px border, not a shadow', (
     tester,
   ) async {
     for (final brightness in Brightness.values) {
       await tester.pumpWidget(
-        host(
-          const PanelRow(child: Text('row')),
-          brightness: brightness,
-        ),
+        host(const PanelRow(child: Text('row')), brightness: brightness),
       );
 
       final deco = tester
@@ -121,21 +202,9 @@ void main() {
                 .first,
           )
           .decoration as BoxDecoration;
-      final border = deco.border as Border;
-      // A hairline: exactly 1px, not a shadow, not a 2px outline.
-      expect(border.top.width, 1);
+      expect((deco.border as Border).top.width, 1);
       expect(deco.boxShadow, isNull);
-
-      final fill = deco.color!;
-      // Flat and opaque — the anti-glass rule.
-      expect(fill.a, 1.0);
-      // Visible but subtle: composite the hairline over its surface and check
-      // the edge reads against it in both themes — or the language collapses
-      // in light mode.
-      final edge = Color.alphaBlend(border.top.color, fill);
-      final contrast = (luminance(edge) - luminance(fill)).abs();
-      expect(contrast, greaterThan(0.005), reason: 'dark: $brightness');
-      expect(contrast, lessThan(0.5));
+      expect(deco.color!.a, 1.0);
     }
   });
 
@@ -177,7 +246,14 @@ void main() {
     expect(find.byType(ActionChip), findsNothing);
     expect(find.byType(Chip), findsNothing);
     expect(find.byType(ListTile), findsNothing);
-    expect(find.byType(BackdropFilter), findsNothing);
+    // No blur *in the list*. The bar above it is allowed one; a row is not.
+    expect(
+      find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
   });
 
