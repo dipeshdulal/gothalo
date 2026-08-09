@@ -35,7 +35,7 @@ class PriorityOverflowBar extends StatelessWidget {
     return InkWell(
       onTap: onToggle,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 12, 10),
+        padding: const EdgeInsets.fromLTRB(16, 4, 12, 6),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -57,14 +57,14 @@ class PriorityOverflowBar extends StatelessWidget {
               expanded ? 'Show less' : 'Show ${overflow.hiddenCount} more',
               style: TextStyle(
                 color: scheme.primary,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
             AnimatedRotation(
               turns: expanded ? 0.5 : 0,
               duration: Motion.fast,
-              child: Icon(Icons.expand_more, size: 20, color: scheme.primary),
+              child: Icon(Icons.expand_more, size: 16, color: scheme.primary),
             ),
           ],
         ),

@@ -21,6 +21,12 @@ import '../../inbox/widgets/agent_avatar.dart';
 /// reads as cramped, so this sits above it.
 const double kCompactRowHeight = 52;
 
+/// The "show N more" / "show less" expander's strip. Taller than its text needs
+/// because a 44px tap target is the comfortable minimum (see [kCompactRowHeight]),
+/// but noticeably shorter than a row — the cap-lifting control should read as
+/// lighter than the agents it hides.
+const double kExpanderHeight = 44;
+
 /// One agent, as a row. **The** agent row — there is not a second one.
 ///
 /// Home lists the same agents up to three times over (Priority, Recent, grouped
@@ -460,7 +466,7 @@ class SectionExpander extends StatelessWidget {
     return InkWell(
       onTap: onToggle,
       child: SizedBox(
-        height: kCompactRowHeight,
+        height: kExpanderHeight,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -468,14 +474,14 @@ class SectionExpander extends StatelessWidget {
               expanded ? 'Show less' : 'Show $hidden more',
               style: TextStyle(
                 color: scheme.primary,
-                fontSize: 12.5,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
             AnimatedRotation(
               turns: expanded ? 0.5 : 0,
               duration: Motion.fast,
-              child: Icon(Icons.expand_more, size: 18, color: scheme.primary),
+              child: Icon(Icons.expand_more, size: 16, color: scheme.primary),
             ),
           ],
         ),
