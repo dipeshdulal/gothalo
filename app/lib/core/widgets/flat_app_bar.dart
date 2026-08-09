@@ -3,7 +3,6 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
-import '../tokens.dart';
 
 /// The app's header bar: a **frosted** bar — content blurred and scrimmed
 /// behind it, without a hard rule cutting it off from the page below.

@@ -6,14 +6,10 @@ import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
-import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/flat_app_bar.dart';
-import '../../core/widgets/live_activity_line.dart';
 import '../../core/widgets/panel_row.dart';
-import '../../core/widgets/status_mark.dart';
-import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
-import '../inbox/widgets/agent_avatar.dart';
+import '../agents/widgets/agent_row.dart';
 import 'priority_providers.dart';
 import 'widgets/priority_overflow_bar.dart';
 
@@ -86,18 +82,15 @@ class PriorityScreen extends ConsumerWidget {
                         ),
                 ),
                 if (hits.isEmpty)
-                  const _Hint(
-                    'Nothing needs you right now. Blocked agents appear here '
-                    'automatically; star any agent to always pin it.',
-                    small: true,
-                  )
+                  const _PriorityEmpty()
                 else ...[
                   for (final h in overflow.visible)
-                    _AgentRow(
-                      server: h.server,
+                    AgentRow(
                       agent: h.agent,
+                      serverName: h.server.name,
                       starred: h.starred,
-                      client: h.client,
+                      showActivity: true,
+                      activityClient: h.client,
                       onTap: () => _open(context, ref, h.server, h.agent),
                       onStar: () => ref
                           .read(starredAgentsProvider.notifier)
@@ -139,12 +132,11 @@ class PriorityScreen extends ConsumerWidget {
                           final starred = ref
                               .watch(starredAgentsProvider.notifier)
                               .isStarred(sa.server.id, agent.paneId);
-                          return _AgentRow(
-                            server: sa.server,
+                          return AgentRow(
                             agent: agent,
                             starred: starred,
-                            client: sa.client,
-                            showServer: false,
+                            showActivity: true,
+                            activityClient: sa.client,
                             onTap: () => _open(context, ref, sa.server, agent),
                             onStar: () => ref
                                 .read(starredAgentsProvider.notifier)
@@ -162,150 +154,42 @@ class PriorityScreen extends ConsumerWidget {
   }
 }
 
-class _AgentRow extends StatelessWidget {
-  const _AgentRow({
-    required this.server,
-    required this.agent,
-    required this.starred,
-    required this.onTap,
-    required this.onStar,
-    this.client,
-    this.showServer = true,
-  });
-
-  final ServerSummary server;
-  final Agent agent;
-  final bool starred;
-  final VoidCallback onTap;
-  final VoidCallback onStar;
-
-  /// The server's client, for [LiveActivityLine] — null when that server
-  /// couldn't be reached (no line to show either way).
-  final BridgeClient? client;
-  final bool showServer;
+/// The empty Priority state uses the same panel treatment as Home. The screen
+/// itself is already the management destination, so there is no extra action
+/// button here — just the same quiet explanation and check mark.
+class _PriorityEmpty extends StatelessWidget {
+  const _PriorityEmpty();
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Status and star sit on a second line rather than crowding a trailing
-    // column: on a phone the old row put age, badge and star into the space
-    // left over after the title, which ellipsised the title to nothing on any
-    // reasonably named task.
     return PanelRow(
-      onTap: onTap,
-      borderColor: agent.agentStatus == AgentStatus.blocked
-          ? scheme.error
-          : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AgentAvatar(agent: agent.agent, radius: 16),
-              const SizedBox(width: Space.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      agent.displayTitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                        height: 1.25,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    // Prose keeps the proportional face; the git identity is an
-                    // identifier and is set in mono — the mono rule in action.
-                    _IdentityLine(
-                      server: server,
-                      gitLabel: agent.gitLabel,
-                      showServer: showServer,
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: starred ? 'Unstar' : 'Star',
-                onPressed: onStar,
-                visualDensity: VisualDensity.compact,
-                icon: Icon(
-                  starred ? Icons.star : Icons.star_border,
-                  color: starred
-                      ? const Color(0xFFF5C043)
-                      : scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          if (client != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 40),
-              child: LiveActivityLine(
-                paneId: agent.paneId,
-                status: agent.agentStatus,
-                client: client,
-              ),
-            ),
-          const SizedBox(height: Space.sm),
-          Padding(
-            padding: const EdgeInsets.only(left: 40),
-            child: Row(
+          Icon(Icons.check_circle_outline, size: 18, color: scheme.primary),
+          const SizedBox(width: Space.lg),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                StatusMark(agent.agentStatus),
-                const SizedBox(width: Space.lg),
-                // The wait itself, next to the state. "Blocked" tells you what;
-                // this tells you whether to care.
-                AgentAge(
-                  agent.sinceLastActivity,
-                  emphasize: agent.agentStatus == AgentStatus.blocked,
+                const Text(
+                  'Nothing needs you',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Blocked agents appear here automatically; star any agent to '
+                  'always pin it.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
           ),
         ],
       ),
-    );
-  }
-}
-
-/// The row's second line: the server name in prose, the git identity in mono.
-/// A single line of both, so the identifier part of it follows the mono rule
-/// without dragging the proper noun along.
-class _IdentityLine extends StatelessWidget {
-  const _IdentityLine({
-    required this.server,
-    required this.gitLabel,
-    required this.showServer,
-  });
-
-  final ServerSummary server;
-  final String gitLabel;
-  final bool showServer;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Text.rich(
-      TextSpan(
-        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-        children: [
-          if (showServer) ...[
-            TextSpan(text: server.name),
-            const TextSpan(text: '  ·  '),
-          ],
-          TextSpan(text: gitLabel, style: TextStyle(fontSize: 11.5).mono),
-        ],
-      ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
     );
   }
 }

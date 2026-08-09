@@ -7,6 +7,7 @@ import '../../../core/widgets/agent_age.dart';
 import '../../../core/widgets/live_activity_line.dart';
 import '../../../core/widgets/panel_row.dart';
 import '../../../core/widgets/status_mark.dart';
+import '../../../data/bridge/bridge_client.dart';
 import '../../../data/bridge/models/snapshot.dart';
 import '../../inbox/widgets/agent_avatar.dart';
 
@@ -34,6 +35,7 @@ const double kCompactRowHeight = 52;
 ///  - [showActivity] — the live "what is it doing right now" line, on the
 ///    surfaces with room for it.
 ///  - [onApprove] — the one-tap approve a blocked agent gets in the flock.
+///  - [onStar] — an optional inline star action for Priority management.
 ///  - [compact] — see below.
 ///
 /// What it says, in order of what a glance needs: the task, how long it has
@@ -58,7 +60,9 @@ class AgentRow extends StatelessWidget {
     this.starred = false,
     this.trailing,
     this.showActivity = false,
+    this.activityClient,
     this.onApprove,
+    this.onStar,
     this.menu,
     this.focused = false,
   }) : compact = false;
@@ -73,7 +77,9 @@ class AgentRow extends StatelessWidget {
        starred = false,
        trailing = null,
        showActivity = false,
+       activityClient = null,
        onApprove = null,
+       onStar = null,
        menu = null,
        focused = false;
 
@@ -87,7 +93,8 @@ class AgentRow extends StatelessWidget {
   final String? serverName;
 
   /// Manually pinned — the small star that tells an automatic Priority row
-  /// (blocked/done) from a deliberate one.
+  /// (blocked/done) from a deliberate one. When [onStar] is set, it is also
+  /// the tappable star control used to manage that pin.
   final bool starred;
 
   /// An extra marker after the status, for a section that needs to say
@@ -98,8 +105,16 @@ class AgentRow extends StatelessWidget {
   /// Show the agent's most recent message under the title.
   final bool showActivity;
 
+  /// The bridge to use for the activity line. Needed by cross-server surfaces;
+  /// null keeps the existing active-server lookup.
+  final BridgeClient? activityClient;
+
   /// One-tap approve for a blocked agent (D7/D8). Null leaves the button off.
   final VoidCallback? onApprove;
+
+  /// Optional star action. Priority uses this to keep its management affordance
+  /// on the shared row instead of growing a second Priority-only row design.
+  final VoidCallback? onStar;
 
   /// The overflow control at the end of the title line — restart, stop, split,
   /// close. Only the project view has one; it is a **flag on this row** rather
@@ -226,9 +241,7 @@ class AgentRow extends StatelessWidget {
       // should be findable without reading a word of the row. Blocked beats
       // focused — "this one is stuck" is more urgent than "this one is where
       // your cursor is".
-      borderColor: blocked
-          ? scheme.error
-          : (focused ? scheme.primary : null),
+      borderColor: blocked ? scheme.error : (focused ? scheme.primary : null),
       selected: focused,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       child: Row(
@@ -263,7 +276,7 @@ class AgentRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: Space.md),
-                    if (starred) ...[
+                    if (starred && onStar == null) ...[
                       Icon(Icons.star, size: 12, color: scheme.primary),
                       const SizedBox(width: Space.sm),
                     ],
@@ -277,6 +290,26 @@ class AgentRow extends StatelessWidget {
                     ],
                     const SizedBox(width: Space.md),
                     StatusMark(agent.agentStatus),
+                    if (onStar != null) ...[
+                      const SizedBox(width: Space.sm),
+                      SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                          tooltip: starred ? 'Unstar' : 'Star',
+                          onPressed: onStar,
+                          icon: Icon(
+                            starred ? Icons.star : Icons.star_border,
+                            size: 17,
+                            color: starred
+                                ? const Color(0xFFF5C043)
+                                : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 // Tight to the title: they are one thing, "this task, in this
@@ -290,6 +323,7 @@ class AgentRow extends StatelessWidget {
                   LiveActivityLine(
                     paneId: agent.paneId,
                     status: agent.agentStatus,
+                    client: activityClient,
                   ),
                 if (blocked && onApprove != null) ...[
                   const SizedBox(height: Space.md),
