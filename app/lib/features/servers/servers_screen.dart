@@ -141,6 +141,10 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     // group by the bridge's own attention-then-recency rule, so this list and
     // the per-server flock list never disagree about what comes first.
     final groups = groupAgentsByState(serverAgents, exclude: claimed);
+    // Keep active state visible before the navigation shortcuts. Idle remains
+    // below Recent because it is the least urgent part of the home surface.
+    final activeGroups = groups.where((group) => !group.compact).toList();
+    final idleGroups = groups.where((group) => group.compact).toList();
 
     // A single-server setup says the same server name on every row, which is
     // noise. Two or more and it is the thing that tells otherwise-identical
@@ -236,6 +240,20 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                             ),
                           ],
 
+                          // --- Active agents ---
+                          //
+                          // Needs-you and Working are live state, so they stay
+                          // above Recent. Priority normally claims Needs-you;
+                          // splitting here keeps the ordering honest if that
+                          // ever changes.
+                          ...buildAgentSections(
+                            context,
+                            ref,
+                            groups: activeGroups,
+                            showServer: showServer,
+                            onOpen: (hit) => _openAgent(hit.server, hit.agent),
+                          ).map(enter),
+
                           // --- Recent projects/spaces + agents ---
                           //
                           // A project shortcut is separate from an agent
@@ -288,14 +306,14 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                               ),
                           ],
 
-                          // --- Everything else, by state ---
+                          // --- Idle agents ---
                           //
                           // The same builder the Flock screen uses, so an agent looks
                           // identical whichever way you reached it.
                           ...buildAgentSections(
                             context,
                             ref,
-                            groups: groups,
+                            groups: idleGroups,
                             showServer: showServer,
                             onOpen: (hit) => _openAgent(hit.server, hit.agent),
                           ).map(enter),
