@@ -163,6 +163,7 @@ looked up against:
 | Agent | Store | Resolved by |
 |---|---|---|
 | `claude` | `~/.claude/projects/<encoded-cwd>/<session>.jsonl` | cwd + session id |
+| `pi` | `~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl` | session id (full path) + cwd |
 | `hermes` | `~/.hermes/state.db` (SQLite; `$HERMES_DIR` overrides) | session id |
 | `opencode` | `~/.local/share/opencode/opencode.db` (SQLite; `$OPENCODE_DATA_DIR` / `$XDG_DATA_HOME` override) | session id |
 | `codex` | recognized, not yet wired | — |

@@ -98,8 +98,9 @@ sequence number it is consistent with:
   "blocked", and it is the primary input to `recency_rank`. Unlike the two ranks
   it is **not always present** — it is **absent** for a kind whose sessions
   share one store (hermes, opencode: that store's newest entry describes *some*
-  agent, not this one, and a confidently wrong age is worse than none) and for
-  an agent that has not spoken yet. **Absent means unknown, never "just now"**:
+  agent, not this one, and a confidently wrong age is worse than none), for a
+  claude/pi agent that has not spoken yet, and for an agent whose session
+  cannot be resolved. **Absent means unknown, never "just now"**:
   render nothing rather than `0s`.
 
 **Frames 2…N: deltas.** Each is one unified **envelope** (§3). Apply them to the
@@ -141,7 +142,7 @@ surfaces to break them on differently.
 
 Tier 2 exists for the agents `last_activity_ts` cannot date: a kind that keeps
 every session in one shared store (hermes, opencode — the bridge refuses to
-report another agent's age as this one's), and a claude agent that has not
+report another agent's age as this one's), and a claude/pi agent that has not
 spoken yet. `state_change_seq` is herdr's single app-wide counter — a global
 total order over every agent transition, **comparable across panes** (see
 [`docs/DESIGN-panestore.md`](docs/DESIGN-panestore.md)) — so it genuinely orders
