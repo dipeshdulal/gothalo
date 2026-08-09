@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../../core/tokens.dart';
 import '../../core/widgets/accessory_button.dart';
 
 /// An arrow cluster for the terminal — the inverted-T layout of a desktop
@@ -123,17 +124,24 @@ class DirectionPad extends StatelessWidget {
 /// otherwise comes and goes as a side effect of tapping the buffer, which is
 /// also how you scroll it.
 class KeyboardToggle extends StatelessWidget {
-  const KeyboardToggle({super.key, required this.open, required this.onToggle});
+  const KeyboardToggle({
+    super.key,
+    required this.open,
+    required this.onToggle,
+    this.outlined = false,
+  });
 
   /// Whether the soft keyboard is currently up.
   final bool open;
   final VoidCallback onToggle;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) {
     final label = open ? 'Hide keyboard' : 'Show keyboard';
     return AccessoryButton(
       icon: open ? Icons.keyboard_hide_outlined : Icons.keyboard_outlined,
+      outlined: outlined,
       onTap: onToggle,
       semanticLabel: label,
       tooltip: label,
@@ -149,16 +157,19 @@ class DirectionPadToggle extends StatelessWidget {
     super.key,
     required this.open,
     required this.onToggle,
+    this.outlined = false,
   });
 
   final bool open;
   final VoidCallback onToggle;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) {
     return AccessoryButton(
       icon: Icons.control_camera,
       active: open,
+      outlined: outlined,
       onTap: onToggle,
       semanticLabel: open ? 'Hide arrows' : 'Show arrows',
       tooltip: open ? 'Hide arrows' : 'Show arrows',
@@ -227,6 +238,8 @@ class _PadKeyState extends State<_PadKey> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final fill = _down ? scheme.primaryContainer : scheme.panelFill;
+    final edge = _down ? scheme.primary : scheme.hairline;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapDown: (_) => _press(),
@@ -236,15 +249,14 @@ class _PadKeyState extends State<_PadKey> {
         width: widget.width,
         height: DirectionPad._keySize,
         decoration: BoxDecoration(
-          color: _down
-              ? scheme.primary.withValues(alpha: 0.85)
-              : scheme.surfaceContainerHighest.withValues(alpha: 0.75),
-          borderRadius: BorderRadius.circular(10),
+          color: fill,
+          borderRadius: Radii.smAll,
+          border: Border.all(color: edge),
         ),
         child: Icon(
           widget.icon,
           size: 26,
-          color: _down ? scheme.onPrimary : scheme.onSurface,
+          color: _down ? scheme.onPrimaryContainer : scheme.onSurface,
           semanticLabel: widget.semanticLabel,
         ),
       ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import '../tokens.dart';
 
 /// One button of the terminal's accessory bars — the single visual vocabulary
 /// for everything below the buffer: the key strip (Esc/Ctrl/Tab/^C), the arrow
@@ -8,9 +9,11 @@ import '../theme.dart';
 ///
 /// It exists because those three started out in different vocabularies — filled
 /// mono key blocks under outlined Material chips with proportional text — which
-/// read as two unrelated toolbars stacked on one screen. One primitive keeps
-/// the fill, radius, height and type identical, and lets width be the only
-/// thing that varies: [size]-square for a single glyph, intrinsic for a label.
+/// read as two unrelated toolbars stacked on one screen. One primitive keeps the
+/// radius, height and type identical, and lets width be the only thing that
+/// varies: [size]-square for a single glyph, intrinsic for a label. The terminal
+/// key row can opt into the same quiet outlined treatment as the app's action
+/// chips without changing the more-sheet's denser key styling.
 class AccessoryButton extends StatelessWidget {
   const AccessoryButton({
     super.key,
@@ -20,6 +23,7 @@ class AccessoryButton extends StatelessWidget {
     required this.onTap,
     this.onLongPress,
     this.active = false,
+    this.outlined = false,
     this.semanticLabel,
     this.tooltip,
   }) : assert(
@@ -43,6 +47,11 @@ class AccessoryButton extends StatelessWidget {
   /// Lit: a sticky modifier that's armed, or a panel that's open.
   final bool active;
 
+  /// Uses the flat, hairline-edged action-chip surface instead of the filled
+  /// terminal-key surface. Scoped callers can adopt the quieter treatment
+  /// without restyling the terminal more-sheet at the same time.
+  final bool outlined;
+
   final String? semanticLabel;
   final String? tooltip;
 
@@ -57,7 +66,21 @@ class AccessoryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final fg = active ? scheme.onPrimary : scheme.onSurface;
+    final Color fg;
+    final Color fill;
+    if (active && outlined) {
+      fg = scheme.onPrimaryContainer;
+      fill = scheme.primaryContainer;
+    } else if (active) {
+      fg = scheme.onPrimary;
+      fill = scheme.primary;
+    } else if (outlined) {
+      fg = scheme.onSurface;
+      fill = scheme.panelFill;
+    } else {
+      fg = scheme.onSurface;
+      fill = scheme.surfaceContainerHighest;
+    }
 
     Widget face;
     if (icon != null) {
@@ -84,11 +107,15 @@ class AccessoryButton extends StatelessWidget {
       face = Semantics(label: semanticLabel, child: face);
     }
 
+    final radius = outlined ? Radii.smAll : _radius;
     final button = Material(
-      color: active ? scheme.primary : scheme.surfaceContainerHighest,
-      borderRadius: _radius,
+      // Keep the filled variant's Material colour observable to existing
+      // terminal controls/tests; the outlined variant paints its panel in the
+      // child so its border and fill share one shape.
+      color: outlined ? Colors.transparent : fill,
+      borderRadius: radius,
       child: InkWell(
-        borderRadius: _radius,
+        borderRadius: radius,
         onTap: onTap,
         onLongPress: onLongPress,
         child: Container(
@@ -96,6 +123,11 @@ class AccessoryButton extends StatelessWidget {
           constraints: BoxConstraints(minWidth: size.width),
           padding: EdgeInsets.symmetric(horizontal: label != null ? 8 : 0),
           alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: outlined ? fill : null,
+            borderRadius: radius,
+            border: outlined ? Border.all(color: scheme.hairline) : null,
+          ),
           child: face,
         ),
       ),

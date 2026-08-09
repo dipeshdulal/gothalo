@@ -14,7 +14,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
-import '../../core/widgets/accessory_button.dart';
+import '../../core/widgets/action_chip.dart';
 import '../../core/widgets/agent_age.dart';
 import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
@@ -1970,14 +1970,14 @@ class _ThinkingIndicator extends StatelessWidget {
 /// One row above the composer for everything that's an action about *how*
 /// you're talking to the agent rather than the chat itself: the Claude
 /// permission-mode switcher, quick-command snippets (see
-/// docs/RESEARCH-feature-ideas.md, #7), "+" to add one, "create a pull
-/// request", a jump to another agent, and a jump to the raw terminal.
+/// docs/RESEARCH-feature-ideas.md, #7), "+" to add one, a jump to another
+/// agent, and a jump to the raw terminal.
 ///
-/// Built from the same [AccessoryButton] as the terminal's key bar, spread
-/// evenly and scrolling as one strip when it overflows. It had been Material
-/// chips, which read as a different toolbar from the terminal's for what is
-/// the same job on the next screen over. Attaching an image is not here — it
-/// acts on the message being written, so it lives inside the composer pill.
+/// Uses the same [AppActionChip] as the contextual "Review changes" suggestion,
+/// so the row reads as one family of flat, hairline-edged actions. It is
+/// left-aligned like the terminal strip rather than spreading controls across
+/// empty space. Attaching an image is not here — it acts on the message being
+/// written, so it lives inside the composer pill.
 class _ComposerActionsRow extends ConsumerWidget {
   const _ComposerActionsRow({
     required this.pane,
@@ -2007,99 +2007,75 @@ class _ComposerActionsRow extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final commands = ref.watch(quickCommandsProvider).asData?.value ?? const [];
 
+    final buttons = <Widget>[
+      if (modeLabel != null)
+        AppActionChip(
+          icon: Icons.tune,
+          label: modeLabel!,
+          onTap: enabled ? onCycleMode : () {},
+          semanticLabel: 'Permission mode: $modeLabel',
+          tooltip: 'Cycle permission mode',
+        ),
+      for (final c in commands)
+        AppActionChip(
+          icon: c.key != null ? Icons.keyboard_command_key : Icons.bolt,
+          label: c.label,
+          onTap: enabled ? () => onQuickCommand(c) : () {},
+          onLongPress: () async {
+            final all =
+                ref.read(quickCommandsProvider).asData?.value ??
+                const <QuickCommand>[];
+            final i = all.indexOf(c);
+            if (i < 0) return;
+            if (await confirmRemoveQuickCommand(context, c.label)) {
+              await ref.read(quickCommandsProvider.notifier).removeAt(i);
+            }
+          },
+        ),
+      AppActionChip(
+        icon: Icons.add,
+        onTap: () => showAddQuickCommand(context, ref),
+        semanticLabel: 'Add a quick command',
+        tooltip: 'Add a quick command',
+      ),
+      // Jump and Terminal are both "leave this conversation for another view".
+      // They live here rather than in the app bar because this is where a thumb
+      // already is — the app bar is a stretch away at the top of a phone.
+      AppActionChip(
+        icon: Icons.bolt,
+        onTap: onJump,
+        semanticLabel: 'Jump to an agent',
+        tooltip: 'Jump to an agent',
+      ),
+      AppActionChip(
+        icon: Icons.terminal,
+        onTap: onOpenTerminal,
+        semanticLabel: 'Open the raw terminal',
+        tooltip: 'Open the raw terminal',
+      ),
+    ];
+
     return Container(
       decoration: BoxDecoration(
-        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
-        // one: at one step the buttons and the bar behind them are close enough
-        // to read as a single flat slab.
-        color: scheme.surfaceContainerLow,
+        // Do not paint a gray slab behind the controls. The transcript's flat
+        // backdrop should continue down to the composer's own surface; the
+        // chips and the hairline are enough to define this toolbar.
+        color: Colors.transparent,
         border: Border(
           top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
         ),
       ),
-      // Same generous side margins as the terminal's bar: a curved screen's
-      // glass falls away at the edge, and SafeArea covers a notch, not a curve.
-      // Tighter vertically — this row and the composer under it are one block,
-      // and every dp here is a dp of transcript.
-      padding: const EdgeInsets.fromLTRB(22, 8, 22, 4),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final buttons = <Widget>[
-            if (modeLabel != null)
-              AccessoryButton(
-                label: modeLabel!,
-                leading: Icons.tune,
-                onTap: onCycleMode,
-                semanticLabel: 'Permission mode: $modeLabel',
-                tooltip: 'Cycle permission mode',
-              ),
-            for (final c in commands)
-              AccessoryButton(
-                label: c.label,
-                // Marks a command that fires a raw keystroke rather than
-                // typing text.
-                leading: c.key != null ? Icons.keyboard_command_key : null,
-                onTap: enabled ? () => onQuickCommand(c) : () {},
-                onLongPress: () async {
-                  final all =
-                      ref.read(quickCommandsProvider).asData?.value ??
-                      const <QuickCommand>[];
-                  final i = all.indexOf(c);
-                  if (i < 0) return;
-                  if (await confirmRemoveQuickCommand(context, c.label)) {
-                    await ref.read(quickCommandsProvider.notifier).removeAt(i);
-                  }
-                },
-              ),
-            AccessoryButton(
-              icon: Icons.add,
-              onTap: () => showAddQuickCommand(context, ref),
-              semanticLabel: 'Add a quick command',
-              tooltip: 'Add a quick command',
-            ),
-            // "Create PR" used to be a button here, with a git read of its own
-            // to decide whether to draw it. It is a suggestion chip now
-            // (PaneSuggestionsBar, above the composer) — same sheet, same
-            // editable prompt, but offered by the one mechanism that also knows
-            // about this pane's dev server and its unread changes, off one git
-            // read rather than a second one. See D29.
-            // Jump and Terminal are both "leave this conversation for another
-            // view". They live here rather than in the app bar because this is
-            // where a thumb already is — the app bar is a stretch away at the
-            // top of a phone.
-            AccessoryButton(
-              icon: Icons.bolt,
-              onTap: onJump,
-              semanticLabel: 'Jump to an agent',
-              tooltip: 'Jump to an agent',
-            ),
-            AccessoryButton(
-              icon: Icons.terminal,
-              onTap: onOpenTerminal,
-              semanticLabel: 'Open the raw terminal',
-              tooltip: 'Open the raw terminal',
-            ),
-          ];
-
-          // Spread evenly while everything fits; scroll as one strip once the
-          // user's own commands push it past the edge. A uniform strip running
-          // off the edge stays legible where a half-clipped chip does not.
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minWidth: constraints.maxWidth),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  for (var i = 0; i < buttons.length; i++) ...[
-                    if (i > 0) const SizedBox(width: 6),
-                    buttons[i],
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
+      // Match the suggestion strip's gutter and height so "Review changes" and
+      // the first quick command share one clean left edge.
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      child: SizedBox(
+        height: 34,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: buttons.length,
+          separatorBuilder: (_, _) => const SizedBox(width: Space.sm),
+          itemBuilder: (_, i) => Center(child: buttons[i]),
+        ),
       ),
     );
   }

@@ -18,16 +18,22 @@ class AppActionChip extends StatelessWidget {
   const AppActionChip({
     super.key,
     required this.icon,
-    required this.label,
+    this.label,
     required this.onTap,
     this.detail,
     this.detailChild,
     this.color,
+    this.active = false,
     this.onLongPress,
+    this.semanticLabel,
+    this.tooltip,
   });
 
   final IconData icon;
-  final String label;
+
+  /// Optional text face. Omit it for a compact icon-only action; the caller
+  /// should provide [semanticLabel] and [tooltip] in that case.
+  final String? label;
   final VoidCallback onTap;
 
   /// A muted trailing note — a port number, a count.
@@ -40,42 +46,59 @@ class AppActionChip extends StatelessWidget {
   /// Overrides the icon and label colour. Null is the resting neutral.
   final Color? color;
 
+  /// Gives a toggle-like action a quiet selected surface without switching to a
+  /// filled pill.
+  final bool active;
+
   final VoidCallback? onLongPress;
+
+  /// Spoken/long-press name for an icon-only chip.
+  final String? semanticLabel;
+
+  /// Optional tooltip for an icon-only chip.
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final fg = color ?? (active ? scheme.primary : null);
+    final fill = active ? scheme.primaryContainer : scheme.panelFill;
     final chip = InkWell(
       borderRadius: Radii.smAll,
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        // The chip is 32 tall; the row that holds it gives the tap slot its
-        // height. Small control, adult-sized target.
-        constraints: const BoxConstraints(minHeight: 32),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        // Keep the face compact while retaining a 32dp visual/tap floor; the
+        // row that holds it supplies the surrounding breathing room.
+        constraints: BoxConstraints(
+          minHeight: 32,
+          minWidth: label == null ? 36 : 0,
+        ),
         decoration: BoxDecoration(
-          color: scheme.panelFill,
+          color: fill,
           borderRadius: Radii.smAll,
-          border: Border.all(color: scheme.hairline),
+          border: Border.all(color: active ? scheme.primary : scheme.hairline),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 15, color: color),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
+            Icon(icon, size: 15, color: fg),
+            if (label != null) ...[
+              const SizedBox(width: 4),
+              Text(
+                label!,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
+            ],
             if (detailChild != null) ...[
-              const SizedBox(width: 6),
+              if (label != null) const SizedBox(width: 4),
               detailChild!,
             ] else if (detail != null && detail!.isNotEmpty) ...[
-              const SizedBox(width: 6),
+              if (label != null) const SizedBox(width: 4),
               Text(
                 detail!,
                 style: Theme.of(
@@ -87,9 +110,18 @@ class AppActionChip extends StatelessWidget {
         ),
       ),
     );
-    if (onLongPress == null) return chip;
-    // GestureDetector rather than a parameter on the InkWell: wrapping keeps
-    // the tap on the chip itself so the ink splash still reads as one control.
-    return GestureDetector(onLongPress: onLongPress, child: chip);
+    Widget result = chip;
+    if (onLongPress != null) {
+      // GestureDetector rather than a parameter on the InkWell: wrapping keeps
+      // the tap on the chip itself so the ink splash still reads as one control.
+      result = GestureDetector(onLongPress: onLongPress, child: result);
+    }
+    if (semanticLabel != null) {
+      result = Semantics(button: true, label: semanticLabel, child: result);
+    }
+    if (tooltip != null) {
+      result = Tooltip(message: tooltip!, child: result);
+    }
+    return result;
   }
 }

@@ -483,7 +483,7 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
       ),
       _NoteRow r => Container(
         color: palette.surface,
-        padding: const EdgeInsets.fromLTRB(20, 10, 16, 12),
+        padding: const EdgeInsets.fromLTRB(20, 4, 16, 6),
         child: Text(
           r.text,
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
@@ -615,7 +615,7 @@ class _DirTile extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.fromLTRB(_indentFor(depth), 0, 12, 0),
         child: SizedBox(
-          height: 42,
+          height: 32,
           child: Row(
             children: [
               Icon(
@@ -717,7 +717,7 @@ class _FileTile extends StatelessWidget {
             : Colors.transparent,
         padding: EdgeInsets.fromLTRB(_indentFor(depth), 0, 12, 0),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 44),
+          constraints: const BoxConstraints(minHeight: 36),
           child: Row(
             children: [
               Icon(icon, size: 16, color: color),
@@ -878,7 +878,7 @@ class _DiffLineTile extends StatelessWidget {
     const code = TextStyle(
       fontFamily: AppTheme.monoFamily,
       fontSize: 11.5,
-      height: 1.42,
+      height: 1.35,
     );
 
     return ExcludeSemantics(
@@ -886,7 +886,7 @@ class _DiffLineTile extends StatelessWidget {
         color: palette.surface,
         child: Container(
           color: bg,
-          padding: const EdgeInsets.symmetric(vertical: 1),
+          padding: EdgeInsets.zero,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -994,7 +994,7 @@ class _GapTile extends StatelessWidget {
           color: palette.gapBg,
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
           child: SizedBox(
-            height: 40,
+            height: 32,
             child: Row(
               children: [
                 SizedBox(
