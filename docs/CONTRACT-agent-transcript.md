@@ -1,7 +1,7 @@
 # CONTRACT — gothalo mobile API (agent pane data)
 
 Two mobile-side contracts for reading an **agent** pane. Both are kind-agnostic
-(the same shape for `claude`/`codex`/`opencode`) and share the bridge's auth
+(the same shape for `claude`/`pi`/`codex`/`opencode`) and share the bridge's auth
 (`Authorization: Bearer <bearer>` or `?token=<bearer>`).
 
 - **`GET /agent-state`** — a compact parsed *state card* (what it's doing now + the
@@ -433,7 +433,7 @@ Client rules:
 | `subagent` | string | Echoes the `?subagent=` being streamed; absent for the session's own transcript. |
 | `subagents` | array | The session's **flat** subagent roster, every depth, **re-read on each rotation**. Absent when nothing was delegated. See [Subagents](#subagents). |
 | `pane` | string | Echoes the requested pane. |
-| `agent_kind` | string | `claude` (later `codex`/`opencode`). |
+| `agent_kind` | string | `claude`, `pi` (later `codex`/`opencode`). |
 | `session_id` | string | The resolved transcript session id (see *Resolution*). **Compare it to the one you hold** — a change means the pane moved to a new session and your buffer is stale. |
 | `backlog_count` | int | How many `entry` frames the newest page will send (≤ 150). |
 | `total` | int | Total normalized entries in the whole file. The newest entry's `seq` == `total`. |
@@ -618,9 +618,49 @@ From the pane, the bridge reads `cwd` and `agent_session.value` via
    **most-recently-modified** `*.jsonl` in the project dir whose own recorded `cwd`
    equals the pane's cwd (guards against a stale/rotated session id).
 
-`codex` and `opencode` are recognized kinds but their on-disk transcript layouts
-aren't wired up yet → they return `404` (see below). Their reader stubs and the
-resolution seam are in place; adding one is a single file.
+OpenCode v2 is resolved through its local managed service API using the
+session id and pane cwd. The bridge prefers that supported API when the service
+is reachable and falls back to the legacy SQLite store when it is not. `codex`
+remains a recognized kind without a transcript source and returns `404` (see
+below).
+
+### pi
+
+pi writes one JSONL per session at
+`~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`, where `<encoded-cwd>` is
+the absolute project cwd with the leading separator stripped, every `/` (and `\`
+and `:` on Windows) replaced by `-`, and the result wrapped in `--` on both sides
+(verified against pi's own `getDefaultSessionDirPath` and live dirs:
+`/Users/x/projects/gothalo` → `--Users-x-projects-gothalo--`). Note this differs
+from Claude Code's encoding: `.` is **not** replaced and the name is wrapped.
+
+The line format mirrors Claude Code's JSONL — a `session` header, `message`
+records, and metadata records (`model_change`, `thinking_level_change`, `custom`)
+that are dropped — with two differences the reader handles:
+
+- Tool calls are `toolCall` blocks inside an assistant message; tool results are
+  **their own** message with `role:"toolResult"`, correlated to the call by
+  `toolCallId` (the wire `tool.id == result.for_id` key is preserved).
+- `isError` on the result message flips `result.ok` to `false`, and edit/write
+  results carry the authoritative applied diff in `details.diff` (surfaced as
+  `result.diff`).
+
+Resolution is simpler than Claude's because Herdr's pi integration reports
+`agent_session.value` as the **full path** to the `.jsonl`:
+
+1. **Direct hit** — the session id *is* the file path; an existing file opens
+   directly, a not-yet-written one is served as an empty pending source that
+   streams in when pi creates it (pi writes the file lazily, on the first
+   message).
+2. **Bare-session-id glob** — a session id that is not a path globs
+   `~/.pi/agent/sessions/*/*<session-id>.jsonl` (filenames embed the uuid),
+   hardening against encoding drift.
+3. **Newest-matching fallback** — unknown session id only: newest session in the
+   encoded-cwd dir whose recorded `cwd` equals the pane's cwd.
+
+pi has no subagent layout, so `hello.subagents` is absent for pi panes and
+`?subagent=` resolution fails cleanly — the roster mechanism is Claude-specific
+and discovery finds nothing for kinds that do not use it.
 
 ---
 
@@ -634,7 +674,7 @@ client sees a real status:
 | `400` | `pane` query param missing | `want ?pane=<pane_id>` |
 | `401` | missing/invalid token | `unauthorized` |
 | `404` | no agent in that pane | `no such agent` |
-| `404` | no transcript file resolved, or kind not supported yet (codex/opencode) | `no transcript file for pane` / `transcript not supported for this agent kind` |
+| `404` | no transcript resolved, or kind not supported yet (codex) | `no transcript file for pane` / `transcript not supported for this agent kind` |
 | `500` | transcript read failed | `read transcript failed` |
 | `502` | the underlying `herdr` command failed | `herdr agent get …: <stderr>` |
 
