@@ -7,6 +7,7 @@ import 'package:gothalo/data/bridge/models/snapshot.dart';
 // unrelated and would shadow the app's.
 import 'package:gothalo/features/inbox/inbox_providers.dart' as inbox;
 import 'package:gothalo/core/widgets/action_chip.dart';
+import 'package:gothalo/core/widgets/count_pair.dart';
 import 'package:gothalo/core/widgets/live_activity_line.dart';
 import 'package:gothalo/core/widgets/flat_app_bar.dart';
 import 'package:gothalo/features/agents/widgets/agent_row.dart';
@@ -172,7 +173,13 @@ void main() {
       await _pump(tester, workspaceId: 'w1');
 
       for (final text in _texts(tester)) {
-        for (final id in [_agentPane, _shellPane, _devServerPane, 'w1:t1', 'w1:t2']) {
+        for (final id in [
+          _agentPane,
+          _shellPane,
+          _devServerPane,
+          'w1:t1',
+          'w1:t2',
+        ]) {
           expect(text, isNot(contains(id)), reason: 'leaked "$id" in "$text"');
         }
       }
@@ -209,8 +216,33 @@ void main() {
     ) async {
       await _pump(tester);
 
-      expect(find.text('1 agent · 2 terminals'), findsOneWidget);
-      expect(find.text('1 agent'), findsOneWidget);
+      // The counts are glyphs — icon + mono number, the same CountPair the
+      // flock rows use — so the words exist only in the semantics tree.
+      final semantics = tester.ensureSemantics();
+      expect(find.textContaining('agent'), findsNothing);
+      expect(
+        find.bySemanticsLabel('1 agent'),
+        findsNWidgets(2),
+      ); // both projects
+      expect(find.bySemanticsLabel('2 terminals'), findsOneWidget);
+      // The glyphs themselves: a robot for the agents, a terminal for the
+      // terminals, one pair per project header. Scoped to [CountPair] because
+      // the shell row's avatar happens to be the same terminal glyph.
+      expect(
+        find.descendant(
+          of: find.byType(CountPair),
+          matching: find.byIcon(Icons.smart_toy_outlined),
+        ),
+        findsNWidgets(2),
+      );
+      expect(
+        find.descendant(
+          of: find.byType(CountPair),
+          matching: find.byIcon(Icons.terminal),
+        ),
+        findsOneWidget,
+      );
+      semantics.dispose();
     });
 
     testWidgets('floats what needs you above the projects', (tester) async {
@@ -300,8 +332,7 @@ void main() {
       final meta = tester.getRect(
         find.byWidgetPredicate(
           (w) =>
-              w is Text &&
-              (w.textSpan?.toPlainText() ?? '').contains('feat-x'),
+              w is Text && (w.textSpan?.toPlainText() ?? '').contains('feat-x'),
         ),
       );
       final activity = tester.getRect(find.byType(LiveActivityLine));
@@ -328,10 +359,7 @@ void main() {
         // room than an agent carrying a task, a project and a live message. It
         // did, by half again, which on a project with five terminals is most of
         // a screen.
-        expect(
-          tester.getRect(find.byWidget(t.widget)).height,
-          lessThan(agent),
-        );
+        expect(tester.getRect(find.byWidget(t.widget)).height, lessThan(agent));
       }
     });
   });

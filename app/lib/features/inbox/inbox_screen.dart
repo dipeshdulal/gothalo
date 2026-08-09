@@ -6,6 +6,7 @@ import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
+import '../../core/widgets/count_pair.dart';
 import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/models/snapshot.dart';
@@ -88,9 +89,10 @@ class InboxScreen extends ConsumerWidget {
                   _FlockMenuAction.openSpace => showOpenSpaceSheet(context),
                   _FlockMenuAction.overview => context.push('/overview'),
                   _FlockMenuAction.timeline => context.push('/timeline'),
-                  _FlockMenuAction.editServer => connection == null
-                      ? null
-                      : showEditServerSheet(context, connection.id),
+                  _FlockMenuAction.editServer =>
+                    connection == null
+                        ? null
+                        : showEditServerSheet(context, connection.id),
                 },
                 // Only what the chip row above does not already carry — the
                 // end state is chips for the frequent things and a short menu
@@ -257,7 +259,11 @@ class _MenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        Icon(
+          icon,
+          size: 20,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
         const SizedBox(width: 12),
         Text(label),
       ],
@@ -413,9 +419,7 @@ class _ProjectsTab extends StatelessWidget {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(vertical: Space.md),
-      children: [
-        PanelList(rows: rows, dividerBefore: boundaries.contains),
-      ],
+      children: [PanelList(rows: rows, dividerBefore: boundaries.contains)],
     );
   }
 }
@@ -434,11 +438,7 @@ class _RepoHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(11, 9, 11, 7),
       child: Row(
         children: [
-          Icon(
-            Icons.folder_outlined,
-            size: 15,
-            color: scheme.onSurfaceVariant,
-          ),
+          Icon(Icons.folder_outlined, size: 15, color: scheme.onSurfaceVariant),
           const SizedBox(width: Space.md),
           Flexible(
             child: Text(
@@ -509,8 +509,12 @@ class _ProjectTile extends StatelessWidget {
         // Children sit tighter than their parent. A group has to look denser
         // than the list it is part of, or it reads as three peers that happen
         // to share a name — which is what the rail alone was not fixing.
-        padding: EdgeInsets.fromLTRB(child ? 0 : 11, child ? 5 : 9, 8,
-            child ? 5 : 9),
+        padding: EdgeInsets.fromLTRB(
+          child ? 0 : 11,
+          child ? 5 : 9,
+          8,
+          child ? 5 : 9,
+        ),
         child: Row(
           children: [
             if (child)
@@ -613,13 +617,18 @@ class _RailPainter extends CustomPainter {
     final mid = size.height / 2;
     // Up past the top of this row, so the line joins the row above with no gap
     // — there are no separators inside a group for it to collide with.
-    canvas.drawLine(Offset(x, -14), Offset(x, last ? mid : size.height + 14), paint);
+    canvas.drawLine(
+      Offset(x, -14),
+      Offset(x, last ? mid : size.height + 14),
+      paint,
+    );
     // ...and a short elbow out to the branch glyph.
     canvas.drawLine(Offset(x, mid), Offset(size.width, mid), paint);
   }
 
   @override
-  bool shouldRepaint(_RailPainter old) => old.color != color || old.last != last;
+  bool shouldRepaint(_RailPainter old) =>
+      old.color != color || old.last != last;
 }
 
 /// What a project contains, as glyph + number rather than words.
@@ -662,14 +671,14 @@ class _Contents extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
         if (agents > 0)
-          _CountPair(
+          CountPair(
             icon: Icons.smart_toy_outlined,
             count: agents,
             semantics: '$agents agent${agents == 1 ? '' : 's'}',
           ),
         if (agents > 0 && terminals > 0) const SizedBox(width: Space.md),
         if (terminals > 0)
-          _CountPair(
+          CountPair(
             icon: Icons.terminal,
             count: terminals,
             semantics: '$terminals terminal${terminals == 1 ? '' : 's'}',
@@ -679,48 +688,8 @@ class _Contents extends StatelessWidget {
   }
 }
 
-/// One glyph and its number. [semantics] carries the words the glyph replaced,
-/// so a screen reader still hears "4 agents".
-class _CountPair extends StatelessWidget {
-  const _CountPair({
-    required this.icon,
-    required this.count,
-    required this.semantics,
-  });
-
-  final IconData icon;
-  final int count;
-  final String semantics;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Semantics(
-      // Its own node, not merged into the row's: a screen reader should hear
-      // "4 agents" as a fact about the project, not have it run together with
-      // the repo name into one sentence.
-      container: true,
-      label: semantics,
-      excludeSemantics: true,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 3),
-          Text(
-            '$count',
-            style: TextStyle(
-              fontSize: 10.5,
-              color: scheme.onSurfaceVariant,
-            ).mono,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// The width every project row reserves for its counts, so the column is a
+/// straight edge rather than a function of how much is open in each project. for its counts, so the column is a
 /// straight edge rather than a function of how much is open in each project.
 const double _countColumn = 62;
 
@@ -753,7 +722,9 @@ class _EmptyState extends StatelessWidget {
         const SizedBox(height: 12),
         Center(
           child: Text(
-            projectsOpen ? 'No agents right now' : 'Nothing open on this server',
+            projectsOpen
+                ? 'No agents right now'
+                : 'Nothing open on this server',
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
@@ -765,8 +736,8 @@ class _EmptyState extends StatelessWidget {
               projectsOpen
                   ? 'Start an agent in Herdr, then pull to refresh.'
                   : 'Nothing is open on this machine yet. Pick a project on '
-                      'the host to open it — you can start an agent in it from '
-                      'here afterwards.',
+                        'the host to open it — you can start an agent in it from '
+                        'here afterwards.',
               textAlign: TextAlign.center,
               style: Theme.of(
                 context,
