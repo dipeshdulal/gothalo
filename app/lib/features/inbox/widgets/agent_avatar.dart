@@ -4,15 +4,24 @@ import 'package:flutter/material.dart';
 /// and a display label. Herdr normalizes the agent kind into `agent` (e.g.
 /// "claude", "codex", "gemini"), which is what we key on.
 class AgentBrand {
-  const AgentBrand({this.asset, required this.color, required this.label});
+  const AgentBrand({
+    this.asset,
+    required this.color,
+    required this.label,
+    this.mark,
+  });
 
   final String? asset;
   final Color color;
   final String label;
+
+  /// The compact glyph to put in the avatar when a logo asset is unavailable.
+  /// Usually this is the label's initial; Pi uses its actual `π` mark.
+  final String? mark;
 }
 
 /// Known coding agents. Logos are bundled under `assets/agents/` as they're
-/// added; until an agent has one, it falls back to a branded initial.
+/// added; until an agent has one, it falls back to a branded mark.
 const _brands = <String, AgentBrand>{
   'claude': AgentBrand(
     asset: 'assets/agents/claude.png',
@@ -35,6 +44,12 @@ const _brands = <String, AgentBrand>{
   'aider': AgentBrand(color: Color(0xFF14B8A6), label: 'Aider'),
   'amp': AgentBrand(color: Color(0xFFF59E0B), label: 'Amp'),
   'cline': AgentBrand(color: Color(0xFF6366F1), label: 'Cline'),
+  'pi': AgentBrand(
+    asset: 'assets/agents/pi.png',
+    color: Color(0xFF7C8B93),
+    label: 'Pi',
+    mark: 'π',
+  ),
 };
 
 AgentBrand brandFor(String agent) =>
@@ -42,7 +57,7 @@ AgentBrand brandFor(String agent) =>
     AgentBrand(color: const Color(0xFF7C8B93), label: agent);
 
 /// A round avatar for an agent: its logo if we have one, otherwise a branded
-/// initial on a tinted disc.
+/// mark on a tinted disc.
 class AgentAvatar extends StatelessWidget {
   const AgentAvatar({super.key, required this.agent, this.radius = 20});
 
@@ -65,7 +80,9 @@ class AgentAvatar extends StatelessWidget {
       );
     }
 
-    final initial = brand.label.isEmpty ? '?' : brand.label[0].toUpperCase();
+    final mark =
+        brand.mark ??
+        (brand.label.isEmpty ? '?' : brand.label[0].toUpperCase());
     return CircleAvatar(
       radius: radius,
       backgroundColor: Color.alphaBlend(
@@ -73,7 +90,7 @@ class AgentAvatar extends StatelessWidget {
         scheme.surfaceContainerHighest,
       ),
       child: Text(
-        initial,
+        mark,
         style: TextStyle(
           color: brand.color,
           fontWeight: FontWeight.w700,

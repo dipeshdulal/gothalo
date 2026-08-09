@@ -832,58 +832,58 @@ class _ProjectHeader extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // The project's identity — repo, branch, focus marker — is ONE
-            // flexible cluster that eats every spare pixel, so the counts and
-            // the chevron stay flush with the right edge. It used to be a
-            // `Spacer()` between loose `Flexible` texts: a Row apportions its
-            // free space between ALL its flexible children, and a loose child
-            // that does not need its share does not give it back — so on
-            // anything wider than a phone the unspent budget became a dead gap
-            // and the counts floated left of where they belonged.
+            // Keep the project identity and its focus marker compact. The old
+            // marker sat after this Expanded's unused width, so a short name
+            // left the dot floating halfway across the row instead of beside
+            // the project it described. The counts still stay pinned to the
+            // right by the outer Expanded.
             Expanded(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      project,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  if (branch != null) ...[
-                    const SizedBox(width: Space.md),
-                    Icon(Icons.call_split, size: 12, color: scheme.primary),
-                    const SizedBox(width: 3),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Flexible(
                       child: Text(
-                        branch!,
+                        project,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11.5,
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (branch != null) ...[
+                      const SizedBox(width: Space.md),
+                      Icon(Icons.call_split, size: 12, color: scheme.primary),
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text(
+                          branch!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: scheme.primary,
+                            fontWeight: FontWeight.w500,
+                          ).mono,
+                        ),
+                      ),
+                    ],
+                    if (focused) ...[
+                      const SizedBox(width: Space.md),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
                           color: scheme.primary,
-                          fontWeight: FontWeight.w500,
-                        ).mono,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
-                  if (focused) ...[
-                    const SizedBox(width: Space.md),
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: scheme.primary,
-                      ),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
             const SizedBox(width: Space.md),

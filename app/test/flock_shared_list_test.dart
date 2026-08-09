@@ -24,16 +24,19 @@ class _FixedSnapshot extends inbox.SnapshotController {
   Future<Snapshot> build() async => snap;
 }
 
-Agent _agent(String id, {required String title, required AgentStatus status}) =>
-    Agent(
-      // No bundled logo, so the row draws an initial rather than decoding a PNG.
-      agent: 'gemini',
-      paneId: id,
-      agentStatus: status,
-      title: title,
-      cwd: '/Users/d/projects/gothalo',
-      branch: 'main',
-    );
+Agent _agent(
+  String id, {
+  required String title,
+  required AgentStatus status,
+}) => Agent(
+  // No bundled logo, so the row draws an initial rather than decoding a PNG.
+  agent: 'gemini',
+  paneId: id,
+  agentStatus: status,
+  title: title,
+  cwd: '/Users/d/projects/gothalo',
+  branch: 'main',
+);
 
 final _snapshot = Snapshot(
   workspaces: const [
@@ -141,6 +144,10 @@ void main() {
     expect(find.text('in ~'), findsOneWidget);
     expect(find.text('New terminal'), findsNothing);
     expect(find.text('Start new work'), findsNothing);
+    // Header actions are visible in the same strip instead of hidden behind
+    // a generic three-dot menu.
+    expect(find.text('All projects'), findsOneWidget);
+    expect(find.byTooltip('More'), findsNothing);
   });
 
   testWidgets('projects group a repo with its worktrees, in one panel', (

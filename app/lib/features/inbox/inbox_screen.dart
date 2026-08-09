@@ -77,44 +77,6 @@ class InboxScreen extends ConsumerWidget {
                 onPressed: () => showJumpSheet(context),
                 icon: const Icon(Icons.bolt),
               ),
-              // Overview + per-server settings are occasional visits, not
-              // every-open actions — folded into one overflow menu so the bar
-              // isn't five same-weight icons deep. Refresh dropped outright
-              // (not just relocated): both tabs already pull-to-refresh, so
-              // the button was a redundant affordance, not a demoted one.
-              PopupMenuButton<_FlockMenuAction>(
-                tooltip: 'More',
-                icon: const Icon(Icons.more_vert),
-                onSelected: (action) => switch (action) {
-                  _FlockMenuAction.openSpace => showOpenSpaceSheet(context),
-                  _FlockMenuAction.overview => context.push('/overview'),
-                  _FlockMenuAction.timeline => context.push('/timeline'),
-                  _FlockMenuAction.editServer =>
-                    connection == null
-                        ? null
-                        : showEditServerSheet(context, connection.id),
-                },
-                // Only what the chip row above does not already carry — the
-                // end state is chips for the frequent things and a short menu
-                // for the rest, not both holding the same list.
-                itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: _FlockMenuAction.overview,
-                    child: _MenuRow(
-                      icon: Icons.dashboard_outlined,
-                      label: 'All projects',
-                    ),
-                  ),
-                  if (connection != null)
-                    const PopupMenuItem(
-                      value: _FlockMenuAction.editServer,
-                      child: _MenuRow(
-                        icon: Icons.settings_outlined,
-                        label: 'Edit this server',
-                      ),
-                    ),
-                ],
-              ),
             ],
             bottom: TabBar(
               tabs: [
@@ -169,10 +131,11 @@ class InboxScreen extends ConsumerWidget {
 
 /// The frequent actions, as a single scrollable line of chips above the tabs.
 ///
-/// They were all in the ⋮ overflow and the project screen's + menu, which is
-/// the same complaint the whole rework is about: the useful thing is two taps
-/// and a hunt away. Nothing here is new — every chip is an action this screen
-/// or its project pages already offered.
+/// The header stays focused on identity and jump. Navigation and server actions
+/// live in this one horizontal action strip instead of being hidden behind a
+/// three-dot menu, so the same information is visible in the page's context.
+/// Nothing here is new — every chip is an action this screen or its project
+/// pages already offered.
 ///
 /// **A chip that cannot act is not shown**, which is the rule the suggestions
 /// bar already follows. The server-root screen has no Gothalo project
@@ -189,6 +152,7 @@ class _QuickActions extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final snap = snapshot.asData?.value;
+    final connection = ref.watch(activeConnectionProvider).asData?.value;
     final defaultSpace = snap?.workspaces
         .where((w) => w.label.trim() == '~')
         .firstOrNull;
@@ -217,6 +181,13 @@ class _QuickActions extends ConsumerWidget {
             ),
           ),
         ),
+      // Put the project-wide destination first: it is the quickest way out of
+      // the server's flock view when someone wants the full project picture.
+      AppActionChip(
+        icon: Icons.dashboard_outlined,
+        label: 'All projects',
+        onTap: () => context.push('/overview'),
+      ),
       AppActionChip(
         icon: Icons.create_new_folder_outlined,
         label: 'Open a project',
@@ -227,6 +198,12 @@ class _QuickActions extends ConsumerWidget {
         label: 'Activity',
         onTap: () => context.push('/timeline'),
       ),
+      if (connection != null)
+        AppActionChip(
+          icon: Icons.settings_outlined,
+          label: 'Edit server',
+          onTap: () => showEditServerSheet(context, connection.id),
+        ),
     ];
 
     return SizedBox(
@@ -240,33 +217,6 @@ class _QuickActions extends ConsumerWidget {
         separatorBuilder: (_, _) => const SizedBox(width: Space.sm),
         itemBuilder: (_, i) => Center(child: chips[i]),
       ),
-    );
-  }
-}
-
-/// The choices in the Flock header's overflow menu.
-enum _FlockMenuAction { openSpace, overview, timeline, editServer }
-
-/// One row in the overflow menu: icon + label, laid out tighter than the
-/// default [ListTile] so a two-item menu doesn't feel oversized.
-class _MenuRow extends StatelessWidget {
-  const _MenuRow({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(
-          icon,
-          size: 20,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-        const SizedBox(width: 12),
-        Text(label),
-      ],
     );
   }
 }
@@ -536,49 +486,61 @@ class _ProjectTile extends StatelessWidget {
               color: child ? scheme.primary : scheme.onSurfaceVariant,
             ),
             SizedBox(width: child ? 6 : Space.md),
-            // The identifier takes every pixel the counts do not need, and is
-            // the last thing to truncate — it is what tells one row from
-            // another.
+            // Keep the identifier and its status marker in one compact
+            // identity cluster. The old marker sat after this Expanded's
+            // unused width, so a short name left the dot floating halfway
+            // across the row instead of beside the project it described.
             Expanded(
-              child: Text(
-                child ? branch! : repo,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: child
-                    ? TextStyle(
-                        fontSize: 12.5,
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w500,
-                      ).mono
-                    : const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13.5,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        child ? branch! : repo,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: child
+                            ? TextStyle(
+                                fontSize: 12.5,
+                                color: scheme.primary,
+                                fontWeight: FontWeight.w500,
+                              ).mono
+                            : const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13.5,
+                              ),
                       ),
+                    ),
+                    // The focused project on the host — the "you are here"
+                    // marker, kept next to the identity it marks.
+                    if (space.focused) ...[
+                      const SizedBox(width: Space.md),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: scheme.primary,
+                        ),
+                      ),
+                    ],
+                    if (blocked) ...[
+                      const SizedBox(width: Space.md),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: scheme.error,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
-            // The focused project on the host — the "you are here" marker.
-            if (space.focused) ...[
-              const SizedBox(width: Space.md),
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: scheme.primary,
-                ),
-              ),
-            ],
-            if (blocked) ...[
-              const SizedBox(width: Space.md),
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: scheme.error,
-                ),
-              ),
-            ],
             const SizedBox(width: Space.md),
             // Fixed width, right-aligned: the column is a straight edge rather
             // than a function of how much happens to be open in each project.
