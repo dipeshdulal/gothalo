@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme.dart';
+import '../../../core/tokens.dart';
 import '../../../core/widgets/panel_row.dart';
 import '../agent_groups.dart';
 import 'agent_row.dart';
@@ -64,17 +65,28 @@ List<Widget> buildAgentSections(
       // Idle: dense lines in one shared panel, with the expander drawn inside
       // it. Everything about it says "secondary" — which is the honest
       // description of an agent that wants nothing from you.
+      // The idle section is the one that grows and shrinks when its
+      // "show more/show less" control is used. Animate the panel's height so
+      // the rows below move out of the way instead of jumping, while keeping
+      // the content itself dense and otherwise unchanged.
       out.add(
-        CompactAgentPanel(
-          rows: [
-            for (final hit in split.visible)
-              AgentRow.compact(
-                agent: hit.agent,
-                serverName: showServer ? hit.server.name : null,
-                onTap: () => onOpen(hit),
-              ),
-          ],
-          footer: expander,
+        AnimatedSize(
+          duration: Motion.medium,
+          reverseDuration: Motion.medium,
+          curve: Motion.curve,
+          alignment: Alignment.topCenter,
+          clipBehavior: Clip.hardEdge,
+          child: CompactAgentPanel(
+            rows: [
+              for (final hit in split.visible)
+                AgentRow.compact(
+                  agent: hit.agent,
+                  serverName: showServer ? hit.server.name : null,
+                  onTap: () => onOpen(hit),
+                ),
+            ],
+            footer: expander,
+          ),
         ),
       );
       continue;
