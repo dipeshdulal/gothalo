@@ -79,12 +79,18 @@ class AgentKindPicker extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Keep the common four-agent catalog on one line without making the
+        // chips feel stretched. The default chip padding is generous enough
+        // to orphan the last chip on a phone; tight outer padding plus a small
+        // inter-chip gap preserves the compact controls while leaving the
+        // picker free to wrap when a host has a genuinely long catalog.
         Wrap(
-          spacing: 8,
+          spacing: 6,
           runSpacing: 8,
           children: [
             for (final a in agents)
               ChoiceChip(
+                padding: EdgeInsets.zero,
                 selected: a.kind == selected,
                 onSelected: (_) => onSelect(a.kind),
                 avatar: AgentAvatar(agent: a.kind, radius: 11),
