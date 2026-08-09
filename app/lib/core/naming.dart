@@ -77,6 +77,28 @@ extension PaneNaming on Pane {
   String get projectName => gitContextForCwd(where).project;
 }
 
+/// Where a project lives — the directory a new agent started in it should
+/// default to.
+///
+/// The workspace's own checkout path is the only authoritative answer. A pane's
+/// cwd is only a fallback for a plain, non-git space, and the shallowest pane
+/// wins so the result is not an arbitrary subdirectory from the snapshot.
+String spaceCwdFor(WorkspaceInfo? workspace, List<Pane> panes) {
+  final checkout = workspace?.worktree?.checkoutPath ?? '';
+  if (checkout.isNotEmpty) return checkout;
+  if (panes.isEmpty) return '';
+
+  var shallowest = panes.first.cwd;
+  for (final p in panes) {
+    if (p.cwd.isEmpty) continue;
+    if (shallowest.isEmpty ||
+        '/'.allMatches(p.cwd).length < '/'.allMatches(shallowest).length) {
+      shallowest = p.cwd;
+    }
+  }
+  return shallowest;
+}
+
 /// What to call a **project** — one Herdr workspace, named for its checkout.
 ///
 /// Prefers the repo name Herdr reports for the workspace's own checkout, since
@@ -95,5 +117,8 @@ extension PaneNaming on Pane {
       : (git.project.isNotEmpty
             ? git.project
             : (workspace?.label ?? '').trim());
-  return (project: project.isEmpty ? 'Untitled' : project, branch: git.worktree);
+  return (
+    project: project.isEmpty ? 'Untitled' : project,
+    branch: git.worktree,
+  );
 }

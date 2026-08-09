@@ -49,3 +49,36 @@ mixin RecentOpenRecorder<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     });
   }
 }
+
+/// The matching one-visit hook for a scoped project/space screen.
+///
+/// A project has no agent to use as its identity, and its route can be reached
+/// from several surfaces (home, the projects list, the browse sheet). Keeping
+/// this latch on the screen state gives all of those paths the same semantics:
+/// one actual visit moves one workspace to the front, while snapshot ticks do
+/// not continually rewrite the history.
+mixin RecentSpaceRecorder<T extends ConsumerStatefulWidget>
+    on ConsumerState<T> {
+  bool _spaceRecorded = false;
+
+  void recordRecentSpace(String workspaceId) {
+    if (_spaceRecorded || workspaceId.isEmpty) return;
+    _spaceRecorded = true;
+    final notifier = ref.read(recentSpacesProvider.notifier);
+    // The route can be pushed immediately after selecting a server, while its
+    // connection is still resolving. Await the future instead of sampling
+    // `asData` once; otherwise the first visit on a cold start is silently
+    // lost and the shortcut only appears after a second visit.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final connection = await ref.read(activeConnectionProvider.future);
+        final serverId = connection?.id;
+        if (serverId == null || serverId.isEmpty) return;
+        await notifier.record(serverId: serverId, workspaceId: workspaceId);
+      } catch (_) {
+        // A project shortcut is convenience state; a missing connection must
+        // never turn a successfully opened project into an app error.
+      }
+    });
+  }
+}

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/connection/connection_providers.dart';
+import '../../core/naming.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../priority/priority_providers.dart';
 
@@ -302,4 +303,214 @@ final recentHitsProvider = Provider<List<RecentHit>>((ref) {
     if (sa != null) servers.add(sa);
   }
   return resolveRecents(opens, servers);
+});
+
+/// A visit to a project/space, independent of any agent in it. This is kept
+/// separately from [RecentOpen]: an agent row answers "take me back to that
+/// conversation", while this answers "take me back to the project containing
+/// the terminals and agents I was arranging".
+class RecentSpaceOpen {
+  const RecentSpaceOpen({
+    required this.serverId,
+    required this.workspaceId,
+    required this.openedAt,
+  });
+
+  final String serverId;
+  final String workspaceId;
+  final int openedAt;
+
+  String get key => recentSpaceKey(serverId, workspaceId);
+
+  Map<String, dynamic> toJson() => {
+    'server_id': serverId,
+    'workspace_id': workspaceId,
+    'opened_at': openedAt,
+  };
+
+  static RecentSpaceOpen? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final serverId = raw['server_id'];
+    final workspaceId = raw['workspace_id'];
+    if (serverId is! String || serverId.isEmpty) return null;
+    if (workspaceId is! String || workspaceId.isEmpty) return null;
+    final at = raw['opened_at'];
+    return RecentSpaceOpen(
+      serverId: serverId,
+      workspaceId: workspaceId,
+      openedAt: at is int ? at : 0,
+    );
+  }
+}
+
+/// `"<serverId>::<workspaceId>"` — workspace ids repeat between bridges just
+/// like pane ids do, so the server is part of the identity.
+String recentSpaceKey(String serverId, String workspaceId) =>
+    '$serverId::$workspaceId';
+
+/// Keep more history than is visible so a removed space can be backfilled by
+/// the next live one, just like Recent agents.
+const int kRecentSpaceVisibleRows = 4;
+const int kRecentSpaceStoreLimit = 24;
+
+final recentSpacesProvider =
+    AsyncNotifierProvider<RecentSpaces, List<RecentSpaceOpen>>(
+      RecentSpaces.new,
+    );
+
+class RecentSpaces extends AsyncNotifier<List<RecentSpaceOpen>> {
+  static const _key = 'gothalo.recent_projects';
+
+  @override
+  Future<List<RecentSpaceOpen>> build() async {
+    final raw = await ref.watch(secureStorageProvider).read(key: _key);
+    return decodeRecentSpaces(raw);
+  }
+
+  /// Record one visit to a project, moving it to the front if it was already
+  /// in the history. The workspace id is the route's stable address; all
+  /// visible naming is resolved from the current snapshot at render time.
+  Future<void> record({
+    required String serverId,
+    required String workspaceId,
+  }) async {
+    if (serverId.isEmpty || workspaceId.isEmpty) return;
+    final entry = RecentSpaceOpen(
+      serverId: serverId,
+      workspaceId: workspaceId,
+      openedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    List<RecentSpaceOpen> current;
+    try {
+      current = await future;
+    } catch (_) {
+      current = const [];
+    }
+    final next = [entry, ...current.where((e) => e.key != entry.key)];
+    if (next.length > kRecentSpaceStoreLimit) {
+      next.removeRange(kRecentSpaceStoreLimit, next.length);
+    }
+    state = AsyncData(next);
+    await ref
+        .read(secureStorageProvider)
+        .write(key: _key, value: encodeRecentSpaces(next));
+  }
+}
+
+String encodeRecentSpaces(List<RecentSpaceOpen> entries) =>
+    jsonEncode([for (final e in entries) e.toJson()]);
+
+List<RecentSpaceOpen> decodeRecentSpaces(String? raw) {
+  if (raw == null || raw.isEmpty) return const [];
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const [];
+    final out = <RecentSpaceOpen>[];
+    final seen = <String>{};
+    for (final item in decoded) {
+      final entry = RecentSpaceOpen.fromJson(item);
+      if (entry != null && seen.add(entry.key)) out.add(entry);
+    }
+    return out;
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// A stored project visit resolved against a server's current full snapshot.
+class RecentSpaceHit {
+  const RecentSpaceHit({
+    required this.server,
+    required this.workspaceId,
+    required this.workspace,
+    required this.project,
+    required this.branch,
+    required this.agentCount,
+    required this.terminalCount,
+    required this.needsAttention,
+  });
+
+  final ServerSummary server;
+  final String workspaceId;
+  final WorkspaceInfo? workspace;
+  final String project;
+  final String? branch;
+  final int agentCount;
+  final int terminalCount;
+  final bool needsAttention;
+
+  String get key => recentSpaceKey(server.id, workspaceId);
+  String get route => '/overview/${Uri.encodeComponent(workspaceId)}';
+}
+
+/// Resolve project visits from the full snapshots already fetched for the home
+/// screen. A terminal-only space is valid and must not disappear merely because
+/// it has no agent row.
+List<RecentSpaceHit> resolveRecentSpaces(
+  List<RecentSpaceOpen> opens,
+  List<ServerAgents> servers,
+) {
+  final byServer = {for (final s in servers) s.server.id: s};
+  final out = <RecentSpaceHit>[];
+  for (final open in opens) {
+    final sa = byServer[open.serverId];
+    final snap = sa?.snapshot;
+    if (sa == null || !sa.ok || snap == null) continue;
+    WorkspaceInfo? workspace;
+    for (final w in snap.workspaces) {
+      if (w.workspaceId == open.workspaceId) {
+        workspace = w;
+        break;
+      }
+    }
+    final panes = snap.panes
+        .where((p) => p.workspaceId == open.workspaceId)
+        .toList();
+    // The overview accepts a workspace represented by panes alone, but a
+    // completely absent workspace is dead and should not leave a stale row.
+    if (workspace == null && panes.isEmpty) continue;
+    final agentPaneIds = snap.agentPaneIds;
+    final agents = snap.agents
+        .where(
+          (a) =>
+              a.workspaceId == open.workspaceId ||
+              panes.any((p) => p.paneId == a.paneId),
+        )
+        .toList();
+    final named = projectOf(workspace, spaceCwdFor(workspace, panes));
+    out.add(
+      RecentSpaceHit(
+        server: sa.server,
+        workspaceId: open.workspaceId,
+        workspace: workspace,
+        project: named.project,
+        branch: named.branch,
+        agentCount: agents.length,
+        terminalCount: panes
+            .where((p) => !agentPaneIds.contains(p.paneId))
+            .length,
+        needsAttention: agents.any((a) => a.agentStatus.needsAttention),
+      ),
+    );
+  }
+  return out;
+}
+
+List<RecentSpaceHit> recentSpaceRows(
+  List<RecentSpaceHit> hits, {
+  int cap = kRecentSpaceVisibleRows,
+}) => hits.take(cap).toList();
+
+/// Live recent project shortcuts across every paired server.
+final recentSpaceHitsProvider = Provider<List<RecentSpaceHit>>((ref) {
+  final opens =
+      ref.watch(recentSpacesProvider).value ?? const <RecentSpaceOpen>[];
+  if (opens.isEmpty) return const [];
+  final all = ref.watch(serversProvider).value ?? const <ServerSummary>[];
+  final servers = <ServerAgents>[];
+  for (final s in all) {
+    final sa = ref.watch(serverAgentsProvider(s.id)).value;
+    if (sa != null) servers.add(sa);
+  }
+  return resolveRecentSpaces(opens, servers);
 });

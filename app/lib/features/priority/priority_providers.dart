@@ -57,11 +57,19 @@ class ServerAgents {
     this.agents = const [],
     this.error,
     this.client,
+    this.snapshot,
   });
 
   final ServerSummary server;
   final List<Agent> agents;
   final Object? error;
+
+  /// The full snapshot behind [agents], when the server answered successfully.
+  ///
+  /// The home screen historically only needed agents, but recent project
+  /// shortcuts also need workspaces and terminal-only panes. Keeping the
+  /// already-fetched snapshot here avoids a second request per server.
+  final Snapshot? snapshot;
 
   /// The client used to fetch [agents] — kept so a row can poll that same
   /// server directly (e.g. [LiveActivityLine]) without re-resolving its
@@ -160,7 +168,12 @@ final serverAgentsProvider = FutureProvider.autoDispose.family<ServerAgents, Str
       unawaited(_learnIdentity(ref, client, server.id));
     }
 
-    return ServerAgents(server: server, agents: snap.agents, client: client);
+    return ServerAgents(
+      server: server,
+      agents: snap.agents,
+      client: client,
+      snapshot: snap,
+    );
   } catch (e) {
     return ServerAgents(server: server, error: e);
   }
