@@ -79,11 +79,57 @@ func Locate(kind, cwd, sessionID string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "claude":
 		return locateClaude(cwd, sessionID)
+	case "pi":
+		return locatePi(cwd, sessionID)
 	case "codex", "opencode":
 		return "", ErrUnsupportedKind
 	default:
 		return "", ErrUnsupportedKind
 	}
+}
+
+// locatePi resolves the transcript file path for a pi pane.
+//
+// Herdr's pi integration sets agent_session.value to the FULL PATH of the
+// session's jsonl (unlike Claude Code, which stores a bare session id):
+//
+//	~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl
+//
+// So the direct hit IS the session id, not a dir + name join:
+//  1. A session id ending in .jsonl is a path: an existing file opens directly;
+//     a missing one stops at ErrNoTranscript so the opener can serve the pending
+//     path (pi writes the file lazily, on the first message).
+//  2. A bare session id globs the sessions root (filenames embed the uuid, so
+//     the match is "*<sessionID>.jsonl"), hardening against encoding drift.
+//  3. Fallback — ONLY when the session id is unknown — picks the
+//     most-recently-modified session in the encoded-cwd dir whose recorded cwd
+//     equals the pane's cwd (mirrors locateClaude's step 3).
+func locatePi(cwd, sessionID string) (string, error) {
+	root, err := piSessionsRoot()
+	if err != nil {
+		return "", err
+	}
+
+	if sessionID != "" && strings.HasSuffix(sessionID, ".jsonl") {
+		if isFile(sessionID) {
+			return sessionID, nil
+		}
+		// A named session whose file is not written yet. Not ErrUnsupportedKind,
+		// and the opener turns it into a source that streams in when pi writes.
+		return "", ErrNoTranscript
+	}
+
+	if sessionID != "" {
+		if matches, _ := filepath.Glob(filepath.Join(root, "*", "*"+sessionID+".jsonl")); len(matches) > 0 {
+			return matches[0], nil
+		}
+		return "", ErrNoTranscript
+	}
+
+	if p := newestMatchingSession(filepath.Join(root, EncodePiSessionDir(cwd)), cwd); p != "" {
+		return p, nil
+	}
+	return "", ErrNoTranscript
 }
 
 func locateClaude(cwd, sessionID string) (string, error) {
@@ -210,12 +256,15 @@ func firstLineCwd(path string) string {
 //
 // Only the tail is read, so cost does not grow with a long conversation.
 //
-// Only claude is answerable today. hermes and opencode keep every session in one
-// shared SQLite database, so its mtime describes the newest activity of ANY
-// agent, not this one — reporting that as this agent's age would be confidently
-// wrong, which is worse than reporting nothing. Hence the bool.
+// Only the per-session-file kinds are answerable: claude and pi append one jsonl
+// per session, so its newest entry is this agent's. hermes and opencode keep
+// every session in one shared SQLite database, so its mtime describes the newest
+// activity of ANY agent, not this one — reporting that as this agent's age would
+// be confidently wrong, which is worse than reporting nothing. Hence the bool.
 func LastActivity(kind, cwd, sessionID string) (time.Time, bool) {
-	if strings.ToLower(strings.TrimSpace(kind)) != "claude" {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "claude", "pi":
+	default:
 		return time.Time{}, false
 	}
 	path, err := Locate(kind, cwd, sessionID)
