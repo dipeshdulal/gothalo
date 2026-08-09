@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
-import '../../core/naming.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
 import '../../core/widgets/panel_row.dart';
@@ -16,10 +15,8 @@ import '../agents/start_agent_sheet.dart';
 import '../agents/widgets/agent_sections.dart';
 import '../approvals/approve_action.dart';
 import '../jump/jump_sheet.dart';
-import '../herdr_actions.dart';
 import '../overview/overview_screen.dart' show spaceCwdOf;
 import '../push/enable_push_banner.dart';
-import '../worktrees/new_worktree_sheet.dart';
 import '../servers/add_edit_server_sheet.dart';
 import '../spaces/open_space_sheet.dart';
 import 'inbox_providers.dart';
@@ -176,10 +173,12 @@ class InboxScreen extends ConsumerWidget {
 /// or its project pages already offered.
 ///
 /// **A chip that cannot act is not shown**, which is the rule the suggestions
-/// bar already follows. "Start an agent" and "New terminal" need a project to
-/// put them in, so they appear only once Herdr has one focused; with nothing
-/// open the row is just "Open a project", which is the only thing there is to
-/// do. It renders the shared [AppActionChip] rather than a second chip style.
+/// bar already follows. The server-root screen has no Gothalo project
+/// selection, so project-scoped actions stay on the project screen instead of
+/// borrowing Herdr's desktop focus (or guessing when there is only one open
+/// workspace). Herdr's default `~` space is the one exception: it is an
+/// explicit, neutral launch target rather than an inferred project. It renders
+/// the shared [AppActionChip] rather than a second chip style.
 class _QuickActions extends ConsumerWidget {
   const _QuickActions({required this.snapshot});
 
@@ -188,66 +187,32 @@ class _QuickActions extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final snap = snapshot.asData?.value;
-    // The project actions need a target. Herdr focuses one workspace; that is
-    // the one "here" means on a screen that is not scoped to a project.
-    WorkspaceInfo? focused;
-    for (final w in snap?.workspaces ?? const <WorkspaceInfo>[]) {
-      if (w.focused) {
-        focused = w;
-        break;
-      }
-    }
-    focused ??= (snap?.workspaces.length == 1)
-        ? snap!.workspaces.first
-        : null;
-
-    final panes = focused == null
+    final defaultSpace = snap?.workspaces
+        .where((w) => w.label.trim() == '~')
+        .firstOrNull;
+    final defaultPanes = defaultSpace == null
         ? const <Pane>[]
-        : (snap?.panes.where((p) => p.workspaceId == focused!.workspaceId)
+        : (snap?.panes
+                  .where((p) => p.workspaceId == defaultSpace.workspaceId)
                   .toList() ??
               const <Pane>[]);
-    final cwd = focused == null ? '' : spaceCwdOf(focused, panes);
-    final project = focused == null
-        ? ''
-        : projectOf(focused, cwd).project;
+    final defaultCwd = spaceCwdOf(defaultSpace, defaultPanes);
 
     final chips = <Widget>[
-      if (focused != null)
+      if (defaultSpace != null)
         AppActionChip(
           icon: Icons.rocket_launch_outlined,
           label: 'Start agent',
-          // Named on purpose. This screen covers every project on the server,
-          // so a bare "Start agent" would silently pick one of eleven. The chip
-          // acts on the project Herdr has focused, and says which.
-          detail: 'in $project',
+          detail: 'in ~',
           onTap: () => showStartAgentSheet(
             context,
             ref,
             target: StartAgentTarget(
               placement: StartAgentPlacement.newTab,
-              id: focused!.workspaceId,
-              where: 'A new tab in $project',
-              defaultCwd: cwd,
+              id: defaultSpace.workspaceId,
+              where: 'A new tab in ~',
+              defaultCwd: defaultCwd,
             ),
-          ),
-        ),
-      if (focused != null)
-        AppActionChip(
-          icon: Icons.terminal,
-          label: 'New terminal',
-          onTap: () => newTerminal(context, ref, focused!.workspaceId),
-        ),
-      // Needs a checkout to branch from, so it is absent for a project that is
-      // not a git repo.
-      if (focused != null && cwd.isNotEmpty)
-        AppActionChip(
-          icon: Icons.call_split,
-          label: 'Start new work',
-          onTap: () => showNewWorktreeSheet(
-            context,
-            ref,
-            cwd: cwd,
-            repoLabel: project,
           ),
         ),
       AppActionChip(

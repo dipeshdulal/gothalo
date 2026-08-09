@@ -35,8 +35,14 @@ Agent _agent(String id, {required String title, required AgentStatus status}) =>
     );
 
 final _snapshot = Snapshot(
-  workspaces: const [WorkspaceInfo(workspaceId: 'w1', label: 'gothalo')],
-  panes: const [Pane(paneId: 'w1:p1', workspaceId: 'w1')],
+  workspaces: const [
+    WorkspaceInfo(workspaceId: 'w0', label: '~'),
+    WorkspaceInfo(workspaceId: 'w1', label: 'gothalo'),
+  ],
+  panes: const [
+    Pane(paneId: 'w0:p1', workspaceId: 'w0', cwd: '/Users/d'),
+    Pane(paneId: 'w1:p1', workspaceId: 'w1'),
+  ],
   agents: [
     _agent('w1:b1', title: 'Waiting on you', status: AgentStatus.blocked),
     _agent('w1:w1', title: 'Chewing through it', status: AgentStatus.working),
@@ -127,9 +133,13 @@ void main() {
 
     expect(find.text('Open a project'), findsOneWidget);
     expect(find.text('Activity'), findsOneWidget);
-    // A single workspace is unambiguous, so the project-scoped actions can act
-    // and therefore appear.
-    expect(find.text('New terminal'), findsOneWidget);
+    // The server-root screen has no selected project. Start agent is still
+    // available, but it has an explicit neutral target: Herdr's default `~`
+    // space. Other project-scoped actions remain on the project screen.
+    expect(find.text('Start agent'), findsOneWidget);
+    expect(find.text('in ~'), findsOneWidget);
+    expect(find.text('New terminal'), findsNothing);
+    expect(find.text('Start new work'), findsNothing);
   });
 
   testWidgets('projects group a repo with its worktrees, in one panel', (
