@@ -857,7 +857,7 @@ String _hostLabel(String baseUrl) {
 /// The slim strip the status bar sits on. With edge-to-edge rendering the
 /// system status bar is transparent over our content, and floating icons on
 /// the flat page reads as "broken" — this band gives that area a defined
-/// surface and a hairline edge, so the top of the screen reads as one frame.
+/// surface without adding another bright rule to the top of the screen.
 class _StatusBand extends StatelessWidget {
   const _StatusBand();
 
@@ -866,10 +866,7 @@ class _StatusBand extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Container(
       height: MediaQuery.paddingOf(context).top,
-      decoration: BoxDecoration(
-        color: scheme.wellFill,
-        border: Border(bottom: BorderSide(color: scheme.hairline, width: 1)),
-      ),
+      color: scheme.wellFill,
     );
   }
 }

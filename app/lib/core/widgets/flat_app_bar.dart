@@ -6,7 +6,7 @@ import '../theme.dart';
 import '../tokens.dart';
 
 /// The app's header bar: a **frosted** bar — content blurred and scrimmed
-/// behind it — with a single hairline along the bottom edge.
+/// behind it, without a hard rule cutting it off from the page below.
 ///
 /// The bar sits over a scrolling list (`extendBodyBehindAppBar: true`), so it
 /// needs to be *something*. It was fully transparent, which on a real phone
@@ -26,8 +26,8 @@ import '../tokens.dart';
 ///
 /// Pair it with `extendBodyBehindAppBar: true` on the [Scaffold] and give the
 /// body [FlatAppBar.padding] as top padding. Without both, the bar is opaque
-/// chrome with nothing behind it — no blur to see and a hairline with nothing
-/// to sit against.
+/// chrome with nothing behind it — no blur to see and no visual separation
+/// from the content below.
 class FlatAppBar extends AppBar {
   FlatAppBar({
     super.key,
@@ -94,8 +94,8 @@ const double _scrimAlpha = 0.86;
 /// looks broken.
 const double _blurSigma = 18;
 
-/// The bar's surface: blur, scrim, and a hairline along the bottom — the only
-/// edge that meets content.
+/// The bar's surface: blur and scrim. Its softened edge comes from the change
+/// in surface treatment, not a bright rule drawn across the page.
 class _FrostedBar extends StatelessWidget {
   const _FrostedBar();
 
@@ -112,15 +112,7 @@ class _FrostedBar extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: _blurSigma, sigmaY: _blurSigma),
         child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: base.withValues(alpha: _scrimAlpha),
-            border: Border(
-              bottom: BorderSide(
-                color: theme.colorScheme.hairlineStrong,
-                width: 1,
-              ),
-            ),
-          ),
+          decoration: BoxDecoration(color: base.withValues(alpha: _scrimAlpha)),
           child: const SizedBox.expand(),
         ),
       ),
