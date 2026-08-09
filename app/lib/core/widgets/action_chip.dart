@@ -21,6 +21,7 @@ class AppActionChip extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.detail,
+    this.detailChild,
     this.color,
     this.onLongPress,
   });
@@ -31,6 +32,10 @@ class AppActionChip extends StatelessWidget {
 
   /// A muted trailing note — a port number, a count.
   final String? detail;
+
+  /// A custom trailing note when text alone is not enough — for example, a
+  /// compact icon-plus-count summary. It replaces [detail] when both are set.
+  final Widget? detailChild;
 
   /// Overrides the icon and label colour. Null is the resting neutral.
   final Color? color;
@@ -66,7 +71,10 @@ class AppActionChip extends StatelessWidget {
                 fontWeight: FontWeight.w500,
               ),
             ),
-            if (detail != null && detail!.isNotEmpty) ...[
+            if (detailChild != null) ...[
+              const SizedBox(width: 6),
+              detailChild!,
+            ] else if (detail != null && detail!.isNotEmpty) ...[
               const SizedBox(width: 6),
               Text(
                 detail!,

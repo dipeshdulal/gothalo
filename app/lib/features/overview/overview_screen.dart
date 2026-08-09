@@ -20,6 +20,7 @@ import '../approvals/approve_action.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../worktrees/new_worktree_sheet.dart';
+import '../recents/record_open.dart';
 
 /// **Projects** — the active server as a list of the things you are working on,
 /// rather than as a picture of the multiplexer.
@@ -40,13 +41,20 @@ import '../worktrees/new_worktree_sheet.dart';
 ///
 /// When [workspaceId] is set the view is scoped to that one project; otherwise
 /// it lists them all.
-class OverviewScreen extends ConsumerWidget {
+class OverviewScreen extends ConsumerStatefulWidget {
   const OverviewScreen({super.key, this.workspaceId});
 
   final String? workspaceId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<OverviewScreen> createState() => _OverviewScreenState();
+}
+
+class _OverviewScreenState extends ConsumerState<OverviewScreen>
+    with RecentSpaceRecorder<OverviewScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final workspaceId = widget.workspaceId;
     final snapshot = ref.watch(snapshotControllerProvider);
 
     // A scoped project whose workspace disappears from the snapshot — its
@@ -76,6 +84,11 @@ class OverviewScreen extends ConsumerWidget {
       final matches = snap?.workspaces.where(
         (w) => w.workspaceId == workspaceId,
       );
+      if (snap != null &&
+          (snap.workspaces.any((w) => w.workspaceId == workspaceId) ||
+              snap.panes.any((p) => p.workspaceId == workspaceId))) {
+        recordRecentSpace(workspaceId);
+      }
       final ws = matches == null || matches.isEmpty ? null : matches.first;
       final panes =
           snap?.panes.where((p) => p.workspaceId == workspaceId).toList() ??
@@ -1365,18 +1378,8 @@ class _PaneMenu extends ConsumerWidget {
 /// fall back to the panes, and then to the SHALLOWEST cwd they share rather than
 /// an incidental one: the common ancestor is the closest thing to "where this
 /// project lives" that the panes can tell us.
-String spaceCwdOf(WorkspaceInfo? workspace, List<Pane> panes) {
-  final checkout = workspace?.worktree?.checkoutPath ?? '';
-  if (checkout.isNotEmpty) return checkout;
-  if (panes.isEmpty) return '';
-
-  var shallowest = panes.first.cwd;
-  for (final p in panes) {
-    if (p.cwd.isEmpty) continue;
-    if (shallowest.isEmpty ||
-        '/'.allMatches(p.cwd).length < '/'.allMatches(shallowest).length) {
-      shallowest = p.cwd;
-    }
-  }
-  return shallowest;
-}
+/// Compatibility name for the shared project-location derivation. Keep this
+/// export here because the overview is where the rule was originally defined;
+/// other features use [spaceCwdFor] from the naming library directly.
+String spaceCwdOf(WorkspaceInfo? workspace, List<Pane> panes) =>
+    spaceCwdFor(workspace, panes);

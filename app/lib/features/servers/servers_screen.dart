@@ -6,6 +6,7 @@ import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
+import '../../core/widgets/action_chip.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../core/widgets/entrance.dart';
 import '../../core/widgets/panel_row.dart';
@@ -28,15 +29,18 @@ import '../recents/recent_providers.dart';
 ///   1. **Priority** — what needs you, plus what you starred. Unchanged: the
 ///      five-row cap, the "show N more" expander, the tally, and the rule that
 ///      a blocked agent is never hidden by the cap.
-///   2. **Recent** — the agents *this device* opened last, straight back to the
-///      view you left them in. See [recentHitsProvider] for why this cannot be
-///      the bridge's recency ordering.
+///   2. **Recent** — the projects/spaces and agents *this device* visited last.
+///      Project chips return to the whole space; agent rows return straight to
+///      the view you left them in. See [recentHitsProvider] for why this cannot
+///      be the bridge's recency ordering.
 ///   3. **Agents** — every other agent on every server, grouped by state.
 ///   4. **Servers** — still here, still how you add, edit and open one. It is
 ///      no longer the way you find an agent.
 ///
-/// Each of the first three shows an agent at most once: sections 2 and 3 are
-/// deduped against section 1, and 3 against 2. One agent, one row.
+/// The agent rows inside Recent and the state groups still show an agent at
+/// most once: both are deduped against Priority, and the groups are deduped
+/// against Recent. Project chips are separate workspace destinations and do
+/// not claim the agent rows below them.
 class ServersScreen extends ConsumerStatefulWidget {
   const ServersScreen({super.key});
 
@@ -69,6 +73,8 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     await ref.read(activeServerIdProvider.notifier).set(server.id);
     if (mounted) context.push(route);
   }
+
+  Future<void> _openSpace(RecentSpaceHit hit) => _open(hit.server, hit.route);
 
   Future<void> _openAgent(ServerSummary server, Agent agent) =>
       // Agents open the chat/transcript view by default (with a terminal toggle).
@@ -129,6 +135,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
     };
     final recents = recentRows(ref.watch(recentHitsProvider), exclude: claimed);
     claimed.addAll(recents.map((r) => r.key));
+    final recentSpaces = recentSpaceRows(ref.watch(recentSpaceHitsProvider));
 
     // The rest of the flock, grouped by what it is doing. Ordered inside each
     // group by the bridge's own attention-then-recency rule, so this list and
@@ -229,14 +236,46 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                             ),
                           ],
 
-                          // --- Recent (this device's own history) ---
+                          // --- Recent projects/spaces + agents ---
                           //
-                          // Absent entirely when empty. A device that has opened
-                          // nothing, or whose recents have all been claimed above,
-                          // gets no header and no empty box — an empty shortcut is
-                          // worse than no shortcut.
-                          if (recents.isNotEmpty) ...[
+                          // A project shortcut is separate from an agent
+                          // shortcut, but both are the device's recent
+                          // destinations and belong under one compact heading.
+                          // A terminal-only space is useful here too. Like the
+                          // agent history, dead or unreachable entries simply
+                          // resolve away and the section is absent when empty.
+                          if (recentSpaces.isNotEmpty ||
+                              recents.isNotEmpty) ...[
                             enter(const SectionLabel('Recent')),
+                            if (recentSpaces.isNotEmpty)
+                              enter(
+                                SizedBox(
+                                  height: 44,
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: Space.gutter,
+                                    ),
+                                    itemCount: recentSpaces.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(width: Space.sm),
+                                    itemBuilder: (_, i) {
+                                      final project = recentSpaces[i];
+                                      return Center(
+                                        child: _RecentProjectChip(
+                                          hit: project,
+                                          serverName: showServer
+                                              ? project.server.name
+                                              : null,
+                                          onTap: () => _openSpace(project),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            // Agent rows follow the project chips in the same
+                            // Recent section.
                             for (final r in recents)
                               enter(
                                 key: ValueKey('recent-${r.key}'),
@@ -477,6 +516,73 @@ class _ViewMark extends StatelessWidget {
         letterSpacing: 0.8,
         color: scheme.onSurfaceVariant,
       ).mono,
+    );
+  }
+}
+
+/// A recently visited project as a deliberately small horizontal shortcut.
+/// The project list is already available deeper in the app; this section only
+/// needs to expose a handful of direct destinations without becoming a second
+/// vertical list.
+class _RecentProjectChip extends StatelessWidget {
+  const _RecentProjectChip({
+    required this.hit,
+    required this.serverName,
+    required this.onTap,
+  });
+
+  final RecentSpaceHit hit;
+  final String? serverName;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final detailChildren = <Widget>[];
+
+    void addText(String value) {
+      if (detailChildren.isNotEmpty) {
+        detailChildren.add(const SizedBox(width: 6));
+      }
+      detailChildren.add(
+        Text(
+          value,
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5).mono,
+        ),
+      );
+    }
+
+    void addCount(IconData icon, int count) {
+      if (detailChildren.isNotEmpty) {
+        detailChildren.add(const SizedBox(width: 8));
+      }
+      detailChildren.add(Icon(icon, size: 13, color: scheme.onSurfaceVariant));
+      detailChildren.add(const SizedBox(width: 2));
+      detailChildren.add(
+        Text(
+          '$count',
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
+        ),
+      );
+    }
+
+    if (hit.branch != null) addText(hit.branch!);
+    if (serverName != null) addText(serverName!);
+    if (hit.agentCount > 0) {
+      addCount(Icons.smart_toy_outlined, hit.agentCount);
+    }
+    if (hit.terminalCount > 0) {
+      addCount(Icons.terminal, hit.terminalCount);
+    }
+
+    return AppActionChip(
+      icon: hit.branch == null ? Icons.folder_outlined : Icons.call_split,
+      label: hit.project,
+      detailChild: detailChildren.isEmpty
+          ? null
+          : Row(mainAxisSize: MainAxisSize.min, children: detailChildren),
+      color: hit.needsAttention ? scheme.error : null,
+      onTap: onTap,
     );
   }
 }
