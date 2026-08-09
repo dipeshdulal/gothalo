@@ -272,15 +272,15 @@ void main() {
     ];
     await _pumpHome(tester, agents: idle);
 
-    // Six shown, six behind the expander — nobody wants a wall of them.
+    // Three shown, nine behind the expander — nobody wants a wall of them.
     expect(find.byType(AgentRow), findsNWidgets(kIdleVisibleRows));
-    expect(find.text('Show 6 more'), findsOneWidget);
+    expect(find.text('Show 9 more'), findsOneWidget);
 
     // The expander sits at the foot of a long list on a short test viewport;
     // tapping it blind would hit whatever is actually at those coordinates.
-    await tester.ensureVisible(find.text('Show 6 more'));
+    await tester.ensureVisible(find.text('Show 9 more'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Show 6 more'));
+    await tester.tap(find.text('Show 9 more'));
     await tester.pump();
 
     expect(find.byType(AgentRow), findsNWidgets(12));

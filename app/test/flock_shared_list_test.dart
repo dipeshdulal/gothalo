@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/widgets/panel_row.dart';
 import 'package:gothalo/data/bridge/bridge_providers.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
+import 'package:gothalo/features/agents/agent_groups.dart';
 import 'package:gothalo/features/agents/widgets/agent_row.dart';
 import 'package:gothalo/features/inbox/inbox_providers.dart' as inbox;
 import 'package:gothalo/features/inbox/inbox_screen.dart';
@@ -99,14 +100,14 @@ void main() {
         .widgetList<AgentRow>(find.byType(AgentRow))
         .where((r) => r.compact)
         .length;
-    expect(compact, 6);
-    expect(find.text('Show 3 more'), findsOneWidget);
+    expect(compact, kIdleVisibleRows);
+    expect(find.text('Show 6 more'), findsOneWidget);
 
     // The expander sits at the foot of a long list on a short test viewport;
     // tapping it blind would hit whatever is actually at those coordinates.
-    await tester.ensureVisible(find.text('Show 3 more'));
+    await tester.ensureVisible(find.text('Show 6 more'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Show 3 more'));
+    await tester.tap(find.text('Show 6 more'));
     await tester.pumpAndSettle();
 
     expect(
