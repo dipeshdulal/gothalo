@@ -86,34 +86,60 @@ class AccessoryKeyRow extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Container(
-        // Two M3 steps below the buttons' own `surfaceContainerHighest`, not
-        // one: at one step the buttons and the bar behind them are close enough
-        // to read as a single flat slab.
-        color: scheme.surfaceContainerLow,
-        // Wide side margins: a curved screen's glass falls away at the edge, so
-        // a button sitting 8dp in gets its corner cut off. SafeArea covers a
-        // notch, not a curve — phones don't report a side inset for one in
-        // portrait — so the clearance has to be spent here.
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+        // Keep the terminal backdrop continuous, as on the transcript page;
+        // the outlined controls and one hairline are enough to define the bar.
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          border: Border(
+            top: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.4),
+            ),
+          ),
+        ),
+        // Match the suggestion/action strips' gutter and compact vertical
+        // rhythm. The fixed seven-button layout still owns the centring.
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final buttons = <Widget>[
-              AccessoryButton(label: 'Esc', onTap: () => onKey('\x1b')),
-              AccessoryButton(label: '^C', onTap: () => onKey('\x03')),
+              AccessoryButton(
+                label: 'Esc',
+                outlined: true,
+                onTap: () => onKey('\x1b'),
+              ),
+              AccessoryButton(
+                label: '^C',
+                outlined: true,
+                onTap: () => onKey('\x03'),
+              ),
               AccessoryButton(
                 icon: Icons.more_horiz,
                 active: moreArmed,
+                outlined: true,
                 onTap: onMore,
                 semanticLabel: 'More keys and commands',
                 tooltip: 'More keys and commands',
               ),
-              DirectionPadToggle(open: padOpen, onToggle: onTogglePad),
-              AccessoryButton(label: 'Tab', onTap: () => onKey('\t')),
-              KeyboardToggle(open: keyboardOpen, onToggle: onToggleKeyboard),
+              DirectionPadToggle(
+                open: padOpen,
+                onToggle: onTogglePad,
+                outlined: true,
+              ),
+              AccessoryButton(
+                label: 'Tab',
+                outlined: true,
+                onTap: () => onKey('\t'),
+              ),
+              KeyboardToggle(
+                open: keyboardOpen,
+                onToggle: onToggleKeyboard,
+                outlined: true,
+              ),
               AccessoryButton(
                 icon: Icons.add_photo_alternate_outlined,
                 onTap: uploading ? () {} : onAttachImage,
                 active: uploading,
+                outlined: true,
                 semanticLabel: 'Attach an image',
                 tooltip: 'Attach an image',
               ),

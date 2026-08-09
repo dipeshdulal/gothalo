@@ -42,16 +42,18 @@ class PaneSuggestionsBar extends ConsumerWidget {
         ref.watch(paneSuggestionsProvider(pane)).asData?.value ?? const [];
     if (suggestions.isEmpty) return const SizedBox.shrink();
 
-    final scheme = Theme.of(context).colorScheme;
     return Container(
-      color: scheme.surfaceContainerHigh,
+      // Suggestions are contextual shortcuts, not a second toolbar surface.
+      // Let the page backdrop continue behind the chip so it can sit above the
+      // composer controls without creating another gray band.
+      color: Colors.transparent,
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
       child: SizedBox(
         height: 34,
         child: ListView.separated(
           scrollDirection: Axis.horizontal,
           itemCount: suggestions.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 6),
+          separatorBuilder: (_, _) => const SizedBox(width: 4),
           itemBuilder: (context, i) => _SuggestionChip(
             suggestion: suggestions[i],
             onTap: () => runSuggestion(context, ref, suggestions[i]),

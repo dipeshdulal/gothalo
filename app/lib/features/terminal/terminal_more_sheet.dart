@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/widgets/accessory_button.dart';
+import '../../core/widgets/action_chip.dart';
 import '../transcript/quick_commands_providers.dart';
 
 /// One control byte offered in the sheet: what it's called and what it sends.
@@ -132,7 +132,8 @@ class _MoreSheet extends ConsumerWidget {
               _ButtonWrap(
                 children: [
                   for (final k in terminalControlKeys)
-                    AccessoryButton(
+                    AppActionChip(
+                      icon: Icons.keyboard_command_key,
                       label: k.label,
                       semanticLabel: '${k.label} — ${k.hint}',
                       tooltip: k.hint,
@@ -148,7 +149,8 @@ class _MoreSheet extends ConsumerWidget {
                   // unreachable rather than merely slower. It arms and closes;
                   // the row's `⋯` lights up so the armed state is still visible
                   // from outside this sheet.
-                  AccessoryButton(
+                  AppActionChip(
+                    icon: Icons.keyboard_command_key,
                     label: 'Ctrl +',
                     active: stickyCtrl,
                     semanticLabel: stickyCtrl
@@ -181,18 +183,17 @@ class _MoreSheet extends ConsumerWidget {
                 )
               else
                 Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                  spacing: 6,
+                  runSpacing: 6,
                   children: [
                     for (final (i, c) in commands.indexed)
-                      AccessoryButton(
-                        label: c.label,
-                        // Marks a command that fires a raw keystroke rather
-                        // than typing text — the same cue the composer's chips
-                        // use.
-                        leading: c.key != null
+                      AppActionChip(
+                        icon: c.key != null
                             ? Icons.keyboard_command_key
-                            : null,
+                            : Icons.bolt,
+                        label: c.label,
+                        // The command icon marks a raw keystroke; a bolt marks
+                        // a command that types text.
                         onTap: () {
                           Navigator.pop(context);
                           onCommand(c);
@@ -217,10 +218,10 @@ class _MoreSheet extends ConsumerWidget {
               const SizedBox(height: 12),
               // The sheet stays open: the new command appears in the list
               // above, which is the confirmation that it saved.
-              OutlinedButton.icon(
-                onPressed: () => showAddQuickCommand(context, ref),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add a command'),
+              AppActionChip(
+                icon: Icons.add,
+                label: 'Add a command',
+                onTap: () => showAddQuickCommand(context, ref),
               ),
             ],
           ),
@@ -230,12 +231,11 @@ class _MoreSheet extends ConsumerWidget {
   }
 }
 
-/// A wrap of [AccessoryButton]s at their natural widths.
+/// A wrap of action chips at their natural widths.
 ///
-/// The [IntrinsicWidth] is load-bearing: a [Wrap] hands its children a bounded
-/// maxWidth, and an AccessoryButton — a Container with an alignment — fills
-/// whatever bounded width it is given. Without this every button becomes a
-/// full-width slab and the wrap is a single tall column.
+/// The [IntrinsicWidth] keeps the chip's compact width when a [Wrap] hands its
+/// child a bounded maxWidth. Without it every button can become a full-width slab
+/// and the wrap turns into a single tall column.
 class _ButtonWrap extends StatelessWidget {
   const _ButtonWrap({required this.children});
 
@@ -244,8 +244,8 @@ class _ButtonWrap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+      spacing: 6,
+      runSpacing: 6,
       children: [
         for (final child in children) IntrinsicWidth(child: child),
       ],
