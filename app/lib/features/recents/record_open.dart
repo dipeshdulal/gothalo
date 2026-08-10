@@ -50,6 +50,33 @@ mixin RecentOpenRecorder<T extends ConsumerStatefulWidget> on ConsumerState<T> {
   }
 }
 
+/// Record a pane that was just created and opened directly.
+///
+/// New-agent flows navigate with the pane id returned by Herdr before the next
+/// snapshot includes that agent. Waiting for the destination screen to discover
+/// the agent therefore misses the visit entirely. The pane id is already a valid
+/// identity here, so record it at the navigation boundary; the destination's
+/// normal recorder will dedupe it once the snapshot catches up.
+Future<void> recordRecentOpenForPane(
+  WidgetRef ref, {
+  required String paneId,
+  required OpenedView view,
+}) async {
+  if (paneId.isEmpty) return;
+  try {
+    final connection = await ref.read(activeConnectionProvider.future);
+    final serverId = connection?.id;
+    if (serverId == null || serverId.isEmpty) return;
+    await ref
+        .read(recentOpensProvider.notifier)
+        .record(serverId: serverId, paneId: paneId, view: view);
+  } catch (_) {
+    // Recent is convenience state. A connection/keystore failure must not turn
+    // a successful agent launch into an app error; the transcript screen can
+    // still record it later if the snapshot is available.
+  }
+}
+
 /// The matching one-visit hook for a scoped project/space screen.
 ///
 /// A project has no agent to use as its identity, and its route can be reached
