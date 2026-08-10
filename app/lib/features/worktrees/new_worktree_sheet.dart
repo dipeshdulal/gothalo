@@ -8,6 +8,8 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import '../agents/agent_kind_picker.dart';
 import '../agents/agent_lifecycle_providers.dart';
+import '../recents/recent_providers.dart';
+import '../recents/record_open.dart';
 
 /// Create a git worktree from the phone and, optionally, put an agent to work
 /// in it in the same gesture.
@@ -416,7 +418,16 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
       // The messenger and the router were captured from an ancestor, so both
       // outlive this sheet: a launch the operator swiped away from still
       // reports, it just has no sheet left to pop.
-      if (mounted) navigator.pop();
+      if (mounted) {
+        // Herdr returns the new pane before the next snapshot necessarily
+        // contains it, so capture this direct navigation for Recent now.
+        await recordRecentOpenForPane(
+          ref,
+          paneId: result.paneId,
+          view: OpenedView.transcript,
+        );
+        navigator.pop();
+      }
       messenger.showSnackBar(SnackBar(
         content: Text(worktreeLaunchSummary(
           branch: branch,

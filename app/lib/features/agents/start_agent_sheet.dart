@@ -7,6 +7,8 @@ import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import 'agent_kind_picker.dart';
 import 'agent_lifecycle_providers.dart';
+import '../recents/recent_providers.dart';
+import '../recents/record_open.dart';
 
 /// Where a new agent should be put. The bridge accepts three targeting forms
 /// and this is the app's name for them, so the sheet renders the right fields
@@ -247,6 +249,14 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
         prompt: _prompt.text.trim(),
       );
       if (!mounted) return;
+      // Herdr returns the new pane before the next snapshot necessarily
+      // contains it. Record the direct navigation now, rather than relying
+      // on TranscriptScreen to discover an agent that is not visible yet.
+      await recordRecentOpenForPane(
+        ref,
+        paneId: result.paneId,
+        view: OpenedView.transcript,
+      );
       navigator.pop();
       messenger.showSnackBar(
         SnackBar(
