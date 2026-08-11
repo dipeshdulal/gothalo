@@ -27,9 +27,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/dipeshdulal/gothalo/internal/gitutil"
 )
 
 // Refusal reasons. Each is a distinct HTTP status at the handler, and each is
@@ -160,6 +164,24 @@ func Inspect(repoRoot, branch string) (Info, error) {
 	return info, nil
 }
 
+// branchDeleteLocks serializes destructive branch operations for the same
+// repository. It prevents two HTTP requests from both passing preflight and
+// then racing to update the same ref.
+var branchDeleteLocks sync.Map // map[string]*sync.Mutex
+
+func repoDeleteLock(repoRoot string) *sync.Mutex {
+	key, err := filepath.Abs(repoRoot)
+	if err == nil {
+		repoRoot = key
+	}
+	if real, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = real
+	}
+	lock := &sync.Mutex{}
+	actual, _ := branchDeleteLocks.LoadOrStore(repoRoot, lock)
+	return actual.(*sync.Mutex)
+}
+
 // Delete removes a local branch, re-running every safety check first — the
 // client's preflight is a UI convenience, not the guard. force opts into losing
 // unmerged commits; it does NOT override the default-branch or checked-out
@@ -168,6 +190,10 @@ func Inspect(repoRoot, branch string) (Info, error) {
 // Callers must remove the worktree first: a branch checked out anywhere is
 // refused, so calling this before the checkout is gone can only fail.
 func Delete(repoRoot, branch string, force bool) (Outcome, error) {
+	lock := repoDeleteLock(repoRoot)
+	lock.Lock()
+	defer lock.Unlock()
+
 	info, err := Inspect(repoRoot, branch)
 	if err != nil {
 		return Outcome{}, err
@@ -198,6 +224,9 @@ func Delete(repoRoot, branch string, force bool) (Outcome, error) {
 		flag = "-D"
 	}
 	if _, err := gitOut(repoRoot, "branch", flag, "--", branch); err != nil {
+		if errors.Is(err, gitutil.ErrIndexLocked) {
+			return Outcome{}, err
+		}
 		return Outcome{}, fmt.Errorf("%w: %v", ErrGit, err)
 	}
 
@@ -397,6 +426,7 @@ func gitOut(repoRoot string, args ...string) (string, error) {
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repoRoot
+	cmd.Env = gitutil.Environment()
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -405,6 +435,9 @@ func gitOut(repoRoot string, args ...string) (string, error) {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {
+				if lockErr := gitutil.IndexLockError(stderr); lockErr != nil {
+					return string(out), fmt.Errorf("git %s: %w", strings.Join(args, " "), lockErr)
+				}
 				return string(out), fmt.Errorf("git %s: %s", strings.Join(args, " "), stderr)
 			}
 		}

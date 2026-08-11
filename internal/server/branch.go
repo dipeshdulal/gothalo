@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/gitbranch"
+	"github.com/dipeshdulal/gothalo/internal/gitutil"
 	"github.com/dipeshdulal/gothalo/internal/herdr"
 )
 
@@ -264,6 +265,8 @@ func (s *Server) handleBranchDelete(w http.ResponseWriter, r *http.Request) {
 // repository's state is what says no.
 func branchErrorStatus(err error) int {
 	switch {
+	case errors.Is(err, gitutil.ErrIndexLocked):
+		return http.StatusConflict
 	case errors.Is(err, gitbranch.ErrNoBranch):
 		return http.StatusNotFound
 	case errors.Is(err, gitbranch.ErrBadBranch), errors.Is(err, gitbranch.ErrNotARepo):
