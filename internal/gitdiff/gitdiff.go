@@ -14,8 +14,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/dipeshdulal/gothalo/internal/gitutil"
 )
 
 // FileChange is one file in the working tree's pending changes.
@@ -131,6 +134,10 @@ func Branch(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
+	lock := worktreeReadLock(cwd)
+	lock.Lock()
+	defer lock.Unlock()
+
 	out, err := gitString(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return ""
@@ -158,6 +165,12 @@ func Branch(cwd string) string {
 // path, not a change to fit alongside it. What they must not do is disagree, so
 // the fallback list is shared by construction; see [conventionalDefaults].
 func ReadContext(cwd string) Context {
+	if cwd != "" {
+		lock := worktreeReadLock(cwd)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+
 	c := gitContext(cwd)
 	if !c.Repo {
 		return c
@@ -333,6 +346,12 @@ func aheadBehind(cwd, base string) (ahead, behind int) {
 // errors, so a quiet non-repo pane just shows "no changes" instead of an
 // error screen.
 func Collect(cwd string) (Result, error) {
+	if cwd != "" {
+		lock := worktreeReadLock(cwd)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+
 	gc := gitContext(cwd)
 
 	// --untracked-files=all expands an untracked directory into its individual
@@ -340,8 +359,12 @@ func Collect(cwd string) (Result, error) {
 	// package like internal/gitdiff/ should list its actual files, not itself.
 	statusRaw, err := gitRaw(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
-		// Most likely "not a git repository" — not a bridge error, just
-		// nothing to show.
+		// A lock conflict is actionable and should not be silently converted into
+		// an empty diff. Other failures are most likely "not a git repository" —
+		// not a bridge error, just nothing to show.
+		if errors.Is(err, gitutil.ErrIndexLocked) {
+			return Result{}, err
+		}
 		return Result{Git: gc}, nil
 	}
 	entries := parsePorcelain(statusRaw)
@@ -577,6 +600,12 @@ const (
 // start and count are clamped rather than rejected: a client that asks for
 // lines past EOF gets the tail of the file and EOF set, not an error.
 func ExpandContext(cwd, path string, start, count int) (Expansion, error) {
+	if cwd != "" {
+		lock := worktreeReadLock(cwd)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+
 	full, err := safeJoin(cwd, path)
 	if err != nil {
 		return Expansion{}, err
@@ -647,6 +676,41 @@ func safeJoin(cwd, path string) (string, error) {
 	return full, nil
 }
 
+// worktreeReadLocks stop concurrent bridge requests for the same checkout from
+// spawning duplicate git reads. They do not attempt to coordinate with an agent
+// or a user's shell; GIT_OPTIONAL_LOCKS=0 is what prevents these reads from
+// taking an index lock in the first place.
+var worktreeReadLocks sync.Map // map[string]*sync.Mutex
+
+func worktreeReadLock(cwd string) *sync.Mutex {
+	key, err := filepath.Abs(cwd)
+	if err == nil {
+		cwd = key
+	}
+	if real, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = real
+	}
+
+	// A pane can report a subdirectory as its cwd while another request reports
+	// the worktree root. Use the checkout's .git marker as the key so both paths
+	// share one bridge-side read lock. A linked worktree has a .git file at its
+	// own root, which is exactly the granularity we want.
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			cwd = dir
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+
+	lock := &sync.Mutex{}
+	actual, _ := worktreeReadLocks.LoadOrStore(cwd, lock)
+	return actual.(*sync.Mutex)
+}
+
 // gitTimeout bounds a single git invocation. git can block indefinitely on
 // things that have nothing to do with the repo being large — an index.lock held
 // by another process, a filesystem that stops answering, a credential prompt on
@@ -662,13 +726,18 @@ func gitRaw(cwd string, args ...string) ([]byte, error) {
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = cwd
+	cmd.Env = gitutil.Environment()
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
 			return out, fmt.Errorf("git %s: timed out after %s", strings.Join(args, " "), gitTimeout)
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
-			return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(ee.Stderr)))
+			stderr := strings.TrimSpace(string(ee.Stderr))
+			if lockErr := gitutil.IndexLockError(stderr); lockErr != nil {
+				return out, fmt.Errorf("git %s: %w", strings.Join(args, " "), lockErr)
+			}
+			return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, stderr)
 		}
 		return out, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}

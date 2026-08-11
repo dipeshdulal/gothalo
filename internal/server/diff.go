@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"github.com/dipeshdulal/gothalo/internal/gitdiff"
+	"github.com/dipeshdulal/gothalo/internal/gitutil"
 )
 
 // GET /diff?pane=<pane_id> -> the agent's working-tree changes: branch, and
@@ -54,6 +55,11 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 	result, err := gitdiff.Collect(cwd)
 	if err != nil {
+		if errors.Is(err, gitutil.ErrIndexLocked) {
+			log.Warn("diff: git index is locked", "pane", pane, "cwd", cwd, "err", err)
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		log.Warn("diff: collect failed", "pane", pane, "cwd", cwd, "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -101,6 +107,10 @@ func (s *Server) handleDiffExpand(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, gitdiff.ErrNotText):
 		http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
+		return
+	case errors.Is(err, gitutil.ErrIndexLocked):
+		log.Warn("diff: git index is locked", "pane", pane, "path", path, "err", err)
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:
 		log.Warn("diff: expand failed", "pane", pane, "path", path, "err", err)
