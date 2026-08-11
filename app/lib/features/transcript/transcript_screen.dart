@@ -8,6 +8,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart' show ImageSource;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -2471,6 +2472,21 @@ class _PendingBubble extends StatelessWidget {
   }
 }
 
+Future<void> _openTranscriptLink(BuildContext context, String? href) async {
+  if (href == null || href.trim().isEmpty) return;
+  var uri = Uri.tryParse(href.trim());
+  if (uri == null || uri.scheme.isEmpty) {
+    uri = Uri.tryParse('https://${href.trim()}');
+  }
+  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) return;
+  final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not open link')),
+    );
+  }
+}
+
 /// A markdown body that collapses a long message to a preview — only the
 /// preview is parsed and laid out until you expand it, so one huge reply can't
 /// stall the scroll. Short messages render in full with no toggle.
@@ -2517,6 +2533,9 @@ class _ExpandableMarkdownState extends State<_ExpandableMarkdown> {
           data: shown,
           selectable: true,
           fitContent: true,
+          onTapLink: (text, href, title) {
+            unawaited(_openTranscriptLink(context, href));
+          },
           styleSheet: MarkdownStyleSheet(
             p: TextStyle(color: fg, fontSize: 14, height: 1.35),
             a: TextStyle(

@@ -104,11 +104,15 @@ void main() {
         .where((r) => r.compact)
         .length;
     expect(compact, kIdleVisibleRows);
-    expect(find.text('Show 6 more'), findsOneWidget);
 
-    // The expander sits at the foot of a long list on a short test viewport;
-    // tapping it blind would hit whatever is actually at those coordinates.
-    await tester.ensureVisible(find.text('Show 6 more'));
+    // The expander is a standalone control below the idle panel, matching the
+    // Needs you and Working sections. Scroll it into the short test viewport
+    // before asserting or tapping it.
+    for (var i = 0; i < 10 && find.text('Show 6 more').evaluate().isEmpty; i++) {
+      await tester.drag(find.byType(ListView).at(1), const Offset(0, -200));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Show 6 more'), findsOneWidget);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Show 6 more'));
     await tester.pumpAndSettle();

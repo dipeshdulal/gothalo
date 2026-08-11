@@ -60,6 +60,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
 | GET  | `/diff/expand` | — (query: `pane`, `path`, `start`, `count`) | `{path, start, lines[], eof, total}` | the unchanged lines around a hunk, for expanding a collapsed region in the diff viewer — `git diff` only ships 3 lines of context, so they aren't in `/diff` at all (see [`CONTRACT-diff.md`](CONTRACT-diff.md)) |
 | POST | `/image` | raw image bytes (query: `pane`) | `{path, relative_path, content_type, bytes}` | drop a screenshot into **any** pane's tree and get the path back, to paste into a prompt or type into the terminal (see [`CONTRACT-image.md`](CONTRACT-image.md)) |
 | GET  | `/timeline` | — (query: `limit?`, `pane?`) | `{entries[], limit}` | recent agent-activity log, newest first — one entry per status transition, each with how long the previous status lasted (below; see [`CONTRACT-timeline.md`](CONTRACT-timeline.md)) |
+| GET  | `/usage` | — | `{fetched_at, claude}` | live Claude Code OAuth quota windows; unavailable when Claude is not installed/authenticated; credentials stay on the host |
 | GET  | `/commands` | — (query: `pane`) | `{pane, agent_kind, commands[]}` | the slash commands an **agent** pane accepts, for the composer typeahead — discovered from disk plus the agent's built-ins (below; see [`CONTRACT-commands.md`](CONTRACT-commands.md)) |
 | GET  | `/suggestions` | — (query: `pane`) | `{pane, suggestions[]}` | the two or three one-tap actions worth offering for **any** pane, from what is running in it — open its dev server, review changes, resolve a stopped rebase, open a pull request, start an agent in an idle shell (below; see [`CONTRACT-suggestions.md`](CONTRACT-suggestions.md)) |
 | GET  | `/ports` | — (query: `pane?`) | `{ports[]}` | raw host-wide dev-server scan behind the `dev_server` suggestion — every HTTP listener, attributed to the pane that spawned it. **The app does not call this**; it reads `/suggestions` (appendix of [`CONTRACT-suggestions.md`](CONTRACT-suggestions.md)) |
@@ -425,6 +426,39 @@ same `gitdiff` call `/diff?context=1` answers with); the app refetches on screen
 open and on the pane's agent-status changes rather than polling. Full details,
 the cost model, and the `/ports` appendix in
 [`CONTRACT-suggestions.md`](./CONTRACT-suggestions.md).
+
+## GET /usage — live Claude quota
+
+The bridge reads Claude Code's local OAuth credential on the host and calls
+Claude's OAuth usage endpoint. The access token is never returned to the app.
+When Claude is not installed or authenticated, `claude.available` is `false`; the
+Home screen omits its usage card rather than displaying zero.
+
+```
+GET /usage
+```
+
+```json
+{
+  "fetched_at": "2026-08-10T12:00:00Z",
+  "claude": {
+    "available": true,
+    "subscription_type": "max",
+    "five_hour": {
+      "utilization": 23.0,
+      "resets_at": "2026-08-10T15:00:00Z"
+    },
+    "seven_day": {
+      "utilization": 4.0,
+      "resets_at": "2026-08-16T12:00:00Z"
+    }
+  }
+}
+```
+
+This is a live quota read, not local token/cost accounting. The app refreshes it
+once per minute and treats failures as an unavailable optional card. The Home
+screen displays all windows returned by this endpoint directly.
 
 ## GET /timeline — recent agent activity
 The only read that describes the **past**. Every other endpoint says what is true

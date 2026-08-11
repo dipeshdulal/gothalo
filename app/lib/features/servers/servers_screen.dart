@@ -18,6 +18,7 @@ import '../agents/widgets/agent_sections.dart';
 import '../priority/priority_providers.dart';
 import '../priority/widgets/priority_overflow_bar.dart';
 import '../recents/recent_providers.dart';
+import '../usage/usage_widgets.dart';
 
 /// Home — **agents**, not servers.
 ///
@@ -202,6 +203,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                               needsYou: hits.where((h) => h.needsYou).length,
                             ),
                           ),
+                          enter(const ClaudeUsageStrip()),
 
                           // --- Priority (needs you + starred) ---
                           enter(

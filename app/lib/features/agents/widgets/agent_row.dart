@@ -444,10 +444,10 @@ class CompactAgentPanel extends StatelessWidget {
 
 /// The "show N more" / "show less" control at the foot of a capped section.
 ///
-/// Used inside a [CompactAgentPanel] and as a standalone row under a run of
-/// cards, because it is the same idea either way — a cap the user can lift —
-/// and two controls that said that differently would read as two features. Same
-/// wording and same chevron as Priority's expander, for the same reason.
+/// Used as a standalone row under a capped section, because it is the same idea
+/// everywhere — a cap the user can lift — and two controls that said that
+/// differently would read as two features. Same wording and same chevron as
+/// Priority's expander, for the same reason.
 class SectionExpander extends StatelessWidget {
   const SectionExpander({
     super.key,

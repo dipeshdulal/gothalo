@@ -22,18 +22,12 @@ final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     initialLocation: '/',
     routes: [
-      GoRoute(
-        path: '/',
-        builder: (context, state) => const ServersScreen(),
-      ),
+      GoRoute(path: '/', builder: (context, state) => const ServersScreen()),
       GoRoute(
         path: '/pair',
         builder: (context, state) => const PairingScreen(),
       ),
-      GoRoute(
-        path: '/inbox',
-        builder: (context, state) => const InboxScreen(),
-      ),
+      GoRoute(path: '/inbox', builder: (context, state) => const InboxScreen()),
       GoRoute(
         path: '/priority',
         builder: (context, state) => const PriorityScreen(),
@@ -48,9 +42,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/overview/:workspace',
-        builder: (context, state) => OverviewScreen(
-          workspaceId: state.pathParameters['workspace'],
-        ),
+        builder: (context, state) =>
+            OverviewScreen(workspaceId: state.pathParameters['workspace']),
       ),
       GoRoute(
         path: '/terminal/:pane',

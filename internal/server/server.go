@@ -24,6 +24,7 @@ import (
 	"github.com/dipeshdulal/gothalo/internal/store"
 	"github.com/dipeshdulal/gothalo/internal/suggest"
 	"github.com/dipeshdulal/gothalo/internal/timeline"
+	"github.com/dipeshdulal/gothalo/internal/usage"
 )
 
 // herdrRequester is the one call the generic /herdr proxy needs: an
@@ -85,13 +86,16 @@ type Server struct {
 	// spaces backs GET /browse's root derivation in tests; nil in production,
 	// where the open spaces come from the session Manager.
 	spaces spaceLister
+	// usage reads provider quota data on the bridge host. It never exposes the
+	// credentials it uses to the mobile client.
+	usage *usage.Client
 }
 
 // New constructs a Server. push, bus and tl may be nil.
 func New(cfg *config.Config, mgr *herdr.Manager, p *push.Client, st *store.Store, pm *pairing.Manager, web fs.FS, bus *events.Bus, tl *timeline.Log) *Server {
 	return &Server{
 		cfg: cfg, sessions: mgr, push: p, store: st, pairing: pm,
-		web: web, bus: bus, timeline: tl,
+		web: web, bus: bus, timeline: tl, usage: usage.NewClient(),
 		previews: preview.New(),
 	}
 }
@@ -147,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/attach", s.handleAttach)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/timeline", s.handleTimeline)
+	mux.HandleFunc("/usage", s.handleUsage)
 	mux.HandleFunc("/browse", s.handleBrowse)
 	mux.HandleFunc("/pane/new", s.handlePaneNew)
 	mux.HandleFunc("/pane/close", s.handlePaneClose)

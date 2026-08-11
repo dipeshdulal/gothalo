@@ -85,10 +85,13 @@ List<Widget> buildAgentSections(
                   onTap: () => onOpen(hit),
                 ),
             ],
-            footer: expander,
           ),
         ),
       );
+      // Keep the expander outside the idle panel, like Needs you and
+      // Working. The list remains one shared panel, while the control has
+      // one consistent standalone treatment on every state section.
+      if (expander != null) out.add(expander);
       continue;
     }
 

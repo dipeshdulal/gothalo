@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/connection/connection.dart';
 import 'models/snapshot.dart';
+import 'models/usage.dart';
 
 /// Outcome of a `POST /approve`. The bridge always returns `200`; [applied]
 /// says whether the confirm keystroke was actually sent, and [reason] explains
@@ -1065,6 +1066,19 @@ class BridgeClient {
         serverName: (body['server_name'] as String?) ?? '',
         version: (body['version'] as num?)?.toInt() ?? 0,
       );
+    } on DioException catch (e) {
+      throw _asBridgeException(e);
+    }
+  }
+
+  /// `GET /usage` → live provider quota windows. The bridge reads provider
+  /// credentials on the host and never sends them to the app.
+  Future<UsageSnapshot> getUsage() async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>('/usage');
+      final body = res.data;
+      if (body == null) throw BridgeException('Empty usage response');
+      return UsageSnapshot.fromJson(body);
     } on DioException catch (e) {
       throw _asBridgeException(e);
     }
