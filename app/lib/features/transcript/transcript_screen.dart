@@ -25,6 +25,7 @@ import '../attach/image_attach.dart';
 import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
+import '../priority/priority_providers.dart';
 import '../recents/record_open.dart';
 import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
@@ -148,6 +149,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
 
   /// A permanent, non-retryable failure (bad token, unsupported kind, …).
   String? _failure;
+
+  /// Herdr's `done` means unseen background work. Opening this transcript
+  /// acknowledges it on the host too, once per visit.
+  bool _markedDoneSeen = false;
 
   /// The blocked prompt (question + options), polled from `/agent-state`, shown
   /// as an approval bar while the agent is blocked; null/not-blocked otherwise.
@@ -908,6 +913,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     // bridgeClientProvider yields null while the active connection is being
     // resolved, so this never adopts a client for the wrong server.
     final client = ref.watch(bridgeClientProvider);
+    final serverId = client?.connection.id;
+    final pinned = serverId != null &&
+        (ref.watch(starredAgentsProvider).value ?? const <String>{}).contains(
+          StarredAgents.starKey(serverId, widget.pane),
+        );
     if (client != null && !identical(client, _client)) {
       _client = client;
       _reconnectTimer?.cancel();
@@ -932,6 +942,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     // "I was just in this agent's chat" — the fact the home screen's Recent
     // section is built from. Once per visit; see [RecentOpenRecorder].
     recordRecentOpen(agent, view: OpenedView.transcript);
+
+    // Herdr's done state is "finished while unseen". Opening its transcript
+    // is the acknowledgement, and agent.focus updates the desktop state too.
+    if (!_markedDoneSeen && agent?.agentStatus == AgentStatus.done) {
+      _markedDoneSeen = true;
+      unawaited(markAgentSeen(ref, widget.pane));
+    }
 
     // The slash typeahead's matches, or empty when it should not show — no
     // active `/…` token, the fetch has not landed, or nothing matches what was
@@ -1094,6 +1111,14 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
                   '/terminal/${Uri.encodeComponent(widget.pane)}',
                 ),
                 onJump: () => showJumpSheet(context, currentPane: widget.pane),
+                pinned: pinned,
+                onTogglePin: () {
+                  if (serverId != null) {
+                    ref
+                        .read(starredAgentsProvider.notifier)
+                        .toggle(serverId, widget.pane);
+                  }
+                },
                 onQuickCommand: _handleQuickCommand,
                 enabled:
                     _conn != _Conn.closed &&
@@ -1968,9 +1993,8 @@ class _ThinkingIndicator extends StatelessWidget {
   }
 }
 
-/// One row above the composer for everything that's an action about *how*
-/// you're talking to the agent rather than the chat itself: the Claude
-/// permission-mode switcher, quick-command snippets (see
+/// One row above the composer for conversation actions: pinning the chat, the
+/// Claude permission-mode switcher, quick-command snippets (see
 /// docs/RESEARCH-feature-ideas.md, #7), "+" to add one, a jump to another
 /// agent, and a jump to the raw terminal.
 ///
@@ -1987,6 +2011,8 @@ class _ComposerActionsRow extends ConsumerWidget {
     required this.onCycleMode,
     required this.onOpenTerminal,
     required this.onJump,
+    required this.pinned,
+    required this.onTogglePin,
     required this.onQuickCommand,
     required this.enabled,
   });
@@ -2000,6 +2026,8 @@ class _ComposerActionsRow extends ConsumerWidget {
   final VoidCallback onCycleMode;
   final VoidCallback onOpenTerminal;
   final VoidCallback onJump;
+  final bool pinned;
+  final VoidCallback onTogglePin;
   final void Function(QuickCommand) onQuickCommand;
   final bool enabled;
 
@@ -2009,6 +2037,13 @@ class _ComposerActionsRow extends ConsumerWidget {
     final commands = ref.watch(quickCommandsProvider).asData?.value ?? const [];
 
     final buttons = <Widget>[
+      AppActionChip(
+        icon: pinned ? Icons.star : Icons.star_border,
+        label: pinned ? 'Pinned' : 'Pin chat',
+        onTap: enabled ? onTogglePin : () {},
+        semanticLabel: pinned ? 'Unpin chat' : 'Pin chat',
+        tooltip: pinned ? 'Unpin chat' : 'Pin chat',
+      ),
       if (modeLabel != null)
         AppActionChip(
           icon: Icons.tune,

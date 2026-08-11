@@ -42,6 +42,25 @@ Future<Map<String, dynamic>?> _run(
   }
 }
 
+/// Mark an agent as seen in Herdr when it is opened from the phone.
+///
+/// Herdr's `done` state means an idle agent finished unseen background work. The
+/// `agent.focus` command is the supported way to acknowledge that work, and it
+/// updates the desktop's state as well as the mobile snapshot. This is deliberately
+/// best-effort: opening a chat must not fail because the host disappeared between
+/// the snapshot and the focus request.
+Future<void> markAgentSeen(WidgetRef ref, String paneId) async {
+  if (paneId.isEmpty) return;
+  final client = ref.read(bridgeClientProvider);
+  if (client == null) return;
+  try {
+    await client.herdrCommand('agent.focus', {'target': paneId});
+  } on BridgeException {
+    // The screen is already open; a failed acknowledgement is not a navigation
+    // error. The next snapshot will reflect whatever Herdr knows then.
+  }
+}
+
 /// Run one dedicated bridge endpoint (not the `/herdr` proxy), surfacing the
 /// outcome as a snackbar. Returns whether it succeeded.
 ///

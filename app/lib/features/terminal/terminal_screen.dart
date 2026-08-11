@@ -19,6 +19,7 @@ import '../../data/bridge/bridge_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../../features/approvals/approve_action.dart';
 import '../attach/image_attach.dart';
+import '../herdr_actions.dart';
 import '../inbox/inbox_providers.dart';
 import '../jump/jump_sheet.dart';
 import '../recents/record_open.dart';
@@ -88,6 +89,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   int _attempts = 0;
   bool _disposed = false;
   _Conn _conn = _Conn.connecting;
+
+  /// Herdr's `done` means unseen background work. Opening this terminal
+  /// acknowledges it on the host too, once per visit.
+  bool _markedDoneSeen = false;
 
   /// Coalesces resize signals. `onResize` fires continuously while the soft
   /// keyboard slides open/closed; sending each one flashes the screen with a
@@ -443,6 +448,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     // Recent section can put you back in the terminal rather than the chat.
     // Once per visit; see [RecentOpenRecorder].
     recordRecentOpen(agent, view: OpenedView.terminal);
+
+    // Herdr's done state is "finished while unseen". Opening its terminal
+    // is the acknowledgement, and agent.focus updates the desktop state too.
+    if (!_markedDoneSeen && agent?.agentStatus == AgentStatus.done) {
+      _markedDoneSeen = true;
+      unawaited(markAgentSeen(ref, widget.pane));
+    }
 
     // A non-agent pane (plain shell, dev server, log) isn't in [agents] at
     // all — fall back to the flat pane list, which is what names it: a
