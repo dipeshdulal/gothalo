@@ -14,11 +14,30 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const claudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
+
+const (
+	// defaultCacheTTL keeps a served answer at most a minute old — the app's own
+	// poll cadence — while collapsing bursts of concurrent /usage requests into
+	// a single Anthropic call.
+	defaultCacheTTL = time.Minute
+
+	// defaultRetryAfter applies when a 429 arrives without a usable Retry-After
+	// header (or with one this build cannot parse).
+	defaultRetryAfter = time.Minute
+
+	// maxRetryAfter caps how long one 429 can silence the card. A pathological
+	// header (say, a day) would otherwise hide usage for as long; hitting the
+	// endpoint again after the cap is self-correcting, because another 429 just
+	// re-arms the cooldown.
+	maxRetryAfter = 15 * time.Minute
+)
 
 // Window is one provider quota window. Utilization is a percentage in [0, 100].
 type Window struct {
@@ -44,6 +63,31 @@ type Client struct {
 	httpClient *http.Client
 	home       string
 	endpoint   string
+
+	// Last-known-good usage plus rate-limit state, guarded by mu.
+	//
+	// Anthropic rate-limits this endpoint (HTTP 429 + Retry-After). The app
+	// polls /usage every minute, and each request shares the same token and
+	// User-Agent as Claude Code's own usage checks on this host, so a live call
+	// on every poll trips the limiter. Keeping the last good answer in memory
+	// means a rate-limit window (or any transient failure) serves
+	// stale-but-true data instead of vanishing the card, and honoring
+	// Retry-After means the window gets to clear instead of being extended by
+	// our own retries.
+	mu       sync.Mutex
+	cached   *ClaudeUsage
+	cachedAt time.Time
+	cooldown time.Time
+
+	// cacheTTL overrides defaultCacheTTL; tests shorten it to force refetches.
+	cacheTTL time.Duration
+}
+
+func (c *Client) ttl() time.Duration {
+	if c.cacheTTL != 0 {
+		return c.cacheTTL
+	}
+	return defaultCacheTTL
 }
 
 func NewClient() *Client {
@@ -58,6 +102,25 @@ func NewClient() *Client {
 // FetchClaude returns unavailable rather than an error when Claude is not
 // installed or authenticated. That lets the app omit the card cleanly.
 func (c *Client) FetchClaude(ctx context.Context) ClaudeUsage {
+	now := time.Now()
+
+	c.mu.Lock()
+	cached := c.cached
+	inCooldown := now.Before(c.cooldown)
+	fresh := cached != nil && now.Sub(c.cachedAt) < c.ttl()
+	c.mu.Unlock()
+
+	// Serve the last good answer while the endpoint cools down, and skip the
+	// network entirely while the cached answer is still fresh.
+	if cached != nil && (inCooldown || fresh) {
+		return *cached
+	}
+	// Cold start inside a rate-limit window: nothing to serve, and hitting the
+	// endpoint again only extends the 429. Say so plainly instead.
+	if inCooldown {
+		return ClaudeUsage{Reason: "Claude usage is rate-limited; retrying after the cooldown"}
+	}
+
 	token, subscription, err := c.accessToken()
 	if err != nil {
 		return ClaudeUsage{Reason: err.Error()}
@@ -83,25 +146,37 @@ func (c *Client) FetchClaude(ctx context.Context) ClaudeUsage {
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return ClaudeUsage{Reason: "Claude usage is unreachable"}
+		return c.staleOr(cached, "Claude usage is unreachable")
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ClaudeUsage{Reason: "could not read Claude usage response"}
+		return c.staleOr(cached, "could not read Claude usage response")
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// The credential is bad or expired. Last-known-good data is no longer
+		// trustworthy — and Claude Code refreshes its own credential, so this
+		// clears itself — so let the card disappear rather than show a quota
+		// that can never refresh.
 		return ClaudeUsage{Reason: "Claude authentication expired"}
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Rate-limited: remember the Retry-After cooldown and keep the last good
+		// answer visible while it passes.
+		c.mu.Lock()
+		c.cooldown = time.Now().Add(parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
+		c.mu.Unlock()
+		return c.staleOr(cached, "Claude usage returned HTTP 429")
+	}
 	if resp.StatusCode != http.StatusOK {
-		return ClaudeUsage{Reason: fmt.Sprintf("Claude usage returned HTTP %d", resp.StatusCode)}
+		return c.staleOr(cached, fmt.Sprintf("Claude usage returned HTTP %d", resp.StatusCode))
 	}
 
 	var raw claudeResponse
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return ClaudeUsage{Reason: "Claude usage response was not valid JSON"}
+		return c.staleOr(cached, "Claude usage response was not valid JSON")
 	}
-	return ClaudeUsage{
+	result := ClaudeUsage{
 		Available:      raw.FiveHour != nil || raw.SevenDay != nil,
 		Subscription:   subscription,
 		FiveHour:       raw.FiveHour,
@@ -109,6 +184,42 @@ func (c *Client) FetchClaude(ctx context.Context) ClaudeUsage {
 		SevenDaySonnet: raw.SevenDaySonnet,
 		SevenDayOpus:   raw.SevenDayOpus,
 	}
+	c.mu.Lock()
+	c.cached = &result
+	c.cachedAt = time.Now()
+	c.mu.Unlock()
+	return result
+}
+
+// staleOr serves the last known good answer when one exists — a transient
+// failure should not blink the usage card off — or a reason-only answer when
+// there is nothing cached yet.
+func (c *Client) staleOr(cached *ClaudeUsage, reason string) ClaudeUsage {
+	if cached != nil {
+		return *cached
+	}
+	return ClaudeUsage{Reason: reason}
+}
+
+// parseRetryAfter reads a Retry-After header: a bare number of seconds
+// ("223") or an HTTP-date. Anything unparseable or absent falls back to
+// defaultRetryAfter, and the result is capped at maxRetryAfter so one odd
+// header cannot silence the card for hours.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	after := defaultRetryAfter
+	if v != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			after = time.Duration(secs) * time.Second
+		} else if when, err := http.ParseTime(v); err == nil {
+			if d := when.Sub(now); d > 0 {
+				after = d
+			}
+		}
+	}
+	if after > maxRetryAfter {
+		return maxRetryAfter
+	}
+	return after
 }
 
 type claudeResponse struct {
