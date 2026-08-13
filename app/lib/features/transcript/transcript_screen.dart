@@ -1005,6 +1005,14 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
                 context.push('/diff/${Uri.encodeComponent(widget.pane)}'),
             icon: const Icon(Icons.difference_outlined),
           ),
+          if (agent != null && agent.workspaceId.isNotEmpty)
+            IconButton(
+              tooltip: 'Projects',
+              onPressed: () => context.push(
+                '/overview/${Uri.encodeComponent(agent!.workspaceId)}',
+              ),
+              icon: const Icon(Icons.grid_view_outlined),
+            ),
           // Lifecycle lives in an overflow, not as bar buttons: these two kill
           // running work, and a one-tap target next to "Changes" is exactly the
           // wrong affordance for that. Both confirm before acting.
