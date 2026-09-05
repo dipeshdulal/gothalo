@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/connection/connection_providers.dart';
+import 'package:gothalo/core/widgets/action_chip.dart';
 import 'package:gothalo/core/widgets/entrance.dart';
 import 'package:gothalo/core/widgets/panel_row.dart';
 import 'package:gothalo/core/widgets/status_mark.dart';
@@ -55,6 +56,18 @@ final _working = _agent(
 );
 final _idle = _agent('w1:p3', title: 'Waiting around', branch: 'main');
 
+RecentSpaceHit _space(String workspaceId, String project, {bool active = true}) =>
+    RecentSpaceHit(
+      server: _server('s1', active: active),
+      workspaceId: workspaceId,
+      workspace: null,
+      project: project,
+      branch: null,
+      agentCount: 0,
+      terminalCount: 1,
+      needsAttention: false,
+    );
+
 /// Mounts home with a fixed world: one server, three agents, and whatever
 /// Priority and Recent are told to claim.
 Future<void> _pumpHome(
@@ -62,6 +75,7 @@ Future<void> _pumpHome(
   List<Agent> agents = const [],
   List<Agent> priority = const [],
   List<({Agent agent, OpenedView view})> recent = const [],
+  List<RecentSpaceHit> recentSpaces = const [],
 }) async {
   final server = _server('s1', active: true);
   await tester.pumpWidget(
@@ -84,6 +98,7 @@ Future<void> _pumpHome(
           for (final r in recent)
             RecentHit(server: server, agent: r.agent, view: r.view),
         ]),
+        recentSpaceHitsProvider.overrideWithValue(recentSpaces),
       ],
       child: const MaterialApp(home: ServersScreen()),
     ),
@@ -113,6 +128,48 @@ void main() {
     expect(find.text('Waiting around'), findsOneWidget);
     expect(_sections(tester), contains('Servers'));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('new agent launches into the project you were last in', (
+    tester,
+  ) async {
+    await _pumpHome(
+      tester,
+      agents: [_idle],
+      recentSpaces: [_space('w7', 'gothalo'), _space('w8', 'internal-tool')],
+    );
+
+    // It names its target instead of asking for one: the most recent project
+    // is the answer home already has.
+    expect(find.widgetWithText(AppActionChip, 'New agent'), findsOneWidget);
+    expect(find.text('in gothalo'), findsOneWidget);
+    expect(find.text('in internal-tool'), findsNothing);
+  });
+
+  testWidgets('with no recent project there is nothing to launch into', (
+    tester,
+  ) async {
+    await _pumpHome(tester, agents: [_idle]);
+
+    // Absent, not disabled. Home still lists every agent, as it always did.
+    expect(find.widgetWithText(AppActionChip, 'New agent'), findsNothing);
+    expect(find.text('Waiting around'), findsOneWidget);
+  });
+
+  testWidgets('a recent project on another server is not a target', (
+    tester,
+  ) async {
+    await _pumpHome(
+      tester,
+      agents: [_idle],
+      recentSpaces: [_space('w7', 'gothalo', active: false)],
+    );
+
+    // Launching runs against the connected server, so a project belonging to
+    // any other one cannot be the target — even though Recent still offers it
+    // as somewhere to go, which is what the project chip below is.
+    expect(find.widgetWithText(AppActionChip, 'New agent'), findsNothing);
+    expect(find.widgetWithText(AppActionChip, 'gothalo'), findsOneWidget);
   });
 
   testWidgets('groups run needs you, working, idle', (tester) async {

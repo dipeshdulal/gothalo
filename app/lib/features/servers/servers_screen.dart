@@ -13,8 +13,11 @@ import '../../core/widgets/panel_row.dart';
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/agent_groups.dart';
 import 'add_edit_server_sheet.dart';
+import '../agents/start_agent_sheet.dart';
 import '../agents/widgets/agent_row.dart';
 import '../agents/widgets/agent_sections.dart';
+import '../inbox/inbox_providers.dart';
+import '../overview/overview_screen.dart' show spaceCwdOf;
 import '../priority/priority_providers.dart';
 import '../priority/widgets/priority_overflow_bar.dart';
 import '../recents/recent_providers.dart';
@@ -204,6 +207,9 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                             ),
                           ),
                           enter(const ClaudeUsageStrip()),
+
+                          // --- Start work ---
+                          enter(const _NewAgentAction()),
 
                           // --- Priority (needs you + starred) ---
                           enter(
@@ -484,6 +490,65 @@ const double _fabClearance = 88;
 /// The text action that sits on a section header ("Manage"), sized to the
 /// header rather than as a full [TextButton], which would out-weigh the label
 /// it is attached to.
+/// Start an agent from home, in the project you were last in.
+///
+/// The one thing home could not do. Everything else here opens something that
+/// already exists; this makes new work, which is why it sits above the lists
+/// rather than among them.
+///
+/// **It names its target and does not ask for one.** A picker would be a second
+/// way to choose a project that home already knows the answer to — the most
+/// recent one is nearly always the one you mean, and when it is not, the sheet
+/// still says where the agent lands before you commit. That also avoids the
+/// trap the server-scoped version fell into: it needed Herdr's default `~`
+/// space, which a host full of named projects does not have, so the action was
+/// never offered at all.
+///
+/// Absent when there is no recent project on the active server — a chip that
+/// cannot act is not shown.
+class _NewAgentAction extends ConsumerWidget {
+  const _NewAgentAction();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Recents span every server; a launch only makes sense against the one the
+    // app is actually connected to, which is also the snapshot below.
+    final target = ref
+        .watch(recentSpaceHitsProvider)
+        .where((h) => h.server.isActive)
+        .firstOrNull;
+    if (target == null) return const SizedBox.shrink();
+    final snap = ref.watch(snapshotControllerProvider).asData?.value;
+    final panes =
+        snap?.panes
+            .where((p) => p.workspaceId == target.workspaceId)
+            .toList() ??
+        const <Pane>[];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.md),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: AppActionChip(
+          icon: Icons.rocket_launch_outlined,
+          label: 'New agent',
+          detail: 'in ${target.project}',
+          onTap: () => showStartAgentSheet(
+            context,
+            ref,
+            target: StartAgentTarget(
+              placement: StartAgentPlacement.newTab,
+              id: target.workspaceId,
+              where: 'A new tab in ${target.project}',
+              defaultCwd: spaceCwdOf(target.workspace, panes),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SectionAction extends StatelessWidget {
   const _SectionAction({required this.label, required this.onTap});
 
