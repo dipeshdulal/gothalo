@@ -130,5 +130,55 @@ void main() {
     test('a tool call that spawned nothing has no entry', () {
       expect(roster.forToolUse('toolu_bash'), isNull);
     });
+
+    /// The bottom-of-chat list is "what is working right now", so a finished
+    /// agent must not appear in it however recently it ran.
+    test('running lists only the agents still working', () {
+      final mixed = SubagentRoster([
+        const Subagent(
+          agentId: 'a1',
+          toolUseId: 't1',
+          agentType: 'general-purpose',
+          description: 'Audit the caching layer',
+          spawnDepth: 1,
+        ),
+        const Subagent(
+          agentId: 'a2',
+          toolUseId: 't2',
+          agentType: 'general-purpose',
+          description: 'Trace the retry path',
+          spawnDepth: 1,
+          done: true,
+        ),
+      ]);
+
+      expect(mixed.running.map((s) => s.agentId), ['a1']);
+    });
+
+    /// Chips and rows must not reorder under a finger as children append, so
+    /// the roster's own order is kept rather than sorting by recency.
+    test('running keeps the roster order rather than resorting by activity',
+        () {
+      final r = SubagentRoster([
+        const Subagent(
+          agentId: 'a1',
+          toolUseId: 't1',
+          agentType: 'x',
+          description: 'first',
+          spawnDepth: 1,
+          lastActivityTs: 1000,
+        ),
+        const Subagent(
+          agentId: 'a2',
+          toolUseId: 't2',
+          agentType: 'x',
+          description: 'second',
+          spawnDepth: 1,
+          lastActivityTs: 9000,
+        ),
+      ]);
+
+      expect(r.running.map((s) => s.agentId), ['a1', 'a2']);
+    });
   });
 }

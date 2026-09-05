@@ -30,6 +30,7 @@ import '../recents/record_open.dart';
 import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
+import 'running_subagents_bar.dart';
 import 'slash_commands.dart';
 import 'subagent_row.dart';
 import 'transcript_models.dart';
@@ -1123,6 +1124,12 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             // is the one the AGENT performs, and this is the screen where you
             // watch it happen.
             PaneSuggestionsBar(pane: widget.pane),
+            // What is delegated and still working, without scrolling back to
+            // find the Task rows that spawned it. Renders nothing when nothing
+            // is running, and never on a subagent's own screen — a delegated
+            // conversation's children belong to the session, not to it.
+            if (widget.subagent.isEmpty)
+              RunningSubagentsBar(roster: _roster, onOpen: _openSubagent),
             // Directly above the toolbar that started the upload, so progress
             // and the button that caused it read as one thing. Renders nothing
             // while idle.

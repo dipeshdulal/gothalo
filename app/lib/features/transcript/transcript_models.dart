@@ -241,13 +241,22 @@ List<Subagent> _subagentsFromJson(Object? raw) {
 /// currently rendered, so drilling down needs no further round trip.
 class SubagentRoster {
   SubagentRoster(List<Subagent> entries)
-    : _byToolUse = {for (final s in entries) s.toolUseId: s};
+    : _byToolUse = {for (final s in entries) s.toolUseId: s},
+      _entries = List.unmodifiable(entries);
 
-  const SubagentRoster.empty() : _byToolUse = const {};
+  const SubagentRoster.empty() : _byToolUse = const {}, _entries = const [];
 
   final Map<String, Subagent> _byToolUse;
+  final List<Subagent> _entries;
 
-  bool get isEmpty => _byToolUse.isEmpty;
+  bool get isEmpty => _entries.isEmpty;
+
+  /// The agents still working, in the roster's own order.
+  ///
+  /// Not re-sorted by recency: this backs a list you tap, and rows that
+  /// reorder themselves as children append would move under a finger.
+  List<Subagent> get running =>
+      _entries.where((s) => s.running).toList(growable: false);
 
   /// The subagent a tool call spawned, or null when it spawned none.
   Subagent? forToolUse(String toolUseId) => _byToolUse[toolUseId];
