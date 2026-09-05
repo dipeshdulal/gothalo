@@ -137,6 +137,47 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    /// With more than one server the server name is what tells otherwise
+    /// identical rows apart, so it outranks the branch for the space — the
+    /// branch is the longer, more compressible half. A long branch plus a
+    /// count previously left no room for the server at all, and the row could
+    /// not say which machine it was on.
+    testWidgets('keeps the server name when the branch is long', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark,
+          home: Scaffold(
+            body: SizedBox(
+              width: 360,
+              child: AgentRow(
+                agent: _agent({
+                  'branch': 'feature/rework-the-scheduler',
+                  'subagents': {'total': 21, 'running': 4},
+                }),
+                serverName: 'Build server',
+                onTap: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final line = tester.widget<Text>(
+        find.byWidgetPredicate(
+          (w) => w is Text && (w.textSpan?.toPlainText() ?? '').contains('acme-app'),
+        ),
+      );
+      final plain = line.textSpan!.toPlainText();
+      expect(
+        plain.indexOf('Build server'),
+        lessThan(plain.indexOf('feature/')),
+        reason: 'the server must come before the branch so the branch absorbs '
+            'the truncation: $plain',
+      );
+    });
+
     testWidgets('stays quiet when the session delegated nothing', (
       tester,
     ) async {

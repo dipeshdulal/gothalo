@@ -394,6 +394,14 @@ class _ProjectLine extends StatelessWidget {
       sep();
       spans.add(TextSpan(text: project, style: dim));
     }
+    // Server before branch, because this line ellipsises and whatever sits
+    // last is what gets cut. A server name only appears when there is more
+    // than one — and then it is the thing telling otherwise-identical rows
+    // apart, while the branch is the longer, more compressible half.
+    if (serverName != null && serverName!.isNotEmpty) {
+      sep();
+      spans.add(TextSpan(text: serverName!, style: dim));
+    }
     if (branch != null && branch.isNotEmpty) {
       sep();
       spans.add(
@@ -406,10 +414,6 @@ class _ProjectLine extends StatelessWidget {
           ).mono,
         ),
       );
-    }
-    if (serverName != null && serverName!.isNotEmpty) {
-      sep();
-      spans.add(TextSpan(text: serverName!, style: dim));
     }
     // What this agent has delegated and is still waiting on. Only when some
     // are working: a session whose delegated agents have all finished is as
