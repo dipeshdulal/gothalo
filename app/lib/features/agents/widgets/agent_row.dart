@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/naming.dart';
 import '../../../core/theme.dart';
 import '../../../core/tokens.dart';
+import '../../../core/widgets/count_pair.dart';
 import '../../../core/widgets/agent_age.dart';
 import '../../../core/widgets/live_activity_line.dart';
 import '../../../core/widgets/panel_row.dart';
@@ -427,19 +428,22 @@ class _ProjectLine extends StatelessWidget {
     );
     if (running == 0) return line;
 
-    // A sibling of the line, not a span in it. A long branch fills this line
-    // on its own, and appending the count to an ellipsised run means the part
-    // you are reading the row for is the first thing cut.
+    // A glyph and a number, the idiom the project rows already use: this line
+    // is scanned, not read, and the words cost width it does not have. The
+    // sentence survives for a screen reader, in CountPair's semantics.
+    //
+    // A sibling of the line, never a span in it — a long branch fills this
+    // line on its own, so anything appended to the ellipsised run is the first
+    // thing cut, which is exactly the part being looked for.
     return Row(
       children: [
         if (spans.isNotEmpty) Flexible(child: line),
-        if (spans.isNotEmpty) Text('  ·  ', style: dim),
-        Text(
-          '$running running',
-          style: TextStyle(
-            fontSize: 12,
-            color: muted ? scheme.onSurfaceVariant : scheme.primary,
-          ),
+        if (spans.isNotEmpty) const SizedBox(width: Space.md),
+        CountPair(
+          icon: Icons.account_tree_outlined,
+          count: running,
+          semantics: '$running agent${running == 1 ? '' : 's'} running',
+          color: muted ? null : scheme.primary,
         ),
       ],
     );

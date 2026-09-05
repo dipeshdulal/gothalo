@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/theme.dart';
+import 'package:gothalo/core/widgets/count_pair.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
 import 'package:gothalo/features/agents/widgets/agent_row.dart';
 
@@ -37,7 +38,10 @@ void main() {
       home: Scaffold(body: AgentRow(agent: a, onTap: () {})),
     );
 
-    testWidgets('says how many delegated agents are running', (tester) async {
+    /// A glyph and a number, the idiom the project rows already use — the
+    /// words cost width on a line that ellipsises, and this row is scanned
+    /// rather than read.
+    testWidgets('shows the count as an icon and a number', (tester) async {
       await tester.pumpWidget(
         host(
           _agent({
@@ -46,7 +50,41 @@ void main() {
         ),
       );
 
-      expect(find.textContaining('4 running'), findsOneWidget);
+      final pair = tester.widget<CountPair>(find.byType(CountPair));
+      expect(pair.count, 4);
+      expect(pair.icon, Icons.account_tree_outlined);
+      expect(find.textContaining('running'), findsNothing);
+    });
+
+    /// The glyph is only legible if the words survive for a screen reader.
+    testWidgets('still says "running" out loud', (tester) async {
+      await tester.pumpWidget(
+        host(
+          _agent({
+            'subagents': {'total': 17, 'running': 4},
+          }),
+        ),
+      );
+
+      expect(
+        tester.widget<CountPair>(find.byType(CountPair)).semantics,
+        '4 agents running',
+      );
+    });
+
+    testWidgets('speaks a single agent in the singular', (tester) async {
+      await tester.pumpWidget(
+        host(
+          _agent({
+            'subagents': {'total': 3, 'running': 1},
+          }),
+        ),
+      );
+
+      expect(
+        tester.widget<CountPair>(find.byType(CountPair)).semantics,
+        '1 agent running',
+      );
     });
 
     /// The badge is about what is working now. A session whose delegated work
@@ -62,7 +100,7 @@ void main() {
         ),
       );
 
-      expect(find.textContaining('running'), findsNothing);
+      expect(find.byType(CountPair), findsNothing);
     });
 
     /// The project line ellipsises, and a long branch fills it on its own. The
@@ -90,9 +128,10 @@ void main() {
         ),
       );
 
-      // Its own Text, not a span inside the ellipsised line — a span there is
-      // clipped by a long branch and no assertion on the rich text can see it.
-      final finder = find.text('4 running');
+      // Its own widget, not a span inside the ellipsised line — a span there
+      // is clipped by a long branch and no assertion on the rich text can see
+      // it.
+      final finder = find.byType(CountPair);
       expect(finder, findsOneWidget);
       expect(tester.getSize(finder).width, greaterThan(0));
       expect(tester.takeException(), isNull);
@@ -103,7 +142,7 @@ void main() {
     ) async {
       await tester.pumpWidget(host(_agent(const {})));
 
-      expect(find.textContaining('running'), findsNothing);
+      expect(find.byType(CountPair), findsNothing);
     });
   });
 }
