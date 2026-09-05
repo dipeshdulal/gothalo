@@ -15,10 +15,10 @@ package transcript
 // rest.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -91,23 +91,17 @@ func completedAgents(parentPath string) map[string]bool {
 		return copyDone(st.done)
 	}
 	buf = buf[:n]
-	st.read += int64(n)
 
 	// Stop at the last newline; the remainder is a line still being written.
-	complete := strings.LastIndexByte(string(buf), '\n')
+	complete := bytes.LastIndexByte(buf, '\n')
 	if complete < 0 {
 		return copyDone(st.done)
 	}
 	chunk := buf[:complete+1]
 	st.offset += int64(len(chunk))
+	st.read += int64(len(chunk))
 
-	for _, m := range notificationRe.FindAllSubmatch(chunk, -1) {
-		status := strings.ToLower(strings.TrimSpace(string(m[2])))
-		if status == runningStatus {
-			continue
-		}
-		st.done[string(m[1])] = true
-	}
+	applyNotifications(chunk, st.done)
 	return copyDone(st.done)
 }
 
@@ -169,7 +163,8 @@ func SubagentCounts(kind, cwd, sessionID string) (Counts, bool) {
 
 // countsBeside counts the subagents dir beside a parent transcript.
 func countsBeside(parentPath string) Counts {
-	entries, err := os.ReadDir(subagentDirFor(parentPath))
+	dir := subagentDirFor(parentPath)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return Counts{}
 	}
@@ -185,7 +180,7 @@ func countsBeside(parentPath string) Counts {
 			continue
 		}
 		// Same rule as discovery: a meta without its transcript is not a row.
-		if !isFile(filepath.Join(subagentDirFor(parentPath), "agent-"+id+".jsonl")) {
+		if !isFile(filepath.Join(dir, "agent-"+id+".jsonl")) {
 			continue
 		}
 		c.Total++

@@ -128,3 +128,34 @@ func TestScanCacheIsBounded(t *testing.T) {
 		t.Errorf("scan cache holds %d entries, cap is %d", n, scanCacheMax)
 	}
 }
+
+// Opening one child must not pay for the roster's enrichment. Discovery there
+// exists only to turn an id into a path safely; dating every sibling and
+// scanning a 10 MB parent to do it is the difference between a cheap connect
+// and megabytes of reads per stream.
+func TestOpenSubagentDoesNotScanTheParent(t *testing.T) {
+	root := t.TempDir()
+	parent := writeSession(t, root, "/x/proj", "sess")
+	writeSubagent(t, parent, "a1", metaFor, true)
+	resetScanCache()
+
+	if _, err := openSubagentBeside(parent, "claude", "a1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := scanStats(parent); n != 0 {
+		t.Errorf("opening one child read %d bytes of the parent; want 0", n)
+	}
+}
+
+// …and an unknown id is still refused, so the cheap path keeps the property
+// that a client id can never become a path.
+func TestOpenSubagentStillRefusesAnUnknownID(t *testing.T) {
+	root := t.TempDir()
+	parent := writeSession(t, root, "/x/proj", "sess")
+	writeSubagent(t, parent, "a1", metaFor, true)
+
+	if _, err := openSubagentBeside(parent, "claude", "../../etc/passwd"); err == nil {
+		t.Error("an id that is not in the listing was accepted")
+	}
+}

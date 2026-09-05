@@ -168,3 +168,85 @@ func TestSubagentOmitsUndatableLastActivity(t *testing.T) {
 		t.Error("an undatable subagent must omit the field entirely")
 	}
 }
+
+// The "orphaned agents" notice reports SEVERAL agents in one block: many
+// <task-id> tags and a single <status>. Taken from a real transcript.
+//
+// This is the population that matters most: the block exists precisely because
+// those agents will never send a completion of their own, so anything this scan
+// misses stays "running" forever.
+func TestSubagentDoneForEveryIDInABatchedNotification(t *testing.T) {
+	root := t.TempDir()
+	parent := writeSession(t, root, "/x/proj", "sess")
+	for _, id := range []string{"a11110000000000a1", "a22220000000000a2", "a33330000000000a3"} {
+		writeSubagent(t, parent, id, metaFor, true)
+	}
+	writeParentLines(t, parent,
+		`{"type":"user","content":"<task-notification>\n<task-id>a11110000000000a1</task-id>\n`+
+			`<task-id>a22220000000000a2</task-id>\n<task-id>a33330000000000a3</task-id>\n`+
+			`<status>stopped</status>\n<summary>No completion record was found for 3 background agents</summary>\n</task-notification>"}`,
+	)
+
+	for _, s := range subagentsBeside(parent) {
+		if !s.Done {
+			t.Errorf("%s left running by a batched notification", s.AgentID)
+		}
+	}
+}
+
+// An agent can be resumed after a terminal status and report again — real
+// sequence for one id: stopped, killed, failed, completed. The last word wins,
+// so a terminal status must not latch.
+func TestSubagentDoneTakesTheLastStatusNotTheFirst(t *testing.T) {
+	root := t.TempDir()
+	parent := writeSession(t, root, "/x/proj", "sess")
+	writeSubagent(t, parent, "aresumed", metaFor, true)
+	writeParentLines(t, parent,
+		`{"c":"<task-notification><task-id>aresumed</task-id><status>stopped</status></task-notification>"}`,
+		`{"c":"<task-notification><task-id>aresumed</task-id><status>running</status></task-notification>"}`,
+	)
+
+	if subagentsBeside(parent)[0].Done {
+		t.Error("a terminal status latched; a resumed agent can never come back")
+	}
+}
+
+// A notification with no <status> at all (monitor events use the same
+// envelope) must not borrow the status of the next block on the line.
+func TestSubagentStatuslessNotificationDoesNotBorrowTheNextStatus(t *testing.T) {
+	root := t.TempDir()
+	parent := writeSession(t, root, "/x/proj", "sess")
+	writeSubagent(t, parent, "awatcher", metaFor, true)
+	writeSubagent(t, parent, "adone", metaFor, true)
+	writeParentLines(t, parent,
+		`{"c":"<task-notification><task-id>awatcher</task-id><summary>Monitor event</summary></task-notification>`+
+			`<task-notification><task-id>adone</task-id><status>completed</status></task-notification>"}`,
+	)
+
+	byID := map[string]Subagent{}
+	for _, s := range subagentsBeside(parent) {
+		byID[s.AgentID] = s
+	}
+	if byID["awatcher"].Done {
+		t.Error("a statusless block inherited the following block's status")
+	}
+	if !byID["adone"].Done {
+		t.Error("the real completion was lost")
+	}
+}
+
+// Prose that quotes the tags — an agent's own report about this very feature —
+// must not end a sibling. Only a whole, well-formed block counts.
+func TestSubagentIgnoresTagsQuotedAcrossBlocks(t *testing.T) {
+	root := t.TempDir()
+	parent := writeSession(t, root, "/x/proj", "sess")
+	writeSubagent(t, parent, "avictim", metaFor, true)
+	writeParentLines(t, parent,
+		`{"c":"<task-notification><task-id>avictim</task-id><summary>x</summary></task-notification>`+
+			` prose about <status>completed</status> notifications"}`,
+	)
+
+	if subagentsBeside(parent)[0].Done {
+		t.Error("a status outside the block ended an agent")
+	}
+}

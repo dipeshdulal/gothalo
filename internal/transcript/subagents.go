@@ -126,6 +126,30 @@ func Subagents(kind, cwd, sessionID string) ([]Subagent, error) {
 // transcript path. Split from Subagents so tests can point it at a fixture tree
 // without needing a fake $HOME.
 func subagentsBeside(parentPath string) []Subagent {
+	out := listSubagentsBeside(parentPath)
+	if len(out) == 0 {
+		return out
+	}
+	// One scan of the parent serves every row; a per-row scan would re-read a
+	// multi-megabyte file once per subagent.
+	done := completedAgents(parentPath)
+	for i := range out {
+		out[i].Done = done[out[i].AgentID]
+		if at, dated := lastEntryTime(out[i].path); dated {
+			out[i].LastActivity = at
+			out[i].LastActivityTS = at.UnixMilli()
+		}
+	}
+	return out
+}
+
+// listSubagentsBeside is discovery WITHOUT liveness: ids, labels and paths.
+//
+// Split from the roster because [OpenSubagent] needs only a path, and the
+// enrichment above is not free — it dates every child (63 of them beside one
+// real session) and reads the whole parent. A stream of one child should not
+// pay for a roster of all of them.
+func listSubagentsBeside(parentPath string) []Subagent {
 	dir := subagentDirFor(parentPath)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -134,10 +158,6 @@ func subagentsBeside(parentPath string) []Subagent {
 		// better than one that fails to render at all.
 		return []Subagent{}
 	}
-
-	// One scan of the parent serves every row; a per-row scan would re-read a
-	// 1.4 MB file once per subagent.
-	done := completedAgents(parentPath)
 
 	out := make([]Subagent, 0, len(entries))
 	for _, e := range entries {
@@ -164,23 +184,13 @@ func subagentsBeside(parentPath string) []Subagent {
 			// the row with the id as its only label rather than dropping it.
 			m = subagentMeta{}
 		}
-		at, dated := lastEntryTime(body)
-		var ts int64
-		if dated {
-			ts = at.UnixMilli()
-		} else {
-			at = time.Time{}
-		}
 		out = append(out, Subagent{
-			AgentID:        id,
-			ToolUseID:      m.ToolUseID,
-			AgentType:      m.AgentType,
-			Description:    m.Description,
-			SpawnDepth:     m.SpawnDepth,
-			Done:           done[id],
-			LastActivity:   at,
-			LastActivityTS: ts,
-			path:           body,
+			AgentID:     id,
+			ToolUseID:   m.ToolUseID,
+			AgentType:   m.AgentType,
+			Description: m.Description,
+			SpawnDepth:  m.SpawnDepth,
+			path:        body,
 		})
 	}
 
@@ -224,11 +234,17 @@ func agentIDFromMeta(name string) (string, bool) {
 // The child file is the same JSONL dialect as the parent, so it reuses the
 // parent kind's Reader — no second format to maintain.
 func OpenSubagent(kind, cwd, sessionID, agentID string) (Source, error) {
-	subs, err := Subagents(kind, cwd, sessionID)
+	parent, err := Locate(kind, cwd, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range subs {
+	return openSubagentBeside(parent, kind, agentID)
+}
+
+// openSubagentBeside resolves an id against a parent's subagents dir. Uses the
+// cheap listing: matching an id needs no liveness.
+func openSubagentBeside(parentPath, kind, agentID string) (Source, error) {
+	for _, s := range listSubagentsBeside(parentPath) {
 		if s.AgentID == agentID {
 			return newFileSource(s.path, ReaderFor(kind)), nil
 		}
