@@ -410,14 +410,38 @@ class _ProjectLine extends StatelessWidget {
       sep();
       spans.add(TextSpan(text: serverName!, style: dim));
     }
+    // What this agent has delegated and is still waiting on. Only when some
+    // are working: a session whose delegated agents have all finished is as
+    // quiet as one that never delegated, and the count answers "what is this
+    // row waiting for", not "what did it once run".
+    final running = agent.subagents?.running ?? 0;
+
     // Nothing known about where it lives — better an empty line than a stray
     // separator or a pane id.
-    if (spans.isEmpty) return const SizedBox.shrink();
+    if (spans.isEmpty && running == 0) return const SizedBox.shrink();
 
-    return Text.rich(
+    final line = Text.rich(
       TextSpan(children: spans),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+    );
+    if (running == 0) return line;
+
+    // A sibling of the line, not a span in it. A long branch fills this line
+    // on its own, and appending the count to an ellipsised run means the part
+    // you are reading the row for is the first thing cut.
+    return Row(
+      children: [
+        if (spans.isNotEmpty) Flexible(child: line),
+        if (spans.isNotEmpty) Text('  ·  ', style: dim),
+        Text(
+          '$running running',
+          style: TextStyle(
+            fontSize: 12,
+            color: muted ? scheme.onSurfaceVariant : scheme.primary,
+          ),
+        ),
+      ],
     );
   }
 }

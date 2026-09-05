@@ -341,6 +341,7 @@ func (m *Manager) MergedSnapshotRaw() ([]byte, error) {
 	enrichAgentBranches(merged["agents"])
 	enrichAgentAttention(merged["agents"])
 	enrichAgentLastActivity(merged["agents"])
+	enrichAgentSubagents(merged["agents"])
 	// After last-activity: recency ranks the field it stamps.
 	enrichAgentRecency(merged["agents"])
 
@@ -564,6 +565,43 @@ func enrichAgentLastActivity(agentsNode any) {
 		}
 		if at, ok := transcript.LastActivity(kind, cwd, sessionID); ok {
 			obj["last_activity_ts"] = at.UnixMilli()
+		}
+	}
+}
+
+// enrichAgentSubagents stamps `subagents` — {total, running} — on every agent
+// whose session delegated at least one, and leaves it off every other.
+//
+// It is what puts "4 running" on a Flock row: a session that parallelises hides
+// its delegated work inside a conversation, so the list could say an agent was
+// working but never that four more were working underneath it.
+//
+// ABSENT, not zero. A session that delegated nothing and a kind that cannot be
+// counted must render no badge at all, and a client that receives {0,0} for
+// both cannot tell either from a session whose agents have all finished.
+func enrichAgentSubagents(agentsNode any) {
+	agents, ok := agentsNode.([]any)
+	if !ok {
+		return
+	}
+	for _, it := range agents {
+		obj, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		kind, _ := obj["agent"].(string)
+		cwd, _ := obj["cwd"].(string)
+		var sessionID string
+		if sess, ok := obj["agent_session"].(map[string]any); ok {
+			sessionID, _ = sess["value"].(string)
+		}
+		c, ok := transcript.SubagentCounts(kind, cwd, sessionID)
+		if !ok || c.Total == 0 {
+			continue
+		}
+		obj["subagents"] = map[string]any{
+			"total":   c.Total,
+			"running": c.Running,
 		}
 	}
 }

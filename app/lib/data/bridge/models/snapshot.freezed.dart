@@ -52,7 +52,11 @@ mixin _$Agent {
 /// sessions share one store (the bridge refuses to report another agent's
 /// age as this one's) and for an agent that has not spoken yet. Render
 /// nothing rather than "0s".
-@JsonKey(name: 'last_activity_ts') int? get lastActivityTs;
+@JsonKey(name: 'last_activity_ts') int? get lastActivityTs;/// How many agents this session delegated and how many still work, when
+/// it delegated any. Null is not {0,0}: a session that delegated nothing
+/// and a kind whose transcripts cannot be counted both send no field, and
+/// neither should draw a badge.
+ SubagentCounts? get subagents;
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -65,16 +69,16 @@ $AgentCopyWith<Agent> get copyWith => _$AgentCopyWithImpl<Agent>(this as Agent, 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank)&&(identical(other.recencyRank, recencyRank) || other.recencyRank == recencyRank)&&(identical(other.lastActivityTs, lastActivityTs) || other.lastActivityTs == lastActivityTs));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank)&&(identical(other.recencyRank, recencyRank) || other.recencyRank == recencyRank)&&(identical(other.lastActivityTs, lastActivityTs) || other.lastActivityTs == lastActivityTs)&&(identical(other.subagents, subagents) || other.subagents == subagents));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank,recencyRank,lastActivityTs);
+int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank,recencyRank,lastActivityTs,subagents);
 
 @override
 String toString() {
-  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank, recencyRank: $recencyRank, lastActivityTs: $lastActivityTs)';
+  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank, recencyRank: $recencyRank, lastActivityTs: $lastActivityTs, subagents: $subagents)';
 }
 
 
@@ -85,11 +89,11 @@ abstract mixin class $AgentCopyWith<$Res>  {
   factory $AgentCopyWith(Agent value, $Res Function(Agent) _then) = _$AgentCopyWithImpl;
 @useResult
 $Res call({
- String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank,@JsonKey(name: 'recency_rank') int? recencyRank,@JsonKey(name: 'last_activity_ts') int? lastActivityTs
+ String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank,@JsonKey(name: 'recency_rank') int? recencyRank,@JsonKey(name: 'last_activity_ts') int? lastActivityTs, SubagentCounts? subagents
 });
 
 
-$AgentSessionCopyWith<$Res>? get session;
+$AgentSessionCopyWith<$Res>? get session;$SubagentCountsCopyWith<$Res>? get subagents;
 
 }
 /// @nodoc
@@ -102,7 +106,7 @@ class _$AgentCopyWithImpl<$Res>
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,Object? recencyRank = freezed,Object? lastActivityTs = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,Object? recencyRank = freezed,Object? lastActivityTs = freezed,Object? subagents = freezed,}) {
   return _then(_self.copyWith(
 agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
@@ -119,7 +123,8 @@ as AgentSession?,stateChangeSeq: freezed == stateChangeSeq ? _self.stateChangeSe
 as int?,attentionRank: freezed == attentionRank ? _self.attentionRank : attentionRank // ignore: cast_nullable_to_non_nullable
 as int?,recencyRank: freezed == recencyRank ? _self.recencyRank : recencyRank // ignore: cast_nullable_to_non_nullable
 as int?,lastActivityTs: freezed == lastActivityTs ? _self.lastActivityTs : lastActivityTs // ignore: cast_nullable_to_non_nullable
-as int?,
+as int?,subagents: freezed == subagents ? _self.subagents : subagents // ignore: cast_nullable_to_non_nullable
+as SubagentCounts?,
   ));
 }
 /// Create a copy of Agent
@@ -133,6 +138,18 @@ $AgentSessionCopyWith<$Res>? get session {
 
   return $AgentSessionCopyWith<$Res>(_self.session!, (value) {
     return _then(_self.copyWith(session: value));
+  });
+}/// Create a copy of Agent
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$SubagentCountsCopyWith<$Res>? get subagents {
+    if (_self.subagents == null) {
+    return null;
+  }
+
+  return $SubagentCountsCopyWith<$Res>(_self.subagents!, (value) {
+    return _then(_self.copyWith(subagents: value));
   });
 }
 }
@@ -213,10 +230,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'recency_rank')  int? recencyRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'recency_rank')  int? recencyRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs,  SubagentCounts? subagents)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Agent() when $default != null:
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.recencyRank,_that.lastActivityTs);case _:
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.recencyRank,_that.lastActivityTs,_that.subagents);case _:
   return orElse();
 
 }
@@ -234,10 +251,10 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'recency_rank')  int? recencyRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'recency_rank')  int? recencyRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs,  SubagentCounts? subagents)  $default,) {final _that = this;
 switch (_that) {
 case _Agent():
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.recencyRank,_that.lastActivityTs);}
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.recencyRank,_that.lastActivityTs,_that.subagents);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -251,10 +268,10 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'recency_rank')  int? recencyRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String agent, @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown)  AgentStatus agentStatus, @JsonKey(name: 'pane_id')  String paneId, @JsonKey(name: 'terminal_title_stripped')  String title, @JsonKey(name: 'workspace_id')  String workspaceId, @JsonKey(name: 'tab_id')  String tabId,  String cwd, @JsonKey(name: 'foreground_cwd')  String foregroundCwd,  String branch,  bool focused, @JsonKey(name: 'agent_session')  AgentSession? session, @JsonKey(name: 'state_change_seq')  int? stateChangeSeq, @JsonKey(name: 'attention_rank')  int? attentionRank, @JsonKey(name: 'recency_rank')  int? recencyRank, @JsonKey(name: 'last_activity_ts')  int? lastActivityTs,  SubagentCounts? subagents)?  $default,) {final _that = this;
 switch (_that) {
 case _Agent() when $default != null:
-return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.recencyRank,_that.lastActivityTs);case _:
+return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.workspaceId,_that.tabId,_that.cwd,_that.foregroundCwd,_that.branch,_that.focused,_that.session,_that.stateChangeSeq,_that.attentionRank,_that.recencyRank,_that.lastActivityTs,_that.subagents);case _:
   return null;
 
 }
@@ -266,7 +283,7 @@ return $default(_that.agent,_that.agentStatus,_that.paneId,_that.title,_that.wor
 @JsonSerializable()
 
 class _Agent extends Agent {
-  const _Agent({this.agent = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, @JsonKey(name: 'pane_id') this.paneId = '', @JsonKey(name: 'terminal_title_stripped') this.title = '', @JsonKey(name: 'workspace_id') this.workspaceId = '', @JsonKey(name: 'tab_id') this.tabId = '', this.cwd = '', @JsonKey(name: 'foreground_cwd') this.foregroundCwd = '', this.branch = '', this.focused = false, @JsonKey(name: 'agent_session') this.session, @JsonKey(name: 'state_change_seq') this.stateChangeSeq, @JsonKey(name: 'attention_rank') this.attentionRank, @JsonKey(name: 'recency_rank') this.recencyRank, @JsonKey(name: 'last_activity_ts') this.lastActivityTs}): super._();
+  const _Agent({this.agent = '', @JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) this.agentStatus = AgentStatus.unknown, @JsonKey(name: 'pane_id') this.paneId = '', @JsonKey(name: 'terminal_title_stripped') this.title = '', @JsonKey(name: 'workspace_id') this.workspaceId = '', @JsonKey(name: 'tab_id') this.tabId = '', this.cwd = '', @JsonKey(name: 'foreground_cwd') this.foregroundCwd = '', this.branch = '', this.focused = false, @JsonKey(name: 'agent_session') this.session, @JsonKey(name: 'state_change_seq') this.stateChangeSeq, @JsonKey(name: 'attention_rank') this.attentionRank, @JsonKey(name: 'recency_rank') this.recencyRank, @JsonKey(name: 'last_activity_ts') this.lastActivityTs, this.subagents}): super._();
   factory _Agent.fromJson(Map<String, dynamic> json) => _$AgentFromJson(json);
 
 @override@JsonKey() final  String agent;
@@ -321,6 +338,11 @@ class _Agent extends Agent {
 /// age as this one's) and for an agent that has not spoken yet. Render
 /// nothing rather than "0s".
 @override@JsonKey(name: 'last_activity_ts') final  int? lastActivityTs;
+/// How many agents this session delegated and how many still work, when
+/// it delegated any. Null is not {0,0}: a session that delegated nothing
+/// and a kind whose transcripts cannot be counted both send no field, and
+/// neither should draw a badge.
+@override final  SubagentCounts? subagents;
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
@@ -335,16 +357,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank)&&(identical(other.recencyRank, recencyRank) || other.recencyRank == recencyRank)&&(identical(other.lastActivityTs, lastActivityTs) || other.lastActivityTs == lastActivityTs));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Agent&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.agentStatus, agentStatus) || other.agentStatus == agentStatus)&&(identical(other.paneId, paneId) || other.paneId == paneId)&&(identical(other.title, title) || other.title == title)&&(identical(other.workspaceId, workspaceId) || other.workspaceId == workspaceId)&&(identical(other.tabId, tabId) || other.tabId == tabId)&&(identical(other.cwd, cwd) || other.cwd == cwd)&&(identical(other.foregroundCwd, foregroundCwd) || other.foregroundCwd == foregroundCwd)&&(identical(other.branch, branch) || other.branch == branch)&&(identical(other.focused, focused) || other.focused == focused)&&(identical(other.session, session) || other.session == session)&&(identical(other.stateChangeSeq, stateChangeSeq) || other.stateChangeSeq == stateChangeSeq)&&(identical(other.attentionRank, attentionRank) || other.attentionRank == attentionRank)&&(identical(other.recencyRank, recencyRank) || other.recencyRank == recencyRank)&&(identical(other.lastActivityTs, lastActivityTs) || other.lastActivityTs == lastActivityTs)&&(identical(other.subagents, subagents) || other.subagents == subagents));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank,recencyRank,lastActivityTs);
+int get hashCode => Object.hash(runtimeType,agent,agentStatus,paneId,title,workspaceId,tabId,cwd,foregroundCwd,branch,focused,session,stateChangeSeq,attentionRank,recencyRank,lastActivityTs,subagents);
 
 @override
 String toString() {
-  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank, recencyRank: $recencyRank, lastActivityTs: $lastActivityTs)';
+  return 'Agent(agent: $agent, agentStatus: $agentStatus, paneId: $paneId, title: $title, workspaceId: $workspaceId, tabId: $tabId, cwd: $cwd, foregroundCwd: $foregroundCwd, branch: $branch, focused: $focused, session: $session, stateChangeSeq: $stateChangeSeq, attentionRank: $attentionRank, recencyRank: $recencyRank, lastActivityTs: $lastActivityTs, subagents: $subagents)';
 }
 
 
@@ -355,11 +377,11 @@ abstract mixin class _$AgentCopyWith<$Res> implements $AgentCopyWith<$Res> {
   factory _$AgentCopyWith(_Agent value, $Res Function(_Agent) _then) = __$AgentCopyWithImpl;
 @override @useResult
 $Res call({
- String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank,@JsonKey(name: 'recency_rank') int? recencyRank,@JsonKey(name: 'last_activity_ts') int? lastActivityTs
+ String agent,@JsonKey(name: 'agent_status', unknownEnumValue: AgentStatus.unknown) AgentStatus agentStatus,@JsonKey(name: 'pane_id') String paneId,@JsonKey(name: 'terminal_title_stripped') String title,@JsonKey(name: 'workspace_id') String workspaceId,@JsonKey(name: 'tab_id') String tabId, String cwd,@JsonKey(name: 'foreground_cwd') String foregroundCwd, String branch, bool focused,@JsonKey(name: 'agent_session') AgentSession? session,@JsonKey(name: 'state_change_seq') int? stateChangeSeq,@JsonKey(name: 'attention_rank') int? attentionRank,@JsonKey(name: 'recency_rank') int? recencyRank,@JsonKey(name: 'last_activity_ts') int? lastActivityTs, SubagentCounts? subagents
 });
 
 
-@override $AgentSessionCopyWith<$Res>? get session;
+@override $AgentSessionCopyWith<$Res>? get session;@override $SubagentCountsCopyWith<$Res>? get subagents;
 
 }
 /// @nodoc
@@ -372,7 +394,7 @@ class __$AgentCopyWithImpl<$Res>
 
 /// Create a copy of Agent
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,Object? recencyRank = freezed,Object? lastActivityTs = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? agent = null,Object? agentStatus = null,Object? paneId = null,Object? title = null,Object? workspaceId = null,Object? tabId = null,Object? cwd = null,Object? foregroundCwd = null,Object? branch = null,Object? focused = null,Object? session = freezed,Object? stateChangeSeq = freezed,Object? attentionRank = freezed,Object? recencyRank = freezed,Object? lastActivityTs = freezed,Object? subagents = freezed,}) {
   return _then(_Agent(
 agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as String,agentStatus: null == agentStatus ? _self.agentStatus : agentStatus // ignore: cast_nullable_to_non_nullable
@@ -389,7 +411,8 @@ as AgentSession?,stateChangeSeq: freezed == stateChangeSeq ? _self.stateChangeSe
 as int?,attentionRank: freezed == attentionRank ? _self.attentionRank : attentionRank // ignore: cast_nullable_to_non_nullable
 as int?,recencyRank: freezed == recencyRank ? _self.recencyRank : recencyRank // ignore: cast_nullable_to_non_nullable
 as int?,lastActivityTs: freezed == lastActivityTs ? _self.lastActivityTs : lastActivityTs // ignore: cast_nullable_to_non_nullable
-as int?,
+as int?,subagents: freezed == subagents ? _self.subagents : subagents // ignore: cast_nullable_to_non_nullable
+as SubagentCounts?,
   ));
 }
 
@@ -405,7 +428,279 @@ $AgentSessionCopyWith<$Res>? get session {
   return $AgentSessionCopyWith<$Res>(_self.session!, (value) {
     return _then(_self.copyWith(session: value));
   });
+}/// Create a copy of Agent
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$SubagentCountsCopyWith<$Res>? get subagents {
+    if (_self.subagents == null) {
+    return null;
+  }
+
+  return $SubagentCountsCopyWith<$Res>(_self.subagents!, (value) {
+    return _then(_self.copyWith(subagents: value));
+  });
 }
+}
+
+
+/// @nodoc
+mixin _$SubagentCounts {
+
+ int get total; int get running;
+/// Create a copy of SubagentCounts
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$SubagentCountsCopyWith<SubagentCounts> get copyWith => _$SubagentCountsCopyWithImpl<SubagentCounts>(this as SubagentCounts, _$identity);
+
+  /// Serializes this SubagentCounts to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubagentCounts&&(identical(other.total, total) || other.total == total)&&(identical(other.running, running) || other.running == running));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,total,running);
+
+@override
+String toString() {
+  return 'SubagentCounts(total: $total, running: $running)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $SubagentCountsCopyWith<$Res>  {
+  factory $SubagentCountsCopyWith(SubagentCounts value, $Res Function(SubagentCounts) _then) = _$SubagentCountsCopyWithImpl;
+@useResult
+$Res call({
+ int total, int running
+});
+
+
+
+
+}
+/// @nodoc
+class _$SubagentCountsCopyWithImpl<$Res>
+    implements $SubagentCountsCopyWith<$Res> {
+  _$SubagentCountsCopyWithImpl(this._self, this._then);
+
+  final SubagentCounts _self;
+  final $Res Function(SubagentCounts) _then;
+
+/// Create a copy of SubagentCounts
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? total = null,Object? running = null,}) {
+  return _then(_self.copyWith(
+total: null == total ? _self.total : total // ignore: cast_nullable_to_non_nullable
+as int,running: null == running ? _self.running : running // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [SubagentCounts].
+extension SubagentCountsPatterns on SubagentCounts {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _SubagentCounts value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _SubagentCounts() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _SubagentCounts value)  $default,){
+final _that = this;
+switch (_that) {
+case _SubagentCounts():
+return $default(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _SubagentCounts value)?  $default,){
+final _that = this;
+switch (_that) {
+case _SubagentCounts() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int total,  int running)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _SubagentCounts() when $default != null:
+return $default(_that.total,_that.running);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int total,  int running)  $default,) {final _that = this;
+switch (_that) {
+case _SubagentCounts():
+return $default(_that.total,_that.running);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int total,  int running)?  $default,) {final _that = this;
+switch (_that) {
+case _SubagentCounts() when $default != null:
+return $default(_that.total,_that.running);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _SubagentCounts implements SubagentCounts {
+  const _SubagentCounts({this.total = 0, this.running = 0});
+  factory _SubagentCounts.fromJson(Map<String, dynamic> json) => _$SubagentCountsFromJson(json);
+
+@override@JsonKey() final  int total;
+@override@JsonKey() final  int running;
+
+/// Create a copy of SubagentCounts
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$SubagentCountsCopyWith<_SubagentCounts> get copyWith => __$SubagentCountsCopyWithImpl<_SubagentCounts>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$SubagentCountsToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubagentCounts&&(identical(other.total, total) || other.total == total)&&(identical(other.running, running) || other.running == running));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,total,running);
+
+@override
+String toString() {
+  return 'SubagentCounts(total: $total, running: $running)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$SubagentCountsCopyWith<$Res> implements $SubagentCountsCopyWith<$Res> {
+  factory _$SubagentCountsCopyWith(_SubagentCounts value, $Res Function(_SubagentCounts) _then) = __$SubagentCountsCopyWithImpl;
+@override @useResult
+$Res call({
+ int total, int running
+});
+
+
+
+
+}
+/// @nodoc
+class __$SubagentCountsCopyWithImpl<$Res>
+    implements _$SubagentCountsCopyWith<$Res> {
+  __$SubagentCountsCopyWithImpl(this._self, this._then);
+
+  final _SubagentCounts _self;
+  final $Res Function(_SubagentCounts) _then;
+
+/// Create a copy of SubagentCounts
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? total = null,Object? running = null,}) {
+  return _then(_SubagentCounts(
+total: null == total ? _self.total : total // ignore: cast_nullable_to_non_nullable
+as int,running: null == running ? _self.running : running // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
 }
 
 

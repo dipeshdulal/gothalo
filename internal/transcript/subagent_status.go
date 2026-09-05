@@ -15,9 +15,7 @@ package transcript
 // with their own ids, so matching is restricted to ids the roster knows.
 
 import (
-	"os"
 	"regexp"
-	"strings"
 )
 
 // notificationRe matches one task-notification's id and status. Tolerant of
@@ -32,27 +30,3 @@ var notificationRe = regexp.MustCompile(
 // treating an unknown status as still-running would leave a row claiming to
 // work forever.
 const runningStatus = "running"
-
-// completedAgents scans a parent transcript for the agent ids it has been told
-// are finished.
-//
-// The whole file is read rather than the tail: a completion can sit anywhere,
-// and a long-running session's oldest children are exactly the ones whose
-// notifications have scrolled furthest back. Callers hold the result for the
-// life of a roster read.
-func completedAgents(parentPath string) map[string]bool {
-	raw, err := os.ReadFile(parentPath)
-	if err != nil {
-		return nil
-	}
-	done := map[string]bool{}
-	for _, m := range notificationRe.FindAllSubmatch(raw, -1) {
-		id := string(m[1])
-		status := strings.ToLower(strings.TrimSpace(string(m[2])))
-		if status == runningStatus {
-			continue
-		}
-		done[id] = true
-	}
-	return done
-}
