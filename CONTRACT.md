@@ -102,6 +102,17 @@ sequence number it is consistent with:
   claude/pi agent that has not spoken yet, and for an agent whose session
   cannot be resolved. **Absent means unknown, never "just now"**:
   render nothing rather than `0s`.
+- **`subagents`** — gothalo also adds `{total, running}` to every agent whose
+  session has delegated work, so a list can say "4 running" without opening the
+  chat. Like `last_activity_ts` it is **not always present**, and for the same
+  reason: it is **absent** for a session that delegated nothing and for a kind
+  whose transcripts cannot be counted. **Absent is not `{0,0}`** — zeros for
+  both cases are indistinguishable from a session whose agents have all
+  finished, so render nothing when the field is missing. `running` comes from
+  the completion notifications in the parent transcript, never from the
+  spawning `Task` call, which returns immediately for an async agent; see
+  [`docs/CONTRACT-agent-transcript.md`](docs/CONTRACT-agent-transcript.md)
+  §Subagents.
 
 **Frames 2…N: deltas.** Each is one unified **envelope** (§3). Apply them to the
 store in order.

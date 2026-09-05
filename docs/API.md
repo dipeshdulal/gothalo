@@ -93,6 +93,7 @@ POST /admin/pairing?token=<admin>   ->  { "code", "url" }
     "terminal_title_stripped": "…",
     "workspace_id": "wN",
     "branch": "feat/x",
+    "subagents": { "total": 21, "running": 4 },
     "cwd": "/…" }
 ] } } }
 ```
@@ -100,6 +101,17 @@ Group by `workspace_id`; badge on `agent_status`; title = `terminal_title_stripp
 `pane_id` is the id used for `/send`, `/approve`, and `/attach`.
 `state_change_seq` is a per-agent monotonic counter Herdr bumps on every state
 transition — pass it to `/approve` as the idempotency token (see below).
+
+**`subagents`** is how many agents this session has delegated and how many are
+still working — what puts "4 running" on a row without opening its chat. It is
+gothalo-added and **omitted entirely** when the session delegated nothing or the
+agent kind keeps sessions in a shared store that cannot be counted. Absent is not
+`{0,0}`: a client given zeros for both cases cannot tell them from a session
+whose delegated agents have all finished, so render nothing when the field is
+missing. `running` is derived from completion notifications, not from the
+spawning `Task` call — see
+[`CONTRACT-agent-transcript.md`](CONTRACT-agent-transcript.md) §Subagents for why
+the call's result cannot answer it.
 
 **`recency_rank`** is the second half of the list order: sort agents on
 `(attention_rank, recency_rank)`, both ascending. It is gothalo-added, always
