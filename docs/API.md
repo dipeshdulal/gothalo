@@ -108,10 +108,10 @@ gothalo-added and **omitted entirely** when the session delegated nothing or the
 agent kind keeps sessions in a shared store that cannot be counted. Absent is not
 `{0,0}`: a client given zeros for both cases cannot tell them from a session
 whose delegated agents have all finished, so render nothing when the field is
-missing. `running` is derived from completion notifications, not from the
-spawning `Task` call — see
+missing. `running` comes from completion notifications for **async** agents and
+from the spawning call's own result for **synchronous** ones — see
 [`CONTRACT-agent-transcript.md`](CONTRACT-agent-transcript.md) §Subagents for why
-the call's result cannot answer it.
+neither record answers it alone.
 
 **`recency_rank`** is the second half of the list order: sort agents on
 `(attention_rank, recency_rank)`, both ascending. It is gothalo-added, always

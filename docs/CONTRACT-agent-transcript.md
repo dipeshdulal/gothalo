@@ -354,17 +354,41 @@ phone should not pay for that to draw a one-line summary.
 | `done` | bool | The parent has been told this agent finished. `false` means still working. Always present. |
 | `last_activity_ts` | int | When this conversation last wrote, unix ms. **Omitted** when undatable — absent is unknown, never "just now". |
 
-#### `done`, and why the Task call cannot answer it
+#### `done`, and the two ways an agent's end is recorded
 
-`done` does **not** come from the spawning `Task` call having a result. An
-**async** agent's call returns within seconds ("launched successfully") while
-the child runs on for minutes; measured on a live session, all 15 `Task` calls
-carried results while 6 children were still appending. A client deriving
-"running" from the call would report every agent finished.
+There are two, and reading either one alone is wrong in opposite directions.
+Which applies is **stated by the spawning call**, as `run_in_background` — never
+inferred from timing.
 
-It comes from the `task-notification` the parent receives when an agent stops,
-keyed by the **agent id** — the same id as `agent_id`. Two shapes on disk make
-naive parsing wrong, and a client re-deriving this must handle both:
+**Asynchronous (`run_in_background: true`).** The call returns within seconds
+("launched successfully") while the child runs on for minutes; measured on a
+live session, all 15 calls carried results while 6 children were still
+appending. A client deriving "running" from the call would report every agent
+finished. Their end arrives later, as a `task-notification`.
+
+**Synchronous (`run_in_background: false`).** No notification is ever sent. The
+agent reports by **returning** — its `tool_result` is the completion — so a
+client reading notifications alone leaves it running forever. Measured on a
+plain parallel fan-out: 4 children, 4 results, the parent idle, and not one
+`task-notification` in the whole transcript. This is the common shape of
+delegation, and it is why the count must not be derived from notifications
+alone.
+
+**Absent `run_in_background` is unknown, and is treated as async** (notify
+only). Guessing "synchronous" on an async call reinstates the first error for
+every agent at once; guessing "async" on a synchronous one merely leaves it
+reading as running.
+
+The spawning tool is named `Task` in some builds and `Agent` in others. The join
+is on `tool_use_id` either way, so the name is only used to recognise a spawn.
+
+When both records exist for one agent, **the notification wins**, including when
+it says `running`: an agent can be resumed after finishing, and its original
+call still carries the result that ended it the first time.
+
+The notification is keyed by the **agent id** — the same id as `agent_id`. Two
+shapes on disk make naive parsing wrong, and a client re-deriving this must
+handle both:
 
 - One notification can name **several** agents under a single `status` (the "no
   completion record was found for N background agents" notice). Matching one id
@@ -379,6 +403,12 @@ A terminal status does not latch: an agent can be resumed and report again
 status wins. The residual is that a **resumed** agent is silent until it next
 reports, so it reads as done while `last_activity_ts` keeps advancing — which is
 why the timestamp is worth rendering beside the state rather than instead of it.
+
+One further residual, in the synchronous half: the spawning call for a
+`spawn_depth` 2 agent lives in **another subagent's** transcript, not the
+parent's, and only the parent is scanned. A synchronous grandchild therefore has
+no completion record here and reads as running until something notifies. Depth 1
+— every child the session itself spawned — is unaffected.
 
 Ordering of the roster is `spawn_depth` then `agent_id`, **for determinism only —
 it is not spawn order.** The authoritative order is the position of each matching

@@ -44,7 +44,7 @@ func TestCompletedAgentsRereadsOnlyWhatWasAppended(t *testing.T) {
 	)
 
 	first := completedAgents(parent)
-	if !first["a1"] {
+	if !first.notified["a1"] {
 		t.Fatalf("first scan missed a1: %v", first)
 	}
 	firstBytes := scanStats(parent)
@@ -58,7 +58,7 @@ func TestCompletedAgentsRereadsOnlyWhatWasAppended(t *testing.T) {
 	_ = f.Close()
 
 	second := completedAgents(parent)
-	if !second["a1"] || !second["a2"] {
+	if !second.notified["a1"] || !second.notified["a2"] {
 		t.Errorf("second scan lost a completion: %v", second)
 	}
 	if grew := scanStats(parent) - firstBytes; grew > 200 {
@@ -82,7 +82,7 @@ func TestCompletedAgentsRescansWhenFileShrinks(t *testing.T) {
 	)
 
 	got := completedAgents(parent)
-	if !got["a9"] {
+	if !got.notified["a9"] {
 		t.Errorf("a rewritten transcript was not rescanned: %v", got)
 	}
 }
@@ -96,7 +96,7 @@ func TestCompletedAgentsSurvivesAPartialLine(t *testing.T) {
 		[]byte(`{"c":"<task-notification><task-id>a1</task-id><stat`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := completedAgents(parent); len(got) != 0 {
+	if got := completedAgents(parent); len(got.notified) != 0 {
 		t.Fatalf("matched a half-written notification: %v", got)
 	}
 
@@ -104,7 +104,7 @@ func TestCompletedAgentsSurvivesAPartialLine(t *testing.T) {
 	_, _ = f.WriteString(`us>completed</status></task-notification>"}` + "\n")
 	_ = f.Close()
 
-	if got := completedAgents(parent); !got["a1"] {
+	if got := completedAgents(parent); !got.notified["a1"] {
 		t.Errorf("completion lost across the line boundary: %v", got)
 	}
 }

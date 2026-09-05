@@ -81,9 +81,10 @@ type Subagent struct {
 	// tree (match on ToolUseID instead).
 	SpawnDepth int `json:"spawn_depth"`
 
-	// Done reports that the parent has been told this agent finished. False
-	// means still working — NOT "unknown": the notification is exact, and the
-	// spawning call's result is not (see subagent_status.go).
+	// Done reports that this agent finished: it notified the parent, or — being
+	// synchronous — its spawning call returned. False means still working, NOT
+	// "unknown". Which of the two records applies is stated by the call itself,
+	// never inferred from timing (see subagent_status.go).
 	Done bool `json:"done"`
 
 	// LastActivity is when this conversation last wrote, taken from its newest
@@ -132,9 +133,9 @@ func subagentsBeside(parentPath string) []Subagent {
 	}
 	// One scan of the parent serves every row; a per-row scan would re-read a
 	// multi-megabyte file once per subagent.
-	done := completedAgents(parentPath)
+	finished := completedAgents(parentPath)
 	for i := range out {
-		out[i].Done = done[out[i].AgentID]
+		out[i].Done = finished.done(out[i].AgentID, out[i].ToolUseID)
 		if at, dated := lastEntryTime(out[i].path); dated {
 			out[i].LastActivity = at
 			out[i].LastActivityTS = at.UnixMilli()

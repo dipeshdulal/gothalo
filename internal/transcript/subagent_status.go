@@ -2,18 +2,29 @@ package transcript
 
 // Subagent liveness: which delegated conversations are still working.
 //
-// The obvious signal — "the spawning Task call has no tool_result yet" — is
-// wrong for the case that matters. An ASYNC agent's call returns within seconds
-// ("launched successfully") and the child then runs for minutes, so every row
-// would read as finished while four agents were demonstrably alive. Verified
-// against a live session: 15 Task calls, all with results, 6 children still
-// appending.
+// There are two ways an agent's end is recorded, and reading only one of them
+// is wrong in opposite directions.
 //
-// Completion is reported to the parent later, as a task-notification carrying
-// the AGENT id and a status. That is the join key, and it is exact — no
-// recency threshold guesses at it. Bash and monitor tasks report through the
-// same channel with their own ids, so matching is restricted to ids the roster
-// knows.
+// An ASYNC agent's spawning call returns within seconds ("launched
+// successfully") while the child runs on for minutes, so "the call has a
+// result" would report every one of them finished. Verified against a live
+// session: 15 calls, all with results, 6 children still appending. Their end
+// arrives later as a task-notification carrying the AGENT id and a status.
+// That is the join key, and it is exact — no recency threshold guesses at it.
+// Bash and monitor tasks report through the same channel with their own ids,
+// so matching is restricted to ids the roster knows.
+//
+// A SYNCHRONOUS agent never sends one. It reports by returning — its result is
+// the completion — so reading notifications alone leaves it running forever.
+// Measured on a plain parallel fan-out: 4 children, 4 results, the parent idle,
+// zero task-notifications in the whole transcript. That is the common shape of
+// delegation, so the row said "4 running" on a session that had finished, with
+// the ages climbing — the exact stuck-agent signal the age exists to give.
+//
+// Which rule applies is not inferred from timing: the spawning call states it,
+// as `run_in_background`. Absent means unknown and is treated as async (notify
+// only), because guessing "synchronous" on an async call reinstates the first
+// bug, while guessing "async" on a synchronous one merely leaves today's.
 //
 // Parsing is block-at-a-time, never one sweep for an id followed by a status.
 // Two shapes on disk make the sweep wrong:
@@ -31,6 +42,8 @@ package transcript
 //     merely talks about notifications.
 
 import (
+	"bytes"
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -72,6 +85,75 @@ func applyNotifications(chunk []byte, done map[string]bool) {
 			strings.TrimSpace(string(status[1])), runningStatus)
 		for _, id := range taskIDRe.FindAllSubmatch(block, -1) {
 			done[string(id[1])] = finished
+		}
+	}
+}
+
+// spawnTools are the tool names that delegate a conversation. Two spellings
+// because the tool was renamed; the join is on the tool-use id either way, so a
+// third name costs only this line.
+var spawnTools = map[string]bool{"Task": true, "Agent": true}
+
+// scanBlock is one content block, cut down to the fields liveness needs.
+type scanBlock struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	ID        string `json:"id"`
+	ToolUseID string `json:"tool_use_id"`
+	Input     struct {
+		// Pointer so "absent" stays distinguishable from "false". Absent is
+		// not synchronous: see the package comment.
+		RunInBackground *bool `json:"run_in_background"`
+	} `json:"input"`
+}
+
+// scanLine is one transcript line. Content sits under message for Claude and
+// at the top level elsewhere; whichever is present is the one read.
+type scanLine struct {
+	Message struct {
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+	Content json.RawMessage `json:"content"`
+}
+
+// applyToolCalls folds a chunk's spawning calls and their results into sync and
+// results, both keyed by tool-use id.
+//
+// Parsed as JSON rather than swept for with a regex, for the same reason
+// notifications are parsed a block at a time: a spawn's `prompt` is arbitrary
+// text that routinely quotes field names, so pairing an id with a
+// `run_in_background` found somewhere after it pairs across whatever the prompt
+// happens to contain. JSON gives the boundary exactly.
+func applyToolCalls(chunk []byte, sync, results map[string]bool) {
+	for _, line := range bytes.Split(chunk, []byte{'\n'}) {
+		// Most lines are prose. Decoding those costs more than the whole scan
+		// saves, and neither field can be present without its name appearing.
+		if !bytes.Contains(line, []byte("tool_use")) &&
+			!bytes.Contains(line, []byte("tool_result")) {
+			continue
+		}
+		var l scanLine
+		if json.Unmarshal(line, &l) != nil {
+			continue
+		}
+		raw := l.Message.Content
+		if len(raw) == 0 {
+			raw = l.Content
+		}
+		var blocks []scanBlock
+		// Content is a bare string on plain messages; those carry no tool call.
+		if len(raw) == 0 || json.Unmarshal(raw, &blocks) != nil {
+			continue
+		}
+		for _, b := range blocks {
+			switch {
+			case b.Type == "tool_use" && spawnTools[b.Name] && b.ID != "":
+				if b.Input.RunInBackground != nil && !*b.Input.RunInBackground {
+					sync[b.ID] = true
+				}
+			case b.Type == "tool_result" && b.ToolUseID != "":
+				results[b.ToolUseID] = true
+			}
 		}
 	}
 }
