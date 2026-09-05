@@ -115,6 +115,9 @@ void main() {
       ),
     );
 
-    expect(find.text('Explore'), findsWidgets);
+    // Twice: once as the title standing in for the missing description, once
+    // as the subtitle. findsWidgets would pass on the subtitle alone, which is
+    // rendered whether or not the fallback exists.
+    expect(find.text('Explore'), findsNWidgets(2));
   });
 }

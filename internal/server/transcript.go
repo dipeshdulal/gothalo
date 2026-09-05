@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +27,18 @@ const transcriptPollInterval = 250 * time.Millisecond
 // frames stopped being end-of-stream; to 3 when hello gained the session's
 // subagent roster and ?subagent= let a client stream a delegated conversation;
 // to 4 when hello stopped being once-per-socket (a session rotation re-sends
-// session_changed + hello + backlog).
-const transcriptProtocol = 4
+// session_changed + hello + backlog); to 5 when the subagent roster stopped
+// being connect-time-only and gained its own `subagents` frame.
+const transcriptProtocol = 5
+
+// transcriptRosterInterval is how often the stream re-reads the subagent roster.
+//
+// The roster used to ride only in hello, which is sent on connect and on
+// rotation — so a chat left open while four agents finished went on saying they
+// were running, with their ages climbing. Slower than the tail poll because it
+// lists a directory and scans the parent, and an agent finishing is a
+// human-scale event; fast enough that the answer is never visibly stale.
+const transcriptRosterInterval = 3 * time.Second
 
 // transcriptSessionPollInterval is how often the stream re-reads the pane's agent
 // session id to notice a rotation. Slower than the tail poll because it is a
@@ -76,6 +87,34 @@ type helloFrame struct {
 	// roster serves every level and drilling down needs no extra round trip.
 	// Omitted entirely when the session delegated nothing, which is the norm.
 	Subagents []transcript.Subagent `json:"subagents,omitempty"`
+}
+
+// subagentsFrame re-sends the whole roster when it has changed — an agent
+// spawned, or one the parent has now been told finished. Whole rather than a
+// delta because it is small and a client that misses one delta would be wrong
+// until the next rotation.
+type subagentsFrame struct {
+	Type      string                `json:"type"` // "subagents"
+	Pane      string                `json:"pane"`
+	Subagents []transcript.Subagent `json:"subagents"`
+}
+
+// rosterSignature collapses a roster to the part a client can see change:
+// which agents exist and whether each has finished.
+//
+// Age is deliberately excluded. A working agent's last_activity_ts advances
+// every few seconds, and resending the roster for that alone would be a frame
+// every tick to say nothing the client cannot already compute.
+func rosterSignature(subs []transcript.Subagent) string {
+	var b strings.Builder
+	for _, s := range subs {
+		b.WriteString(s.AgentID)
+		if s.Done {
+			b.WriteByte('+')
+		}
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 // sessionChangedFrame announces that the pane's agent started a NEW session and
@@ -353,6 +392,12 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 		defer sessionTicker.Stop()
 		sessionTick = sessionTicker.C
 	}
+	// The roster changes without the transcript changing — an agent the parent
+	// was told about finished — so it needs its own beat rather than riding on
+	// the tail.
+	rosterTicker := time.NewTicker(transcriptRosterInterval)
+	defer rosterTicker.Stop()
+	rosterSig := rosterSignature(subagents)
 	for {
 		select {
 		case <-ctx.Done():
@@ -384,6 +429,20 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			seq = nextBacklog.Total
+			rosterSig = rosterSignature(next.subagents)
+		case <-rosterTicker.C:
+			next, err := transcript.Subagents(agent.Kind, agent.Cwd, stream.SessionID())
+			if err != nil {
+				// A roster that cannot be read must never cost the conversation;
+				// keep the one the client already has.
+				continue
+			}
+			if sig := rosterSignature(next); sig != rosterSig {
+				rosterSig = sig
+				if err := send(subagentsFrame{Type: "subagents", Pane: pane, Subagents: next}); err != nil {
+					return
+				}
+			}
 		case <-ticker.C:
 			ents, err := stream.Poll()
 			if err != nil {

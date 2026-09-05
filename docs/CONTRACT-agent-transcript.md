@@ -261,15 +261,23 @@ Per-connection state is only a byte offset into the file (for the tail), the
 running `seq` counter, and the id of the session currently being followed;
 closing the socket stops the tail. Auth is re-checked on connect (not per frame).
 
-> **`protocol` is `4`.** The socket now **follows the pane across sessions**:
+> **`protocol` is `5`.** The **subagent roster is now live**: a `subagents`
+> frame re-sends the whole roster whenever it changes — an agent spawned, or one
+> the parent has been told finished. Before this it rode only in `hello`, so a
+> chat left open while four agents finished went on reporting them as running
+> with their ages climbing, and disagreed with the same session's row in
+> `/snapshot`. Re-scanned every 3s (slower than the tail poll: it lists a
+> directory and scans the parent, and an agent finishing is human-scale). Age
+> alone does not trigger a resend — a working agent's `last_activity_ts`
+> advances constantly and the client can already compute the elapsed time.
+>
+> **`protocol` `4`** made the socket **follow the pane across sessions**:
 > when the agent starts a new one (`/clear`, `/new`, `/resume`, a restarted
 > agent), the server re-points at it and replays the opening sequence in place —
 > `session_changed`, then a fresh `hello` + backlog. `hello` is therefore **no
 > longer once per socket**. A `?subagent=` stream is exempt (it never rotates).
->
-> Within `4`, the roster gained `done` and `last_activity_ts` (see
-> [Subagents](#subagents)). Both are additive: a client that ignores them reads
-> the roster exactly as before, so the version did not move.
+> Within `4` the roster gained `done` and `last_activity_ts` (see
+> [Subagents](#subagents)), both additive.
 >
 > **`protocol` `3`** put the session's **subagent roster** in `hello`, and
 > `?subagent=<agent_id>` streams a delegated conversation instead of the
@@ -280,6 +288,21 @@ closing the socket stops the tail. Auth is re-checked on connect (not per frame)
 > on demand with a `load_older` control frame. Inbound frames are no longer
 > end-of-stream — a `load_older` is serviced; anything else closes the socket
 > cleanly.
+
+### `subagents` — the roster changed
+
+```json
+{"type":"subagents","pane":"wN:p1","subagents":[ …same shape as in hello… ]}
+```
+
+Sent mid-stream when the roster differs from the one this socket last sent.
+**Replace your roster wholesale**; it is not a delta, so a client that misses one
+is not left wrong until the next rotation. An empty `subagents` is a real update
+(the last agent finished and its files were cleared), not a no-op.
+
+`hello` still carries the roster on connect and after a rotation, so a client
+that ignores this frame degrades to the old connect-time behaviour rather than
+to nothing.
 
 ### Subagents
 

@@ -39,7 +39,7 @@ class RunningSubagentsBar extends StatelessWidget {
     final n = running.length;
 
     return InkWell(
-      onTap: () => _open(context, running),
+      onTap: () => _open(context),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
@@ -67,9 +67,13 @@ class RunningSubagentsBar extends StatelessWidget {
     );
   }
 
-  void _open(BuildContext context, List<Subagent> running) {
+  void _open(BuildContext context) {
+    // isScrollControlled like every other sheet in the app: 63 subagents beside
+    // one session is a real number, and 9/16 of the screen is not enough to
+    // read them in.
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       useSafeArea: true,
       builder: (sheetContext) => SafeArea(
         child: Column(
@@ -92,7 +96,7 @@ class RunningSubagentsBar extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '${running.length}',
+                    '${roster.running.length}',
                     style: TextStyle(
                       fontSize: 11,
                       fontFamily: AppTheme.monoFamily,
@@ -105,18 +109,19 @@ class RunningSubagentsBar extends StatelessWidget {
               ),
             ),
             Flexible(
-              child: ListView(
+              child: ListView.builder(
                 shrinkWrap: true,
-                children: [
-                  for (final s in running)
-                    _RunningRow(
-                      subagent: s,
-                      onTap: () {
-                        Navigator.of(sheetContext).pop();
-                        onOpen(s);
-                      },
-                    ),
-                ],
+                itemCount: roster.running.length,
+                itemBuilder: (_, i) {
+                  final s = roster.running[i];
+                  return _RunningRow(
+                    subagent: s,
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onOpen(s);
+                    },
+                  );
+                },
               ),
             ),
             const SizedBox(height: 8),

@@ -13,6 +13,7 @@ enum TranscriptFrameType {
   backlogComplete,
   pageComplete,
   sessionChanged,
+  subagents,
   unknown,
 }
 
@@ -22,6 +23,7 @@ TranscriptFrameType _frameType(String? raw) => switch (raw) {
   'backlog_complete' => TranscriptFrameType.backlogComplete,
   'page_complete' => TranscriptFrameType.pageComplete,
   'session_changed' => TranscriptFrameType.sessionChanged,
+  'subagents' => TranscriptFrameType.subagents,
   _ => TranscriptFrameType.unknown,
 };
 
@@ -39,6 +41,7 @@ class TranscriptFrame {
     this.hasOlder = false,
     this.fromSessionId = '',
     this.toSessionId = '',
+    this.subagents = const [],
   });
 
   final TranscriptFrameType type;
@@ -65,6 +68,11 @@ class TranscriptFrame {
 
   /// `session_changed.to` — the session it now follows.
   final String toSessionId;
+
+  /// `subagents.subagents` — a fresh roster mid-stream (protocol 5). The
+  /// roster changes without the transcript changing, so it has its own frame
+  /// rather than riding on hello, which only arrives on connect and rotation.
+  final List<Subagent> subagents;
 
   factory TranscriptFrame.fromJson(Map<String, dynamic> json) {
     final type = _frameType(json['type'] as String?);
@@ -97,6 +105,10 @@ class TranscriptFrame {
         type: type,
         fromSessionId: json['from'] as String? ?? '',
         toSessionId: json['to'] as String? ?? '',
+      ),
+      TranscriptFrameType.subagents => TranscriptFrame(
+        type: type,
+        subagents: _subagentsFromJson(json['subagents']),
       ),
       TranscriptFrameType.unknown => TranscriptFrame(type: type),
     };
@@ -242,9 +254,13 @@ List<Subagent> _subagentsFromJson(Object? raw) {
 class SubagentRoster {
   SubagentRoster(List<Subagent> entries)
     : _byToolUse = {for (final s in entries) s.toolUseId: s},
-      _entries = List.unmodifiable(entries);
+      _entries = List.unmodifiable(entries),
+      running = List.unmodifiable(entries.where((s) => s.running));
 
-  const SubagentRoster.empty() : _byToolUse = const {}, _entries = const [];
+  const SubagentRoster.empty()
+    : _byToolUse = const {},
+      _entries = const [],
+      running = const [];
 
   final Map<String, Subagent> _byToolUse;
   final List<Subagent> _entries;
@@ -253,13 +269,35 @@ class SubagentRoster {
 
   /// The agents still working, in the roster's own order.
   ///
-  /// Not re-sorted by recency: this backs a list you tap, and rows that
-  /// reorder themselves as children append would move under a finger.
-  List<Subagent> get running =>
-      _entries.where((s) => s.running).toList(growable: false);
+  /// Not re-sorted by recency: this backs a list you tap, and rows that reorder
+  /// themselves as children append would move under a finger. Computed once —
+  /// a roster is immutable and this is read from build methods.
+  final List<Subagent> running;
 
   /// The subagent a tool call spawned, or null when it spawned none.
-  Subagent? forToolUse(String toolUseId) => _byToolUse[toolUseId];
+  ///
+  /// An empty id never matches: a roster entry can arrive without its
+  /// tool_use_id (unreadable metadata still yields a row) and a tool call can
+  /// arrive without an id, and pairing those two would hang that subagent off
+  /// every unidentified tool row in the conversation.
+  Subagent? forToolUse(String toolUseId) =>
+      toolUseId.isEmpty ? null : _byToolUse[toolUseId];
+
+  /// Whether this roster shows the same agents in the same states as [other] —
+  /// what decides if an arriving roster is worth a repaint.
+  bool sameAs(SubagentRoster other) {
+    if (_entries.length != other._entries.length) return false;
+    for (var i = 0; i < _entries.length; i++) {
+      final a = _entries[i];
+      final b = other._entries[i];
+      if (a.agentId != b.agentId ||
+          a.done != b.done ||
+          a.lastActivityTs != b.lastActivityTs) {
+        return false;
+      }
+    }
+    return true;
+  }
 }
 
 /// The high-level shape of an entry, used to switch rendering.

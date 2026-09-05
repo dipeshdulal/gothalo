@@ -99,6 +99,42 @@ void main() {
     });
   });
 
+  group('subagents frame (protocol 5)', () {
+    /// The roster used to arrive only in hello — once per connect. A chat left
+    /// open while four agents finished went on saying they were running.
+    test('carries a fresh roster mid-stream', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'subagents',
+        'pane': 'wN:p1',
+        'subagents': [
+          {
+            'agent_id': 'a1',
+            'tool_use_id': 't1',
+            'agent_type': 'general-purpose',
+            'description': 'Audit the caching layer',
+            'spawn_depth': 1,
+            'done': true,
+          },
+        ],
+      });
+
+      expect(frame.type, TranscriptFrameType.subagents);
+      expect(frame.subagents.single.agentId, 'a1');
+      expect(frame.subagents.single.done, isTrue);
+    });
+
+    test('an empty roster is a real update, not a no-op', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'subagents',
+        'pane': 'wN:p1',
+        'subagents': <dynamic>[],
+      });
+
+      expect(frame.type, TranscriptFrameType.subagents);
+      expect(frame.subagents, isEmpty);
+    });
+  });
+
   group('SubagentRoster', () {
     final roster = SubagentRoster([
       const Subagent(
@@ -129,6 +165,23 @@ void main() {
 
     test('a tool call that spawned nothing has no entry', () {
       expect(roster.forToolUse('toolu_bash'), isNull);
+    });
+
+    /// Unreadable metadata still yields a roster row, so an entry can arrive
+    /// with no tool_use_id — and a tool call can arrive with no id. Pairing
+    /// those would hang one subagent off every unidentified tool row.
+    test('an entry with no tool_use_id matches no tool call', () {
+      final r = SubagentRoster([
+        const Subagent(
+          agentId: 'a1',
+          toolUseId: '',
+          agentType: 'general-purpose',
+          description: 'lost its metadata',
+          spawnDepth: 1,
+        ),
+      ]);
+
+      expect(r.forToolUse(''), isNull);
     });
 
     /// The bottom-of-chat list is "what is working right now", so a finished

@@ -685,6 +685,18 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     }
   }
 
+  /// Swap in a roster, reporting whether it differs from the one on screen.
+  ///
+  /// Compared rather than assigned blindly: the bridge only sends this frame on
+  /// a real change, but hello repeats the roster on every reconnect and
+  /// repainting the transcript for an identical list is wasted work.
+  bool _replaceRoster(List<Subagent> next) {
+    final replacement = SubagentRoster(next);
+    if (replacement.sameAs(_roster)) return false;
+    _roster = replacement;
+    return true;
+  }
+
   /// Open a delegated conversation as its own screen.
   ///
   /// A push rather than an inline expansion: a subagent's transcript is
@@ -713,7 +725,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             h.sessionId.isNotEmpty &&
             h.sessionId != _sessionId;
         if (h.sessionId.isNotEmpty) _sessionId = h.sessionId;
-        _roster = SubagentRoster(h.subagents);
+        final rosterChanged = _replaceRoster(h.subagents);
         if (rotated) {
           _clearForNewSession();
           _announceNewSession = _rotatingTo == h.sessionId;
@@ -722,8 +734,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
         _oldestSeq = h.oldestLoadedSeq;
         _hasOlder = h.hasOlder;
         _anchorSeq = h.oldestLoadedSeq; // fix the center at the first page
-        return rotated;
+        // A reconnect on the SAME session is not a rotation, and every replayed
+        // entry de-dupes to false — so without this the fresh roster would sit
+        // unpainted until some unrelated rebuild happened along.
+        return rotated || rosterChanged;
 
+      case TranscriptFrameType.subagents:
+        return _replaceRoster(frame.subagents);
       case TranscriptFrameType.sessionChanged:
         // Informational: the reset itself is driven by the hello that follows.
         _rotatingTo = frame.toSessionId;
@@ -1112,9 +1129,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
                 ],
               ),
             ),
-            // Real approval → an actionable card; just-waiting → a soft cue;
-            // working → a live "thinking…" indicator (see _bottomStatus).
-            _bottomStatus(),
+            // Everything below acts on widget.pane — the tmux pane running the
+            // SESSION. On a delegated conversation that is not the thing on
+            // screen: typing here would answer the parent while you are reading
+            // the child, and the parent's approval card would sit over the
+            // child's transcript. A subagent's transcript is therefore read-only
+            // (there is no way to type to one anyway), and the screen ends at
+            // the conversation.
+            if (widget.subagent.isEmpty) ...[
+              // Real approval → an actionable card; just-waiting → a soft cue;
+              // working → a live "thinking…" indicator (see _bottomStatus).
+              _bottomStatus(),
             // Context chips for this pane — "Create PR", "Review changes",
             // "Resolve", "Open :5173". Renders nothing at all when the bridge
             // has nothing to offer, which is most of the time.
@@ -1123,17 +1148,15 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             // It is here because the most valuable suggestion for an agent pane
             // is the one the AGENT performs, and this is the screen where you
             // watch it happen.
-            PaneSuggestionsBar(pane: widget.pane),
-            // What is delegated and still working, without scrolling back to
-            // find the Task rows that spawned it. Renders nothing when nothing
-            // is running, and never on a subagent's own screen — a delegated
-            // conversation's children belong to the session, not to it.
-            if (widget.subagent.isEmpty)
+              PaneSuggestionsBar(pane: widget.pane),
+              // What is delegated and still working, without scrolling back to
+              // find the Task rows that spawned it. Renders nothing when
+              // nothing is running.
               RunningSubagentsBar(roster: _roster, onOpen: _openSubagent),
             // Directly above the toolbar that started the upload, so progress
             // and the button that caused it read as one thing. Renders nothing
             // while idle.
-            ImageUploadStatus(controller: _attach),
+              ImageUploadStatus(controller: _attach),
             // Everything about *how* you're talking to the agent (attach an
             // image, mode, quick commands, raw terminal) lives down here with
             // the composer as ONE scrollable chip row, not the app bar — a
@@ -1144,13 +1167,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             // than stacking on top of it. Two reasons: with a keyboard open the
             // phone has no room for both above the composer, and mid-command the
             // chips are not what you are reaching for — the list is.
-            if (slashMatches.isNotEmpty)
-              SlashCommandList(
-                commands: slashMatches,
-                onSelected: (c) => applySlashCommand(_composer, c),
-              )
-            else
-              _ComposerActionsRow(
+              if (slashMatches.isNotEmpty)
+                SlashCommandList(
+                  commands: slashMatches,
+                  onSelected: (c) => applySlashCommand(_composer, c),
+                )
+              else
+                _ComposerActionsRow(
                 pane: widget.pane,
                 agentKind: agent?.agent ?? _agentState?.agentKind ?? 'agent',
                 modeLabel: _agentState?.permissionMode != null
@@ -1177,20 +1200,21 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
               ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
-            _ComposerBar(
-              controller: _composer,
-              onSend: _sendComposer,
-              onAttachImage: _attach.uploading
-                  ? null
-                  : () => showImageSourceSheet(context, onPick: _attachImage),
-              hintText: _agentState?.isBlocked == true
-                  ? 'Type a number, or your own reply…'
-                  : null,
-              enabled:
-                  _conn != _Conn.closed &&
-                  _conn != _Conn.failed &&
-                  _failure == null,
-            ),
+              _ComposerBar(
+                controller: _composer,
+                onSend: _sendComposer,
+                onAttachImage: _attach.uploading
+                    ? null
+                    : () => showImageSourceSheet(context, onPick: _attachImage),
+                hintText: _agentState?.isBlocked == true
+                    ? 'Type a number, or your own reply…'
+                    : null,
+                enabled:
+                    _conn != _Conn.closed &&
+                    _conn != _Conn.failed &&
+                    _failure == null,
+              ),
+            ],
           ],
         ),
       ),
