@@ -108,9 +108,11 @@ sequence number it is consistent with:
   reason: it is **absent** for a session that delegated nothing and for a kind
   whose transcripts cannot be counted. **Absent is not `{0,0}`** — zeros for
   both cases are indistinguishable from a session whose agents have all
-  finished, so render nothing when the field is missing. `running` comes from
-  the completion notifications in the parent transcript, never from the
-  spawning `Task` call, which returns immediately for an async agent; see
+  finished, so render nothing when the field is missing. An agent's end is recorded one of
+  two ways, and which one applies is stated by its spawning call: an **async**
+  agent notifies the parent later, a **synchronous** one simply returns.
+  Reading only notifications leaves every synchronous agent running forever;
+  reading only call results ends every async one immediately. See
   [`docs/CONTRACT-agent-transcript.md`](docs/CONTRACT-agent-transcript.md)
   §Subagents.
 

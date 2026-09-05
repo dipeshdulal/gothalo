@@ -16,6 +16,7 @@ package transcript
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,6 +40,45 @@ type scanState struct {
 	read   int64 // bytes ever read for this path; test-only accounting
 	used   time.Time
 	done   map[string]bool
+	// Spawning calls and their returns, by tool-use id. A synchronous agent
+	// reports its end by returning rather than by notifying, so these are the
+	// only record that it finished.
+	sync    map[string]bool
+	results map[string]bool
+	// agent id -> tool-use id, read from the meta files. Cached because a meta
+	// is written once at spawn and never changes, while this runs on every
+	// snapshot poll against a directory that reached 63 entries.
+	spawn map[string]string
+}
+
+func newScanState() *scanState {
+	return &scanState{
+		done:    map[string]bool{},
+		sync:    map[string]bool{},
+		results: map[string]bool{},
+		spawn:   map[string]string{},
+	}
+}
+
+// completion is everything the parent transcript says about its children's
+// ends: who notified, and which spawning calls were synchronous and have
+// returned.
+type completion struct {
+	notified map[string]bool
+	sync     map[string]bool
+	results  map[string]bool
+}
+
+// done reports whether one agent has finished.
+//
+// A notification wins outright when there is one, including when it says
+// running: an agent can be resumed after a terminal status, and its original
+// call still carries the result that ended it the first time.
+func (c completion) done(agentID, toolUseID string) bool {
+	if v, ok := c.notified[agentID]; ok {
+		return v
+	}
+	return toolUseID != "" && c.sync[toolUseID] && c.results[toolUseID]
 }
 
 // scanCacheMax bounds the cache. Every session rotation is a new parent path
@@ -52,57 +92,99 @@ var (
 	scanCache = map[string]*scanState{}
 )
 
-// completedAgents reports the agent ids this parent has been told are
-// finished, reading only what it has not read before.
-func completedAgents(parentPath string) map[string]bool {
+// completedAgents reports what this parent says about its children's ends,
+// reading only what it has not read before.
+func completedAgents(parentPath string) completion {
 	scanMu.Lock()
 	defer scanMu.Unlock()
 
 	st := scanCache[parentPath]
 	if st == nil {
 		evictScanCache()
-		st = &scanState{done: map[string]bool{}}
+		st = newScanState()
 		scanCache[parentPath] = st
 	}
 	st.used = time.Now()
 
 	info, err := os.Stat(parentPath)
 	if err != nil {
-		return copyDone(st.done)
+		return snapshotOf(st)
 	}
 	// Shrunk means rewritten, not appended: everything learned is suspect.
 	if info.Size() < st.offset {
 		st.offset = 0
 		st.done = map[string]bool{}
+		st.sync = map[string]bool{}
+		st.results = map[string]bool{}
 	}
 	if info.Size() == st.offset {
-		return copyDone(st.done)
+		return snapshotOf(st)
 	}
 
 	f, err := os.Open(parentPath)
 	if err != nil {
-		return copyDone(st.done)
+		return snapshotOf(st)
 	}
 	defer f.Close()
 
 	buf := make([]byte, info.Size()-st.offset)
 	n, err := f.ReadAt(buf, st.offset)
 	if n == 0 && err != nil {
-		return copyDone(st.done)
+		return snapshotOf(st)
 	}
 	buf = buf[:n]
 
 	// Stop at the last newline; the remainder is a line still being written.
 	complete := bytes.LastIndexByte(buf, '\n')
 	if complete < 0 {
-		return copyDone(st.done)
+		return snapshotOf(st)
 	}
 	chunk := buf[:complete+1]
 	st.offset += int64(len(chunk))
 	st.read += int64(len(chunk))
 
 	applyNotifications(chunk, st.done)
-	return copyDone(st.done)
+	applyToolCalls(chunk, st.sync, st.results)
+	return snapshotOf(st)
+}
+
+// snapshotOf copies the state out from under the lock. Callers hold scanMu.
+func snapshotOf(st *scanState) completion {
+	return completion{
+		notified: copyDone(st.done),
+		sync:     copyDone(st.sync),
+		results:  copyDone(st.results),
+	}
+}
+
+// spawnCallFor returns the tool-use id that spawned an agent, reading the meta
+// file at most once per agent for the life of the cache entry.
+//
+// The counting path deliberately does not read the children's transcripts, and
+// this keeps that promise: a meta is a few hundred bytes and is read once, not
+// once per poll.
+func spawnCallFor(parentPath, dir, agentID string) string {
+	scanMu.Lock()
+	if st := scanCache[parentPath]; st != nil {
+		if id, ok := st.spawn[agentID]; ok {
+			scanMu.Unlock()
+			return id
+		}
+	}
+	scanMu.Unlock()
+
+	var m subagentMeta
+	if raw, err := os.ReadFile(
+		filepath.Join(dir, "agent-"+agentID+".meta.json")); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+
+	scanMu.Lock()
+	defer scanMu.Unlock()
+	if st := scanCache[parentPath]; st != nil {
+		st.spawn[agentID] = m.ToolUseID
+	}
+	return m.ToolUseID
 }
 
 // evictScanCache drops the least recently used half once the cache is full.
@@ -168,7 +250,7 @@ func countsBeside(parentPath string) Counts {
 	if err != nil {
 		return Counts{}
 	}
-	done := completedAgents(parentPath)
+	finished := completedAgents(parentPath)
 
 	var c Counts
 	for _, e := range entries {
@@ -184,7 +266,7 @@ func countsBeside(parentPath string) Counts {
 			continue
 		}
 		c.Total++
-		if !done[id] {
+		if !finished.done(id, spawnCallFor(parentPath, dir, id)) {
 			c.Running++
 		}
 	}
