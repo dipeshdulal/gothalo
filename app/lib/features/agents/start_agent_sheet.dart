@@ -101,6 +101,17 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final agents = ref.watch(availableAgentsProvider);
+    // What the picker opens on: what you last started, else the first agent
+    // this server has. Never nothing while a launchable agent exists — an empty
+    // picker makes every launch start with a tap that carries no information.
+    // The memory only counts if this server still has that kind; the installed
+    // list stays the only thing that may be offered.
+    final remembered = ref.watch(lastAgentKindProvider).value;
+    final installed = agents.value ?? const <AvailableAgent>[];
+    final selected =
+        _kind ??
+        (installed.any((a) => a.kind == remembered) ? remembered : null) ??
+        installed.firstOrNull?.kind;
 
     return SingleChildScrollView(
       child: Padding(
@@ -130,7 +141,7 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
             const SizedBox(height: 8),
             AgentKindField(
               agents: agents,
-              selected: _kind,
+              selected: selected,
               onSelect: (k) => setState(() => _kind = k),
             ),
             const SizedBox(height: 18),
@@ -182,7 +193,9 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
                 ),
                 const Spacer(),
                 FilledButton.icon(
-                  onPressed: _kind == null || _starting ? null : _start,
+                  onPressed: selected == null || _starting
+                      ? null
+                      : () => _start(selected),
                   icon: _starting
                       ? const SizedBox(
                           width: 16,
@@ -210,7 +223,7 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
     );
   }
 
-  Future<void> _start() async {
+  Future<void> _start(String kind) async {
     final client = ref.read(bridgeClientProvider);
     final messenger = ScaffoldMessenger.of(context);
     // Captured before the await: on success the sheet is popped first, and
@@ -235,7 +248,7 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
     setState(() => _starting = true);
     try {
       final result = await client.startAgent(
-        kind: _kind!,
+        kind: kind,
         paneId: widget.target.placement == StartAgentPlacement.existingPane
             ? widget.target.id
             : null,
@@ -249,6 +262,7 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
         prompt: _prompt.text.trim(),
       );
       if (!mounted) return;
+      await ref.read(lastAgentKindProvider.notifier).record(result.kind);
       // Herdr returns the new pane before the next snapshot necessarily
       // contains it. Record the direct navigation now, rather than relying
       // on TranscriptScreen to discover an agent that is not visible yet.

@@ -5,8 +5,18 @@ import '../../core/connection/connection_providers.dart';
 import '../../data/bridge/models/snapshot.dart';
 import 'recent_providers.dart';
 
-/// Writes "this device opened this agent" into [recentOpensProvider], exactly
-/// once per visit.
+/// Writes "this device opened this agent" into [recentOpensProvider] — and
+/// "this device was in that project" into [recentSpacesProvider] — exactly once
+/// per visit.
+///
+/// **Why one visit records both.** Opening an agent is being in its project;
+/// there is no sense in which you visited the chat but not the repository it is
+/// running against. When only the project *screen* recorded a space, Recent
+/// meant "project screens I browsed", which on an agent-first home is a list
+/// almost nobody feeds: you tap an agent, not the project above it. The row
+/// then sat on a project from days ago while every agent you touched belonged
+/// to another one — and anything reading it as "where I am working" (the launch
+/// action on home) inherited that answer.
 ///
 /// **Where this hook belongs, and why it is here.** The honest definition of
 /// "opened" is *a screen for this agent came into existence*, and the only
@@ -40,12 +50,19 @@ mixin RecentOpenRecorder<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     final serverId = ref.read(activeConnectionProvider).asData?.value?.id;
     if (serverId == null || serverId.isEmpty) return;
     _recorded = true;
-    final notifier = ref.read(recentOpensProvider.notifier);
+    final opens = ref.read(recentOpensProvider.notifier);
+    final spaces = ref.read(recentSpacesProvider.notifier);
     final paneId = agent.paneId;
+    // An agent outside any workspace has nothing to record as a project; the
+    // agent half of the visit still counts.
+    final workspaceId = agent.workspaceId;
     // Post-frame: writing provider state during a build is illegal, and this is
     // called from one.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      notifier.record(serverId: serverId, paneId: paneId, view: view);
+      opens.record(serverId: serverId, paneId: paneId, view: view);
+      if (workspaceId.isNotEmpty) {
+        spaces.record(serverId: serverId, workspaceId: workspaceId);
+      }
     });
   }
 }
