@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../core/widgets/agent_age.dart';
 import 'transcript_models.dart';
 
 /// One delegated conversation, drawn under the Task call that spawned it.
@@ -11,21 +12,20 @@ class SubagentRow extends StatelessWidget {
   const SubagentRow({
     super.key,
     required this.subagent,
-    required this.running,
     required this.onOpen,
   });
 
   final Subagent subagent;
-
-  /// The spawning Task call has no result yet. Derived by the ledger, not
-  /// carried on the roster — the wire has no status field.
-  final bool running;
 
   final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Running comes from the roster, never from the spawning call: an async
+    // agent's Task call returns in seconds while the child works on.
+    final running = subagent.running;
+    final age = subagent.sinceLastActivity;
 
     return InkWell(
       onTap: onOpen,
@@ -70,8 +70,19 @@ class SubagentRow extends StatelessWidget {
                 ],
               ),
             ),
-            if (running) ...[
+            if (age != null) ...[
               const SizedBox(width: 8),
+              Text(
+                formatAgentAge(age),
+                style: TextStyle(
+                  fontSize: 10,
+                  fontFamily: AppTheme.monoFamily,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            if (running) ...[
+              const SizedBox(width: 6),
               Text(
                 'RUNNING',
                 style: TextStyle(

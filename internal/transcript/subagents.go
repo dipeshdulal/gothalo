@@ -42,6 +42,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // subagentMeta is the on-disk agent-<id>.meta.json shape. Unknown fields are
@@ -79,6 +80,21 @@ type Subagent struct {
 	// subagent, and so on. Reported for display; it is not needed to rebuild the
 	// tree (match on ToolUseID instead).
 	SpawnDepth int `json:"spawn_depth"`
+
+	// Done reports that the parent has been told this agent finished. False
+	// means still working — NOT "unknown": the notification is exact, and the
+	// spawning call's result is not (see subagent_status.go).
+	Done bool `json:"done"`
+
+	// LastActivity is when this conversation last wrote, taken from its newest
+	// entry rather than the file's mtime (see [LastActivity]). Zero means
+	// undatable, never "just now".
+	LastActivity time.Time `json:"-"`
+
+	// LastActivityTS is [LastActivity] on the wire, in unix milliseconds to
+	// match `last_activity_ts` on agents. Omitted when undatable, so a client
+	// renders nothing rather than 1970.
+	LastActivityTS int64 `json:"last_activity_ts,omitempty"`
 
 	// path is the resolved agent-<id>.jsonl. Unexported so a client can never
 	// hand back a path: OpenSubagent re-discovers and matches on AgentID, which
@@ -119,6 +135,10 @@ func subagentsBeside(parentPath string) []Subagent {
 		return []Subagent{}
 	}
 
+	// One scan of the parent serves every row; a per-row scan would re-read a
+	// 1.4 MB file once per subagent.
+	done := completedAgents(parentPath)
+
 	out := make([]Subagent, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
@@ -144,13 +164,23 @@ func subagentsBeside(parentPath string) []Subagent {
 			// the row with the id as its only label rather than dropping it.
 			m = subagentMeta{}
 		}
+		at, dated := lastEntryTime(body)
+		var ts int64
+		if dated {
+			ts = at.UnixMilli()
+		} else {
+			at = time.Time{}
+		}
 		out = append(out, Subagent{
-			AgentID:     id,
-			ToolUseID:   m.ToolUseID,
-			AgentType:   m.AgentType,
-			Description: m.Description,
-			SpawnDepth:  m.SpawnDepth,
-			path:        body,
+			AgentID:        id,
+			ToolUseID:      m.ToolUseID,
+			AgentType:      m.AgentType,
+			Description:    m.Description,
+			SpawnDepth:     m.SpawnDepth,
+			Done:           done[id],
+			LastActivity:   at,
+			LastActivityTS: ts,
+			path:           body,
 		})
 	}
 

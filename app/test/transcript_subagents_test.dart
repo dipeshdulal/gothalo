@@ -22,6 +22,8 @@ void main() {
             'agent_type': 'general-purpose',
             'description': 'Build recent-activity timeline',
             'spawn_depth': 1,
+            'done': true,
+            'last_activity_ts': 1788601356000,
           },
           {
             'agent_id': 'a9adcab7329a772ac',
@@ -40,7 +42,29 @@ void main() {
       expect(roster.first.agentType, 'general-purpose');
       expect(roster.first.description, 'Build recent-activity timeline');
       expect(roster.first.spawnDepth, 1);
+      expect(roster.first.done, isTrue);
+      expect(roster.first.sinceLastActivity, isNotNull);
       expect(roster.last.spawnDepth, 2);
+    });
+
+    /// An older bridge sends neither field. Treating a missing `done` as
+    /// "finished" would hide every running agent, so absent means running.
+    test('an entry with no status reads as running and undated', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'hello',
+        'protocol': 4,
+        'pane': 'wN:p1',
+        'agent_kind': 'claude',
+        'session_id': 'b0651a43',
+        'backlog_count': 0,
+        'total': 0,
+        'subagents': [
+          {'agent_id': 'a1', 'tool_use_id': 't1', 'agent_type': 'Explore'},
+        ],
+      });
+
+      expect(frame.hello!.subagents.single.done, isFalse);
+      expect(frame.hello!.subagents.single.sinceLastActivity, isNull);
     });
 
     /// The key is omitted for a session that delegated nothing — the norm.

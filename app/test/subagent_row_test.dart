@@ -15,47 +15,79 @@ const _subagent = Subagent(
 Widget _host(Widget child) =>
     MaterialApp(theme: AppTheme.dark, home: Scaffold(body: child));
 
+Subagent _sub({required bool done, int? lastActivityTs}) => Subagent(
+  agentId: 'aa4832e5ce82b16f0',
+  toolUseId: 'toolu_01F9bssr6JjRZXjvEumqMwuR',
+  agentType: 'general-purpose',
+  description: 'Audit the caching layer',
+  spawnDepth: 1,
+  done: done,
+  lastActivityTs: lastActivityTs,
+);
+
 void main() {
   testWidgets('names the delegated task and the agent that ran it', (
     tester,
   ) async {
     await tester.pumpWidget(
-      _host(SubagentRow(subagent: _subagent, running: false, onOpen: () {})),
+      _host(SubagentRow(subagent: _subagent, onOpen: () {})),
     );
 
     expect(find.text('Trace the retry path'), findsOneWidget);
     expect(find.text('general-purpose'), findsOneWidget);
   });
 
-  /// A Task call with no result yet is a subagent still working — the state the
-  /// phone most needs to show, and the one the chat view could not.
-  testWidgets('marks a subagent whose Task call has no result as running', (
-    tester,
-  ) async {
+  /// An async agent's Task call returns in seconds while the child runs on for
+  /// minutes, so a finished launch call says nothing about the agent.
+  testWidgets('a launched agent still reads as running', (tester) async {
     await tester.pumpWidget(
-      _host(SubagentRow(subagent: _subagent, running: true, onOpen: () {})),
+      _host(SubagentRow(subagent: _sub(done: false), onOpen: () {})),
     );
 
     expect(find.text('RUNNING'), findsOneWidget);
   });
 
-  testWidgets('a finished subagent shows no running badge', (tester) async {
+  testWidgets('an agent the parent was told finished is not running', (
+    tester,
+  ) async {
     await tester.pumpWidget(
-      _host(SubagentRow(subagent: _subagent, running: false, onOpen: () {})),
+      _host(SubagentRow(subagent: _sub(done: true), onOpen: () {})),
     );
 
     expect(find.text('RUNNING'), findsNothing);
+  });
+
+  /// A running row that has not written for a long time is a stuck agent, not a
+  /// busy one — the age is what makes that visible.
+  testWidgets('a running agent shows how long since it wrote', (tester) async {
+    final tenMinAgo = DateTime.now()
+        .subtract(const Duration(minutes: 10))
+        .millisecondsSinceEpoch;
+    await tester.pumpWidget(
+      _host(
+        SubagentRow(
+          subagent: _sub(done: false, lastActivityTs: tenMinAgo),
+          onOpen: () {},
+        ),
+      ),
+    );
+
+    expect(find.textContaining('10m'), findsOneWidget);
+  });
+
+  testWidgets('an undatable agent shows no age at all', (tester) async {
+    await tester.pumpWidget(
+      _host(SubagentRow(subagent: _sub(done: false), onOpen: () {})),
+    );
+
+    expect(find.textContaining('0s'), findsNothing);
   });
 
   testWidgets('tapping opens the delegated conversation', (tester) async {
     var opened = 0;
     await tester.pumpWidget(
       _host(
-        SubagentRow(
-          subagent: _subagent,
-          running: false,
-          onOpen: () => opened++,
-        ),
+        SubagentRow(subagent: _subagent, onOpen: () => opened++),
       ),
     );
 
@@ -78,7 +110,6 @@ void main() {
             description: '',
             spawnDepth: 1,
           ),
-          running: false,
           onOpen: () {},
         ),
       ),

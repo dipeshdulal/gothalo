@@ -3050,13 +3050,10 @@ class _ToolRowState extends State<_ToolRow> {
       children: [
         row,
         // The conversation this call delegated to. Its own transcript is a
-        // separate stream, so this row only names it and opens it on tap —
-        // [running] rides on the call's missing result, not on the roster,
-        // which carries no status.
+        // separate stream, so this row only names it and opens it on tap.
         if (subagent != null && onOpenSubagent != null)
           SubagentRow(
             subagent: subagent,
-            running: running,
             onOpen: () => onOpenSubagent(subagent),
           ),
         // A failure shows its reason inline — no expand needed.

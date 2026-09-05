@@ -168,6 +168,8 @@ class Subagent {
     required this.agentType,
     required this.description,
     required this.spawnDepth,
+    this.done = false,
+    this.lastActivityTs,
   });
 
   /// Handle to stream this conversation — passed back as `?subagent=`.
@@ -184,13 +186,40 @@ class Subagent {
   /// [SubagentRoster.forToolUse] rebuilds the tree without it.
   final int spawnDepth;
 
+  /// The parent has been told this agent finished.
+  ///
+  /// The spawning Task call's result cannot answer this: an async agent's call
+  /// returns within seconds while the child runs on for minutes. Absent (an
+  /// older bridge) reads as running, because hiding a live agent is the worse
+  /// failure.
+  final bool done;
+
+  /// When this conversation last wrote, in unix milliseconds. Null is unknown,
+  /// never "just now".
+  final int? lastActivityTs;
+
+  bool get running => !done;
+
   factory Subagent.fromJson(Map<String, dynamic> json) => Subagent(
     agentId: json['agent_id'] as String? ?? '',
     toolUseId: json['tool_use_id'] as String? ?? '',
     agentType: json['agent_type'] as String? ?? '',
     description: json['description'] as String? ?? '',
     spawnDepth: _asInt(json['spawn_depth']),
+    done: json['done'] == true,
+    lastActivityTs: json['last_activity_ts'] == null
+        ? null
+        : _asInt(json['last_activity_ts']),
   );
+
+  /// How long since this subagent wrote, or null when the bridge could not date
+  /// it. Mirrors Agent.sinceLastActivity — render nothing rather than "0s".
+  Duration? get sinceLastActivity {
+    final ts = lastActivityTs;
+    if (ts == null || ts <= 0) return null;
+    final d = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts));
+    return d.isNegative ? Duration.zero : d;
+  }
 
   /// The primary label for a row, falling back to the type when a subagent was
   /// spawned without a description.
