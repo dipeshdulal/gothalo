@@ -31,6 +31,7 @@ import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
 import 'slash_commands.dart';
+import 'subagent_row.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -56,9 +57,19 @@ class TranscriptScreen extends ConsumerStatefulWidget {
     super.key,
     required this.pane,
     this.openPrompt = false,
+    this.subagent = '',
+    this.subagentLabel = '',
   });
 
   final String pane;
+
+  /// Stream a delegated conversation instead of the session's own transcript.
+  /// Empty is the session itself.
+  final String subagent;
+
+  /// What to call that conversation in the app bar — the roster's description,
+  /// which the child transcript does not carry itself.
+  final String subagentLabel;
 
   /// Surface the blocked prompt's options sheet as soon as it is known —
   /// set when arriving from a notification tap, where the user is coming
@@ -110,6 +121,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
   /// by the seq de-dupe. Hence: session id changes → drop everything and rebuild
   /// from the backlog that follows. Null until the first `hello`.
   String? _sessionId;
+  SubagentRoster _roster = const SubagentRoster.empty();
 
   /// The session a `session_changed` frame said we are moving to, held until its
   /// `hello` arrives (a separate frame, so a separate message) — announcing on
@@ -540,7 +552,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
       host: base.host,
       port: base.hasPort ? base.port : null,
       path: '/agent-transcript',
-      queryParameters: {'pane': widget.pane, 'token': c.bearer},
+      queryParameters: {
+        'pane': widget.pane,
+        'token': c.bearer,
+        if (widget.subagent.isNotEmpty) 'subagent': widget.subagent,
+      },
     );
   }
 
@@ -668,6 +684,19 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     }
   }
 
+  /// Open a delegated conversation as its own screen.
+  ///
+  /// A push rather than an inline expansion: a subagent's transcript is
+  /// full-sized and paginated exactly like a session's, so it needs the whole
+  /// screen and its own socket.
+  void _openSubagent(Subagent s) {
+    context.push(
+      '/transcript/${Uri.encodeComponent(widget.pane)}'
+      '?subagent=${Uri.encodeComponent(s.agentId)}'
+      '&label=${Uri.encodeComponent(s.displayTitle)}',
+    );
+  }
+
   /// Apply one decoded frame. Returns true when it changed what we render.
   bool _ingest(TranscriptFrame frame) {
     switch (frame.type) {
@@ -683,6 +712,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             h.sessionId.isNotEmpty &&
             h.sessionId != _sessionId;
         if (h.sessionId.isNotEmpty) _sessionId = h.sessionId;
+        _roster = SubagentRoster(h.subagents);
         if (rotated) {
           _clearForNewSession();
           _announceNewSession = _rotatingTo == h.sessionId;
@@ -968,8 +998,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         title: PaneTitle(
-          title: agent?.displayTitle ?? widget.pane,
+          // A delegated conversation is named by the roster, not by the pane:
+          // the child transcript carries no title of its own.
+          title: widget.subagentLabel.isNotEmpty
+              ? widget.subagentLabel
+              : agent?.displayTitle ?? widget.pane,
           subtitle: [
+            if (widget.subagent.isNotEmpty) 'subagent',
             // Age FIRST: the subtitle ellipsises, and this is the part that
             // decides whether you act. Trailing it behind the branch and kind
             // meant it was the first thing cut off on a long branch name.
@@ -1329,6 +1364,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     _ToolGroupBlock(:final calls) => _ToolLedger(
       calls: calls,
       resultFor: (id) => _resultsByForId[id],
+      roster: _roster,
+      onOpenSubagent: _openSubagent,
     ),
   };
 }
@@ -2820,10 +2857,20 @@ String _basename(String? path) {
 /// A run of tool calls, indented under the assistant message that spawned them
 /// with a left rail — so the chat reads as prose plus a compact tool ledger.
 class _ToolLedger extends StatelessWidget {
-  const _ToolLedger({required this.calls, required this.resultFor});
+  const _ToolLedger({
+    required this.calls,
+    required this.resultFor,
+    this.roster = const SubagentRoster.empty(),
+    this.onOpenSubagent,
+  });
 
   final List<TranscriptEntry> calls;
   final ToolResult? Function(String id) resultFor;
+
+  /// The session's flat roster. A hit on a call's id means that call delegated.
+  final SubagentRoster roster;
+
+  final void Function(Subagent)? onOpenSubagent;
 
   @override
   Widget build(BuildContext context) {
@@ -2832,7 +2879,14 @@ class _ToolLedger extends StatelessWidget {
     for (final c in calls) {
       final tool = c.tool;
       if (tool == null) continue;
-      rows.add(_ToolRow(tool: tool, result: resultFor(tool.id)));
+      rows.add(
+        _ToolRow(
+          tool: tool,
+          result: resultFor(tool.id),
+          subagent: roster.forToolUse(tool.id),
+          onOpenSubagent: onOpenSubagent,
+        ),
+      );
     }
     if (rows.isEmpty) return const SizedBox.shrink();
 
@@ -2866,10 +2920,20 @@ class _ToolLedger extends StatelessWidget {
 /// just a green tick (no redundant "ok" text, output hidden); a failure turns
 /// the row red and shows its reason inline; diffs/output expand on tap.
 class _ToolRow extends StatefulWidget {
-  const _ToolRow({required this.tool, this.result});
+  const _ToolRow({
+    required this.tool,
+    this.result,
+    this.subagent,
+    this.onOpenSubagent,
+  });
 
   final ToolCall tool;
   final ToolResult? result;
+
+  /// The conversation this call delegated to, when it delegated at all.
+  final Subagent? subagent;
+
+  final void Function(Subagent)? onOpenSubagent;
 
   @override
   State<_ToolRow> createState() => _ToolRowState();
@@ -2978,10 +3042,23 @@ class _ToolRowState extends State<_ToolRow> {
       ),
     );
 
+    final subagent = widget.subagent;
+    final onOpenSubagent = widget.onOpenSubagent;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         row,
+        // The conversation this call delegated to. Its own transcript is a
+        // separate stream, so this row only names it and opens it on tap —
+        // [running] rides on the call's missing result, not on the roster,
+        // which carries no status.
+        if (subagent != null && onOpenSubagent != null)
+          SubagentRow(
+            subagent: subagent,
+            running: running,
+            onOpen: () => onOpenSubagent(subagent),
+          ),
         // A failure shows its reason inline — no expand needed.
         if (failed && output != null && output.trim().isNotEmpty)
           Padding(

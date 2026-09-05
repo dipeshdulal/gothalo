@@ -115,6 +115,8 @@ class HelloFrame {
     required this.hasMore,
     this.oldestLoadedSeq = 0,
     this.hasOlder = false,
+    this.subagent = '',
+    this.subagents = const [],
   });
 
   final int protocol;
@@ -124,6 +126,15 @@ class HelloFrame {
   final int backlogCount;
   final int total;
   final bool hasMore;
+
+  /// The `?subagent=` this socket is streaming, or empty for the session's own
+  /// transcript. A reconnect can tell from hello alone which conversation it
+  /// landed in.
+  final String subagent;
+
+  /// The session's complete, FLAT subagent roster — every depth, not just the
+  /// children of the conversation on screen (protocol 3). Empty is the norm.
+  final List<Subagent> subagents;
 
   /// Absolute `seq` of the oldest entry in the newest page — the first
   /// `load_older.before_seq` cursor (protocol 2).
@@ -142,7 +153,75 @@ class HelloFrame {
     hasMore: json['has_more'] == true,
     oldestLoadedSeq: _asInt(json['oldest_loaded_seq']),
     hasOlder: json['has_older'] == true,
+    subagent: json['subagent'] as String? ?? '',
+    subagents: _subagentsFromJson(json['subagents']),
   );
+}
+
+/// One delegated conversation advertised in `hello.subagents`.
+///
+/// Metadata only — enough to draw a row without opening the child transcript.
+class Subagent {
+  const Subagent({
+    required this.agentId,
+    required this.toolUseId,
+    required this.agentType,
+    required this.description,
+    required this.spawnDepth,
+  });
+
+  /// Handle to stream this conversation — passed back as `?subagent=`.
+  final String agentId;
+
+  /// The Task call that spawned it. Equals the [ToolCall.id] of that call in
+  /// whichever transcript is on screen, which is how a row finds its child.
+  final String toolUseId;
+
+  final String agentType;
+  final String description;
+
+  /// 1 for a child of the session, 2 for a child of a subagent. Display only —
+  /// [SubagentRoster.forToolUse] rebuilds the tree without it.
+  final int spawnDepth;
+
+  factory Subagent.fromJson(Map<String, dynamic> json) => Subagent(
+    agentId: json['agent_id'] as String? ?? '',
+    toolUseId: json['tool_use_id'] as String? ?? '',
+    agentType: json['agent_type'] as String? ?? '',
+    description: json['description'] as String? ?? '',
+    spawnDepth: _asInt(json['spawn_depth']),
+  );
+
+  /// The primary label for a row, falling back to the type when a subagent was
+  /// spawned without a description.
+  String get displayTitle => description.isNotEmpty ? description : agentType;
+}
+
+List<Subagent> _subagentsFromJson(Object? raw) {
+  if (raw is! List) return const [];
+  return [
+    for (final e in raw)
+      if (e is Map<String, dynamic>) Subagent.fromJson(e),
+  ];
+}
+
+/// The session's roster, indexed by the tool call that spawned each entry.
+///
+/// One roster serves every depth: a subagent's own children are found by
+/// matching their [Subagent.toolUseId] against the tool ids of the transcript
+/// currently rendered, so drilling down needs no further round trip.
+class SubagentRoster {
+  SubagentRoster(List<Subagent> entries)
+    : _byToolUse = {for (final s in entries) s.toolUseId: s};
+
+  const SubagentRoster.empty() : _byToolUse = const {};
+
+  final Map<String, Subagent> _byToolUse;
+
+  bool get isEmpty => _byToolUse.isEmpty;
+
+  /// The subagent a tool call spawned, or null when it spawned none.
+  Subagent? forToolUse(String toolUseId) => _byToolUse[toolUseId];
 }
 
 /// The high-level shape of an entry, used to switch rendering.
