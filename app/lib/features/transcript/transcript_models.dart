@@ -13,6 +13,7 @@ enum TranscriptFrameType {
   backlogComplete,
   pageComplete,
   sessionChanged,
+  subagents,
   unknown,
 }
 
@@ -22,6 +23,7 @@ TranscriptFrameType _frameType(String? raw) => switch (raw) {
   'backlog_complete' => TranscriptFrameType.backlogComplete,
   'page_complete' => TranscriptFrameType.pageComplete,
   'session_changed' => TranscriptFrameType.sessionChanged,
+  'subagents' => TranscriptFrameType.subagents,
   _ => TranscriptFrameType.unknown,
 };
 
@@ -39,6 +41,7 @@ class TranscriptFrame {
     this.hasOlder = false,
     this.fromSessionId = '',
     this.toSessionId = '',
+    this.subagents = const [],
   });
 
   final TranscriptFrameType type;
@@ -65,6 +68,11 @@ class TranscriptFrame {
 
   /// `session_changed.to` — the session it now follows.
   final String toSessionId;
+
+  /// `subagents.subagents` — a fresh roster mid-stream (protocol 5). The
+  /// roster changes without the transcript changing, so it has its own frame
+  /// rather than riding on hello, which only arrives on connect and rotation.
+  final List<Subagent> subagents;
 
   factory TranscriptFrame.fromJson(Map<String, dynamic> json) {
     final type = _frameType(json['type'] as String?);
@@ -98,6 +106,10 @@ class TranscriptFrame {
         fromSessionId: json['from'] as String? ?? '',
         toSessionId: json['to'] as String? ?? '',
       ),
+      TranscriptFrameType.subagents => TranscriptFrame(
+        type: type,
+        subagents: _subagentsFromJson(json['subagents']),
+      ),
       TranscriptFrameType.unknown => TranscriptFrame(type: type),
     };
   }
@@ -115,6 +127,8 @@ class HelloFrame {
     required this.hasMore,
     this.oldestLoadedSeq = 0,
     this.hasOlder = false,
+    this.subagent = '',
+    this.subagents = const [],
   });
 
   final int protocol;
@@ -124,6 +138,15 @@ class HelloFrame {
   final int backlogCount;
   final int total;
   final bool hasMore;
+
+  /// The `?subagent=` this socket is streaming, or empty for the session's own
+  /// transcript. A reconnect can tell from hello alone which conversation it
+  /// landed in.
+  final String subagent;
+
+  /// The session's complete, FLAT subagent roster — every depth, not just the
+  /// children of the conversation on screen (protocol 3). Empty is the norm.
+  final List<Subagent> subagents;
 
   /// Absolute `seq` of the oldest entry in the newest page — the first
   /// `load_older.before_seq` cursor (protocol 2).
@@ -142,7 +165,139 @@ class HelloFrame {
     hasMore: json['has_more'] == true,
     oldestLoadedSeq: _asInt(json['oldest_loaded_seq']),
     hasOlder: json['has_older'] == true,
+    subagent: json['subagent'] as String? ?? '',
+    subagents: _subagentsFromJson(json['subagents']),
   );
+}
+
+/// One delegated conversation advertised in `hello.subagents`.
+///
+/// Metadata only — enough to draw a row without opening the child transcript.
+class Subagent {
+  const Subagent({
+    required this.agentId,
+    required this.toolUseId,
+    required this.agentType,
+    required this.description,
+    required this.spawnDepth,
+    this.done = false,
+    this.lastActivityTs,
+  });
+
+  /// Handle to stream this conversation — passed back as `?subagent=`.
+  final String agentId;
+
+  /// The Task call that spawned it. Equals the [ToolCall.id] of that call in
+  /// whichever transcript is on screen, which is how a row finds its child.
+  final String toolUseId;
+
+  final String agentType;
+  final String description;
+
+  /// 1 for a child of the session, 2 for a child of a subagent. Display only —
+  /// [SubagentRoster.forToolUse] rebuilds the tree without it.
+  final int spawnDepth;
+
+  /// The parent has been told this agent finished.
+  ///
+  /// The spawning Task call's result cannot answer this: an async agent's call
+  /// returns within seconds while the child runs on for minutes. Absent (an
+  /// older bridge) reads as running, because hiding a live agent is the worse
+  /// failure.
+  final bool done;
+
+  /// When this conversation last wrote, in unix milliseconds. Null is unknown,
+  /// never "just now".
+  final int? lastActivityTs;
+
+  bool get running => !done;
+
+  factory Subagent.fromJson(Map<String, dynamic> json) => Subagent(
+    agentId: json['agent_id'] as String? ?? '',
+    toolUseId: json['tool_use_id'] as String? ?? '',
+    agentType: json['agent_type'] as String? ?? '',
+    description: json['description'] as String? ?? '',
+    spawnDepth: _asInt(json['spawn_depth']),
+    done: json['done'] == true,
+    lastActivityTs: json['last_activity_ts'] == null
+        ? null
+        : _asInt(json['last_activity_ts']),
+  );
+
+  /// How long since this subagent wrote, or null when the bridge could not date
+  /// it. Mirrors Agent.sinceLastActivity — render nothing rather than "0s".
+  Duration? get sinceLastActivity {
+    final ts = lastActivityTs;
+    if (ts == null || ts <= 0) return null;
+    final d = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts));
+    return d.isNegative ? Duration.zero : d;
+  }
+
+  /// The primary label for a row, falling back to the type when a subagent was
+  /// spawned without a description.
+  String get displayTitle => description.isNotEmpty ? description : agentType;
+}
+
+List<Subagent> _subagentsFromJson(Object? raw) {
+  if (raw is! List) return const [];
+  return [
+    for (final e in raw)
+      if (e is Map<String, dynamic>) Subagent.fromJson(e),
+  ];
+}
+
+/// The session's roster, indexed by the tool call that spawned each entry.
+///
+/// One roster serves every depth: a subagent's own children are found by
+/// matching their [Subagent.toolUseId] against the tool ids of the transcript
+/// currently rendered, so drilling down needs no further round trip.
+class SubagentRoster {
+  SubagentRoster(List<Subagent> entries)
+    : _byToolUse = {for (final s in entries) s.toolUseId: s},
+      _entries = List.unmodifiable(entries),
+      running = List.unmodifiable(entries.where((s) => s.running));
+
+  const SubagentRoster.empty()
+    : _byToolUse = const {},
+      _entries = const [],
+      running = const [];
+
+  final Map<String, Subagent> _byToolUse;
+  final List<Subagent> _entries;
+
+  bool get isEmpty => _entries.isEmpty;
+
+  /// The agents still working, in the roster's own order.
+  ///
+  /// Not re-sorted by recency: this backs a list you tap, and rows that reorder
+  /// themselves as children append would move under a finger. Computed once —
+  /// a roster is immutable and this is read from build methods.
+  final List<Subagent> running;
+
+  /// The subagent a tool call spawned, or null when it spawned none.
+  ///
+  /// An empty id never matches: a roster entry can arrive without its
+  /// tool_use_id (unreadable metadata still yields a row) and a tool call can
+  /// arrive without an id, and pairing those two would hang that subagent off
+  /// every unidentified tool row in the conversation.
+  Subagent? forToolUse(String toolUseId) =>
+      toolUseId.isEmpty ? null : _byToolUse[toolUseId];
+
+  /// Whether this roster shows the same agents in the same states as [other] —
+  /// what decides if an arriving roster is worth a repaint.
+  bool sameAs(SubagentRoster other) {
+    if (_entries.length != other._entries.length) return false;
+    for (var i = 0; i < _entries.length; i++) {
+      final a = _entries[i];
+      final b = other._entries[i];
+      if (a.agentId != b.agentId ||
+          a.done != b.done ||
+          a.lastActivityTs != b.lastActivityTs) {
+        return false;
+      }
+    }
+    return true;
+  }
 }
 
 /// The high-level shape of an entry, used to switch rendering.

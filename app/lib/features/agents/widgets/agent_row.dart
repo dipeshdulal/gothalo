@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/naming.dart';
 import '../../../core/theme.dart';
 import '../../../core/tokens.dart';
+import '../../../core/widgets/count_pair.dart';
 import '../../../core/widgets/agent_age.dart';
 import '../../../core/widgets/live_activity_line.dart';
 import '../../../core/widgets/panel_row.dart';
@@ -393,6 +394,14 @@ class _ProjectLine extends StatelessWidget {
       sep();
       spans.add(TextSpan(text: project, style: dim));
     }
+    // Server before branch, because this line ellipsises and whatever sits
+    // last is what gets cut. A server name only appears when there is more
+    // than one — and then it is the thing telling otherwise-identical rows
+    // apart, while the branch is the longer, more compressible half.
+    if (serverName != null && serverName!.isNotEmpty) {
+      sep();
+      spans.add(TextSpan(text: serverName!, style: dim));
+    }
     if (branch != null && branch.isNotEmpty) {
       sep();
       spans.add(
@@ -406,18 +415,41 @@ class _ProjectLine extends StatelessWidget {
         ),
       );
     }
-    if (serverName != null && serverName!.isNotEmpty) {
-      sep();
-      spans.add(TextSpan(text: serverName!, style: dim));
-    }
+    // What this agent has delegated and is still waiting on. Only when some
+    // are working: a session whose delegated agents have all finished is as
+    // quiet as one that never delegated, and the count answers "what is this
+    // row waiting for", not "what did it once run".
+    final running = agent.subagents?.running ?? 0;
+
     // Nothing known about where it lives — better an empty line than a stray
     // separator or a pane id.
-    if (spans.isEmpty) return const SizedBox.shrink();
+    if (spans.isEmpty && running == 0) return const SizedBox.shrink();
 
-    return Text.rich(
+    final line = Text.rich(
       TextSpan(children: spans),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+    );
+    if (running == 0) return line;
+
+    // A glyph and a number, the idiom the project rows already use: this line
+    // is scanned, not read, and the words cost width it does not have. The
+    // sentence survives for a screen reader, in CountPair's semantics.
+    //
+    // A sibling of the line, never a span in it — a long branch fills this
+    // line on its own, so anything appended to the ellipsised run is the first
+    // thing cut, which is exactly the part being looked for.
+    return Row(
+      children: [
+        if (spans.isNotEmpty) Flexible(child: line),
+        if (spans.isNotEmpty) const SizedBox(width: Space.md),
+        CountPair(
+          icon: Icons.account_tree_outlined,
+          count: running,
+          semantics: '$running agent${running == 1 ? '' : 's'} running',
+          color: muted ? null : scheme.primary,
+        ),
+      ],
     );
   }
 }

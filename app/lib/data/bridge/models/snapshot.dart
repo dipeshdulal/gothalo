@@ -100,6 +100,12 @@ sealed class Agent with _$Agent {
     /// age as this one's) and for an agent that has not spoken yet. Render
     /// nothing rather than "0s".
     @JsonKey(name: 'last_activity_ts') int? lastActivityTs,
+
+    /// How many agents this session delegated and how many still work, when
+    /// it delegated any. Null is not {0,0}: a session that delegated nothing
+    /// and a kind whose transcripts cannot be counted both send no field, and
+    /// neither should draw a badge.
+    SubagentCounts? subagents,
   }) = _Agent;
 
   factory Agent.fromJson(Map<String, dynamic> json) => _$AgentFromJson(json);
@@ -216,6 +222,18 @@ sealed class Agent with _$Agent {
   String get sessionName => sessionForId(paneId);
 
   bool get isDefaultSession => sessionName == 'default';
+}
+
+/// How many delegated agents a session has, and how many are still working.
+@freezed
+sealed class SubagentCounts with _$SubagentCounts {
+  const factory SubagentCounts({
+    @Default(0) int total,
+    @Default(0) int running,
+  }) = _SubagentCounts;
+
+  factory SubagentCounts.fromJson(Map<String, dynamic> json) =>
+      _$SubagentCountsFromJson(json);
 }
 
 /// Herdr's session handle for an agent — `{ "value": "<uuid>" }`.

@@ -280,7 +280,7 @@ func piTool(b piBlock) *Tool {
 		t.InputSummary = oneLine(in.Command, 200)
 	case "edit":
 		var in struct {
-			Path  string            `json:"path"`
+			Path  string              `json:"path"`
 			Edits []piEditReplacement `json:"edits"`
 		}
 		_ = json.Unmarshal(b.Arguments, &in)

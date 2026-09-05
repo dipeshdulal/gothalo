@@ -42,6 +42,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // subagentMeta is the on-disk agent-<id>.meta.json shape. Unknown fields are
@@ -80,6 +81,21 @@ type Subagent struct {
 	// tree (match on ToolUseID instead).
 	SpawnDepth int `json:"spawn_depth"`
 
+	// Done reports that the parent has been told this agent finished. False
+	// means still working — NOT "unknown": the notification is exact, and the
+	// spawning call's result is not (see subagent_status.go).
+	Done bool `json:"done"`
+
+	// LastActivity is when this conversation last wrote, taken from its newest
+	// entry rather than the file's mtime (see [LastActivity]). Zero means
+	// undatable, never "just now".
+	LastActivity time.Time `json:"-"`
+
+	// LastActivityTS is [LastActivity] on the wire, in unix milliseconds to
+	// match `last_activity_ts` on agents. Omitted when undatable, so a client
+	// renders nothing rather than 1970.
+	LastActivityTS int64 `json:"last_activity_ts,omitempty"`
+
 	// path is the resolved agent-<id>.jsonl. Unexported so a client can never
 	// hand back a path: OpenSubagent re-discovers and matches on AgentID, which
 	// makes traversal through this field impossible by construction.
@@ -110,6 +126,30 @@ func Subagents(kind, cwd, sessionID string) ([]Subagent, error) {
 // transcript path. Split from Subagents so tests can point it at a fixture tree
 // without needing a fake $HOME.
 func subagentsBeside(parentPath string) []Subagent {
+	out := listSubagentsBeside(parentPath)
+	if len(out) == 0 {
+		return out
+	}
+	// One scan of the parent serves every row; a per-row scan would re-read a
+	// multi-megabyte file once per subagent.
+	done := completedAgents(parentPath)
+	for i := range out {
+		out[i].Done = done[out[i].AgentID]
+		if at, dated := lastEntryTime(out[i].path); dated {
+			out[i].LastActivity = at
+			out[i].LastActivityTS = at.UnixMilli()
+		}
+	}
+	return out
+}
+
+// listSubagentsBeside is discovery WITHOUT liveness: ids, labels and paths.
+//
+// Split from the roster because [OpenSubagent] needs only a path, and the
+// enrichment above is not free — it dates every child (63 of them beside one
+// real session) and reads the whole parent. A stream of one child should not
+// pay for a roster of all of them.
+func listSubagentsBeside(parentPath string) []Subagent {
 	dir := subagentDirFor(parentPath)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -194,11 +234,17 @@ func agentIDFromMeta(name string) (string, bool) {
 // The child file is the same JSONL dialect as the parent, so it reuses the
 // parent kind's Reader — no second format to maintain.
 func OpenSubagent(kind, cwd, sessionID, agentID string) (Source, error) {
-	subs, err := Subagents(kind, cwd, sessionID)
+	parent, err := Locate(kind, cwd, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range subs {
+	return openSubagentBeside(parent, kind, agentID)
+}
+
+// openSubagentBeside resolves an id against a parent's subagents dir. Uses the
+// cheap listing: matching an id needs no liveness.
+func openSubagentBeside(parentPath, kind, agentID string) (Source, error) {
+	for _, s := range listSubagentsBeside(parentPath) {
 		if s.AgentID == agentID {
 			return newFileSource(s.path, ReaderFor(kind)), nil
 		}

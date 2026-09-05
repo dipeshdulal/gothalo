@@ -30,7 +30,9 @@ import '../recents/record_open.dart';
 import '../recents/recent_providers.dart';
 import '../suggestions/pane_suggestions_bar.dart';
 import 'quick_commands_providers.dart';
+import 'running_subagents_bar.dart';
 import 'slash_commands.dart';
+import 'subagent_row.dart';
 import 'transcript_models.dart';
 
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
@@ -56,9 +58,19 @@ class TranscriptScreen extends ConsumerStatefulWidget {
     super.key,
     required this.pane,
     this.openPrompt = false,
+    this.subagent = '',
+    this.subagentLabel = '',
   });
 
   final String pane;
+
+  /// Stream a delegated conversation instead of the session's own transcript.
+  /// Empty is the session itself.
+  final String subagent;
+
+  /// What to call that conversation in the app bar — the roster's description,
+  /// which the child transcript does not carry itself.
+  final String subagentLabel;
 
   /// Surface the blocked prompt's options sheet as soon as it is known —
   /// set when arriving from a notification tap, where the user is coming
@@ -110,6 +122,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
   /// by the seq de-dupe. Hence: session id changes → drop everything and rebuild
   /// from the backlog that follows. Null until the first `hello`.
   String? _sessionId;
+  SubagentRoster _roster = const SubagentRoster.empty();
 
   /// The session a `session_changed` frame said we are moving to, held until its
   /// `hello` arrives (a separate frame, so a separate message) — announcing on
@@ -540,7 +553,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
       host: base.host,
       port: base.hasPort ? base.port : null,
       path: '/agent-transcript',
-      queryParameters: {'pane': widget.pane, 'token': c.bearer},
+      queryParameters: {
+        'pane': widget.pane,
+        'token': c.bearer,
+        if (widget.subagent.isNotEmpty) 'subagent': widget.subagent,
+      },
     );
   }
 
@@ -668,6 +685,31 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     }
   }
 
+  /// Swap in a roster, reporting whether it differs from the one on screen.
+  ///
+  /// Compared rather than assigned blindly: the bridge only sends this frame on
+  /// a real change, but hello repeats the roster on every reconnect and
+  /// repainting the transcript for an identical list is wasted work.
+  bool _replaceRoster(List<Subagent> next) {
+    final replacement = SubagentRoster(next);
+    if (replacement.sameAs(_roster)) return false;
+    _roster = replacement;
+    return true;
+  }
+
+  /// Open a delegated conversation as its own screen.
+  ///
+  /// A push rather than an inline expansion: a subagent's transcript is
+  /// full-sized and paginated exactly like a session's, so it needs the whole
+  /// screen and its own socket.
+  void _openSubagent(Subagent s) {
+    context.push(
+      '/transcript/${Uri.encodeComponent(widget.pane)}'
+      '?subagent=${Uri.encodeComponent(s.agentId)}'
+      '&label=${Uri.encodeComponent(s.displayTitle)}',
+    );
+  }
+
   /// Apply one decoded frame. Returns true when it changed what we render.
   bool _ingest(TranscriptFrame frame) {
     switch (frame.type) {
@@ -683,6 +725,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             h.sessionId.isNotEmpty &&
             h.sessionId != _sessionId;
         if (h.sessionId.isNotEmpty) _sessionId = h.sessionId;
+        final rosterChanged = _replaceRoster(h.subagents);
         if (rotated) {
           _clearForNewSession();
           _announceNewSession = _rotatingTo == h.sessionId;
@@ -691,8 +734,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
         _oldestSeq = h.oldestLoadedSeq;
         _hasOlder = h.hasOlder;
         _anchorSeq = h.oldestLoadedSeq; // fix the center at the first page
-        return rotated;
+        // A reconnect on the SAME session is not a rotation, and every replayed
+        // entry de-dupes to false — so without this the fresh roster would sit
+        // unpainted until some unrelated rebuild happened along.
+        return rotated || rosterChanged;
 
+      case TranscriptFrameType.subagents:
+        return _replaceRoster(frame.subagents);
       case TranscriptFrameType.sessionChanged:
         // Informational: the reset itself is driven by the hello that follows.
         _rotatingTo = frame.toSessionId;
@@ -968,8 +1016,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
       backgroundColor: AppTheme.scaffoldBase(Theme.of(context).brightness),
       appBar: AppBar(
         title: PaneTitle(
-          title: agent?.displayTitle ?? widget.pane,
+          // A delegated conversation is named by the roster, not by the pane:
+          // the child transcript carries no title of its own.
+          title: widget.subagentLabel.isNotEmpty
+              ? widget.subagentLabel
+              : agent?.displayTitle ?? widget.pane,
           subtitle: [
+            if (widget.subagent.isNotEmpty) 'subagent',
             // Age FIRST: the subtitle ellipsises, and this is the part that
             // decides whether you act. Trailing it behind the branch and kind
             // meant it was the first thing cut off on a long branch name.
@@ -1076,9 +1129,17 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
                 ],
               ),
             ),
-            // Real approval → an actionable card; just-waiting → a soft cue;
-            // working → a live "thinking…" indicator (see _bottomStatus).
-            _bottomStatus(),
+            // Everything below acts on widget.pane — the tmux pane running the
+            // SESSION. On a delegated conversation that is not the thing on
+            // screen: typing here would answer the parent while you are reading
+            // the child, and the parent's approval card would sit over the
+            // child's transcript. A subagent's transcript is therefore read-only
+            // (there is no way to type to one anyway), and the screen ends at
+            // the conversation.
+            if (widget.subagent.isEmpty) ...[
+              // Real approval → an actionable card; just-waiting → a soft cue;
+              // working → a live "thinking…" indicator (see _bottomStatus).
+              _bottomStatus(),
             // Context chips for this pane — "Create PR", "Review changes",
             // "Resolve", "Open :5173". Renders nothing at all when the bridge
             // has nothing to offer, which is most of the time.
@@ -1087,11 +1148,15 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             // It is here because the most valuable suggestion for an agent pane
             // is the one the AGENT performs, and this is the screen where you
             // watch it happen.
-            PaneSuggestionsBar(pane: widget.pane),
+              PaneSuggestionsBar(pane: widget.pane),
+              // What is delegated and still working, without scrolling back to
+              // find the Task rows that spawned it. Renders nothing when
+              // nothing is running.
+              RunningSubagentsBar(roster: _roster, onOpen: _openSubagent),
             // Directly above the toolbar that started the upload, so progress
             // and the button that caused it read as one thing. Renders nothing
             // while idle.
-            ImageUploadStatus(controller: _attach),
+              ImageUploadStatus(controller: _attach),
             // Everything about *how* you're talking to the agent (attach an
             // image, mode, quick commands, raw terminal) lives down here with
             // the composer as ONE scrollable chip row, not the app bar — a
@@ -1102,13 +1167,13 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             // than stacking on top of it. Two reasons: with a keyboard open the
             // phone has no room for both above the composer, and mid-command the
             // chips are not what you are reaching for — the list is.
-            if (slashMatches.isNotEmpty)
-              SlashCommandList(
-                commands: slashMatches,
-                onSelected: (c) => applySlashCommand(_composer, c),
-              )
-            else
-              _ComposerActionsRow(
+              if (slashMatches.isNotEmpty)
+                SlashCommandList(
+                  commands: slashMatches,
+                  onSelected: (c) => applySlashCommand(_composer, c),
+                )
+              else
+                _ComposerActionsRow(
                 pane: widget.pane,
                 agentKind: agent?.agent ?? _agentState?.agentKind ?? 'agent',
                 modeLabel: _agentState?.permissionMode != null
@@ -1135,20 +1200,21 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
               ),
             // Talk to the agent right from the chat — no need to drop to the raw
             // terminal. Disabled once the pane is gone/unavailable.
-            _ComposerBar(
-              controller: _composer,
-              onSend: _sendComposer,
-              onAttachImage: _attach.uploading
-                  ? null
-                  : () => showImageSourceSheet(context, onPick: _attachImage),
-              hintText: _agentState?.isBlocked == true
-                  ? 'Type a number, or your own reply…'
-                  : null,
-              enabled:
-                  _conn != _Conn.closed &&
-                  _conn != _Conn.failed &&
-                  _failure == null,
-            ),
+              _ComposerBar(
+                controller: _composer,
+                onSend: _sendComposer,
+                onAttachImage: _attach.uploading
+                    ? null
+                    : () => showImageSourceSheet(context, onPick: _attachImage),
+                hintText: _agentState?.isBlocked == true
+                    ? 'Type a number, or your own reply…'
+                    : null,
+                enabled:
+                    _conn != _Conn.closed &&
+                    _conn != _Conn.failed &&
+                    _failure == null,
+              ),
+            ],
           ],
         ),
       ),
@@ -1329,6 +1395,8 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     _ToolGroupBlock(:final calls) => _ToolLedger(
       calls: calls,
       resultFor: (id) => _resultsByForId[id],
+      roster: _roster,
+      onOpenSubagent: _openSubagent,
     ),
   };
 }
@@ -2820,10 +2888,20 @@ String _basename(String? path) {
 /// A run of tool calls, indented under the assistant message that spawned them
 /// with a left rail — so the chat reads as prose plus a compact tool ledger.
 class _ToolLedger extends StatelessWidget {
-  const _ToolLedger({required this.calls, required this.resultFor});
+  const _ToolLedger({
+    required this.calls,
+    required this.resultFor,
+    this.roster = const SubagentRoster.empty(),
+    this.onOpenSubagent,
+  });
 
   final List<TranscriptEntry> calls;
   final ToolResult? Function(String id) resultFor;
+
+  /// The session's flat roster. A hit on a call's id means that call delegated.
+  final SubagentRoster roster;
+
+  final void Function(Subagent)? onOpenSubagent;
 
   @override
   Widget build(BuildContext context) {
@@ -2832,7 +2910,14 @@ class _ToolLedger extends StatelessWidget {
     for (final c in calls) {
       final tool = c.tool;
       if (tool == null) continue;
-      rows.add(_ToolRow(tool: tool, result: resultFor(tool.id)));
+      rows.add(
+        _ToolRow(
+          tool: tool,
+          result: resultFor(tool.id),
+          subagent: roster.forToolUse(tool.id),
+          onOpenSubagent: onOpenSubagent,
+        ),
+      );
     }
     if (rows.isEmpty) return const SizedBox.shrink();
 
@@ -2866,10 +2951,20 @@ class _ToolLedger extends StatelessWidget {
 /// just a green tick (no redundant "ok" text, output hidden); a failure turns
 /// the row red and shows its reason inline; diffs/output expand on tap.
 class _ToolRow extends StatefulWidget {
-  const _ToolRow({required this.tool, this.result});
+  const _ToolRow({
+    required this.tool,
+    this.result,
+    this.subagent,
+    this.onOpenSubagent,
+  });
 
   final ToolCall tool;
   final ToolResult? result;
+
+  /// The conversation this call delegated to, when it delegated at all.
+  final Subagent? subagent;
+
+  final void Function(Subagent)? onOpenSubagent;
 
   @override
   State<_ToolRow> createState() => _ToolRowState();
@@ -2978,10 +3073,20 @@ class _ToolRowState extends State<_ToolRow> {
       ),
     );
 
+    final subagent = widget.subagent;
+    final onOpenSubagent = widget.onOpenSubagent;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         row,
+        // The conversation this call delegated to. Its own transcript is a
+        // separate stream, so this row only names it and opens it on tap.
+        if (subagent != null && onOpenSubagent != null)
+          SubagentRow(
+            subagent: subagent,
+            onOpen: () => onOpenSubagent(subagent),
+          ),
         // A failure shows its reason inline — no expand needed.
         if (failed && output != null && output.trim().isNotEmpty)
           Padding(

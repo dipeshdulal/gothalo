@@ -16,6 +16,7 @@ class CountPair extends StatelessWidget {
     required this.icon,
     required this.count,
     required this.semantics,
+    this.color,
   });
 
   final IconData icon;
@@ -24,9 +25,15 @@ class CountPair extends StatelessWidget {
   /// The words the glyph replaced — "4 agents". Spoken rather than printed.
   final String semantics;
 
+  /// Tint for a count that is a live signal rather than an inventory — the
+  /// delegated agents still working, say. Null keeps the quiet default, which
+  /// is what a count of what merely exists should stay.
+  final Color? color;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.onSurfaceVariant;
     return Semantics(
       // Its own node, not merged into the row's: a screen reader should hear
       // "4 agents" as a fact about the project, not have it run together with
@@ -37,14 +44,11 @@ class CountPair extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 12, color: scheme.onSurfaceVariant),
+          Icon(icon, size: 12, color: tint),
           const SizedBox(width: 3),
           Text(
             '$count',
-            style: TextStyle(
-              fontSize: 10.5,
-              color: scheme.onSurfaceVariant,
-            ).mono,
+            style: TextStyle(fontSize: 10.5, color: tint).mono,
           ),
         ],
       ),

@@ -261,11 +261,23 @@ Per-connection state is only a byte offset into the file (for the tail), the
 running `seq` counter, and the id of the session currently being followed;
 closing the socket stops the tail. Auth is re-checked on connect (not per frame).
 
-> **`protocol` is `4`.** The socket now **follows the pane across sessions**:
+> **`protocol` is `5`.** The **subagent roster is now live**: a `subagents`
+> frame re-sends the whole roster whenever it changes — an agent spawned, or one
+> the parent has been told finished. Before this it rode only in `hello`, so a
+> chat left open while four agents finished went on reporting them as running
+> with their ages climbing, and disagreed with the same session's row in
+> `/snapshot`. Re-scanned every 3s (slower than the tail poll: it lists a
+> directory and scans the parent, and an agent finishing is human-scale). Age
+> alone does not trigger a resend — a working agent's `last_activity_ts`
+> advances constantly and the client can already compute the elapsed time.
+>
+> **`protocol` `4`** made the socket **follow the pane across sessions**:
 > when the agent starts a new one (`/clear`, `/new`, `/resume`, a restarted
 > agent), the server re-points at it and replays the opening sequence in place —
 > `session_changed`, then a fresh `hello` + backlog. `hello` is therefore **no
 > longer once per socket**. A `?subagent=` stream is exempt (it never rotates).
+> Within `4` the roster gained `done` and `last_activity_ts` (see
+> [Subagents](#subagents)), both additive.
 >
 > **`protocol` `3`** put the session's **subagent roster** in `hello`, and
 > `?subagent=<agent_id>` streams a delegated conversation instead of the
@@ -276,6 +288,21 @@ closing the socket stops the tail. Auth is re-checked on connect (not per frame)
 > on demand with a `load_older` control frame. Inbound frames are no longer
 > end-of-stream — a `load_older` is serviced; anything else closes the socket
 > cleanly.
+
+### `subagents` — the roster changed
+
+```json
+{"type":"subagents","pane":"wN:p1","subagents":[ …same shape as in hello… ]}
+```
+
+Sent mid-stream when the roster differs from the one this socket last sent.
+**Replace your roster wholesale**; it is not a delta, so a client that misses one
+is not left wrong until the next rotation. An empty `subagents` is a real update
+(the last agent finished and its files were cleared), not a no-op.
+
+`hello` still carries the roster on connect and after a rotation, so a client
+that ignores this frame degrades to the old connect-time behaviour rather than
+to nothing.
 
 ### Subagents
 
@@ -314,8 +341,8 @@ just the streamed conversation's children.
 The roster is metadata only — enough to render a collapsed row
 (`"general-purpose · Build recent-activity timeline"`) without opening anything.
 Child transcripts are fetched **on demand**: one live session dir held five
-subagents beside a 1.4 MB parent, and a phone should not pay for that to draw a
-one-line summary.
+subagents beside a 1.4 MB parent — and, later, 63 beside a 10 MB one — and a
+phone should not pay for that to draw a one-line summary.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -324,6 +351,34 @@ one-line summary.
 | `agent_type` | string | Configured agent that ran (`general-purpose`, `Explore`, …). Primary label. |
 | `description` | string | Task description given at spawn time. Secondary label. |
 | `spawn_depth` | int | `1` for a child of the session, `2` for a child of a subagent. Display only. |
+| `done` | bool | The parent has been told this agent finished. `false` means still working. Always present. |
+| `last_activity_ts` | int | When this conversation last wrote, unix ms. **Omitted** when undatable — absent is unknown, never "just now". |
+
+#### `done`, and why the Task call cannot answer it
+
+`done` does **not** come from the spawning `Task` call having a result. An
+**async** agent's call returns within seconds ("launched successfully") while
+the child runs on for minutes; measured on a live session, all 15 `Task` calls
+carried results while 6 children were still appending. A client deriving
+"running" from the call would report every agent finished.
+
+It comes from the `task-notification` the parent receives when an agent stops,
+keyed by the **agent id** — the same id as `agent_id`. Two shapes on disk make
+naive parsing wrong, and a client re-deriving this must handle both:
+
+- One notification can name **several** agents under a single `status` (the "no
+  completion record was found for N background agents" notice). Matching one id
+  per notification loses the rest — and those are the agents that will never
+  report for themselves, so they would read as running forever.
+- A notification need not carry a `status` at all (monitor events share the
+  envelope), and agent prose quotes these tags verbatim. Pairing an id with a
+  status found outside its own block ends the wrong agent.
+
+A terminal status does not latch: an agent can be resumed and report again
+(observed: `stopped → killed → failed → completed` for one id), so the last
+status wins. The residual is that a **resumed** agent is silent until it next
+reports, so it reads as done while `last_activity_ts` keeps advancing — which is
+why the timestamp is worth rendering beside the state rather than instead of it.
 
 Ordering of the roster is `spawn_depth` then `agent_id`, **for determinism only —
 it is not spawn order.** The authoritative order is the position of each matching
@@ -425,7 +480,7 @@ Client rules:
 
 ### `hello`
 ```json
-{"type":"hello","protocol":4,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true,"subagents":[{"agent_id":"aa4832e5ce82b16f0","tool_use_id":"toolu_01F9bssr6JjRZXjvEumqMwuR","agent_type":"general-purpose","description":"Build recent-activity timeline","spawn_depth":1},{"agent_id":"a9adcab7329a772ac","tool_use_id":"toolu_013gpQcoGTMVRYdciecEq7rZ","agent_type":"Explore","description":"Explore Flutter app conventions","spawn_depth":2}]}
+{"type":"hello","protocol":4,"pane":"wN:p1","agent_kind":"claude","session_id":"b0651a43-38fc-4f8b-8b03-c8611cdb9237","backlog_count":150,"total":1025,"has_more":true,"oldest_loaded_seq":876,"has_older":true,"subagents":[{"agent_id":"aa4832e5ce82b16f0","tool_use_id":"toolu_01F9bssr6JjRZXjvEumqMwuR","agent_type":"general-purpose","description":"Build recent-activity timeline","spawn_depth":1,"done":true,"last_activity_ts":1788601356000},{"agent_id":"a9adcab7329a772ac","tool_use_id":"toolu_013gpQcoGTMVRYdciecEq7rZ","agent_type":"Explore","description":"Explore Flutter app conventions","spawn_depth":2,"done":false,"last_activity_ts":1788601402000}]}
 ```
 | Field | Type | Notes |
 |---|---|---|

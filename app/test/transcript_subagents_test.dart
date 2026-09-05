@@ -1,0 +1,237 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gothalo/features/transcript/transcript_models.dart';
+
+void main() {
+  group('hello.subagents (protocol 4)', () {
+    test('parses the roster the contract documents', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'hello',
+        'protocol': 4,
+        'pane': 'wN:p1',
+        'agent_kind': 'claude',
+        'session_id': 'b0651a43-38fc-4f8b-8b03-c8611cdb9237',
+        'backlog_count': 150,
+        'total': 1025,
+        'has_more': true,
+        'oldest_loaded_seq': 876,
+        'has_older': true,
+        'subagents': [
+          {
+            'agent_id': 'aa4832e5ce82b16f0',
+            'tool_use_id': 'toolu_01F9bssr6JjRZXjvEumqMwuR',
+            'agent_type': 'general-purpose',
+            'description': 'Build recent-activity timeline',
+            'spawn_depth': 1,
+            'done': true,
+            'last_activity_ts': 1788601356000,
+          },
+          {
+            'agent_id': 'a9adcab7329a772ac',
+            'tool_use_id': 'toolu_013gpQcoGTMVRYdciecEq7rZ',
+            'agent_type': 'Explore',
+            'description': 'Explore Flutter app conventions',
+            'spawn_depth': 2,
+          },
+        ],
+      });
+
+      final roster = frame.hello!.subagents;
+      expect(roster, hasLength(2));
+      expect(roster.first.agentId, 'aa4832e5ce82b16f0');
+      expect(roster.first.toolUseId, 'toolu_01F9bssr6JjRZXjvEumqMwuR');
+      expect(roster.first.agentType, 'general-purpose');
+      expect(roster.first.description, 'Build recent-activity timeline');
+      expect(roster.first.spawnDepth, 1);
+      expect(roster.first.done, isTrue);
+      expect(roster.first.sinceLastActivity, isNotNull);
+      expect(roster.last.spawnDepth, 2);
+    });
+
+    /// An older bridge sends neither field. Treating a missing `done` as
+    /// "finished" would hide every running agent, so absent means running.
+    test('an entry with no status reads as running and undated', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'hello',
+        'protocol': 4,
+        'pane': 'wN:p1',
+        'agent_kind': 'claude',
+        'session_id': 'b0651a43',
+        'backlog_count': 0,
+        'total': 0,
+        'subagents': [
+          {'agent_id': 'a1', 'tool_use_id': 't1', 'agent_type': 'Explore'},
+        ],
+      });
+
+      expect(frame.hello!.subagents.single.done, isFalse);
+      expect(frame.hello!.subagents.single.sinceLastActivity, isNull);
+    });
+
+    /// The key is omitted for a session that delegated nothing — the norm.
+    test('an absent roster is empty, not null', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'hello',
+        'protocol': 4,
+        'pane': 'wN:p1',
+        'agent_kind': 'claude',
+        'session_id': 'b0651a43',
+        'backlog_count': 0,
+        'total': 0,
+      });
+
+      expect(frame.hello!.subagents, isEmpty);
+    });
+
+    test('echoes the subagent being streamed so a reconnect knows where it is',
+        () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'hello',
+        'protocol': 4,
+        'pane': 'wN:p1',
+        'agent_kind': 'claude',
+        'session_id': 'b0651a43',
+        'backlog_count': 0,
+        'total': 0,
+        'subagent': 'aa4832e5ce82b16f0',
+      });
+
+      expect(frame.hello!.subagent, 'aa4832e5ce82b16f0');
+    });
+  });
+
+  group('subagents frame (protocol 5)', () {
+    /// The roster used to arrive only in hello — once per connect. A chat left
+    /// open while four agents finished went on saying they were running.
+    test('carries a fresh roster mid-stream', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'subagents',
+        'pane': 'wN:p1',
+        'subagents': [
+          {
+            'agent_id': 'a1',
+            'tool_use_id': 't1',
+            'agent_type': 'general-purpose',
+            'description': 'Audit the caching layer',
+            'spawn_depth': 1,
+            'done': true,
+          },
+        ],
+      });
+
+      expect(frame.type, TranscriptFrameType.subagents);
+      expect(frame.subagents.single.agentId, 'a1');
+      expect(frame.subagents.single.done, isTrue);
+    });
+
+    test('an empty roster is a real update, not a no-op', () {
+      final frame = TranscriptFrame.fromJson({
+        'type': 'subagents',
+        'pane': 'wN:p1',
+        'subagents': <dynamic>[],
+      });
+
+      expect(frame.type, TranscriptFrameType.subagents);
+      expect(frame.subagents, isEmpty);
+    });
+  });
+
+  group('SubagentRoster', () {
+    final roster = SubagentRoster([
+      const Subagent(
+        agentId: 'aa4832e5ce82b16f0',
+        toolUseId: 'toolu_parent',
+        agentType: 'general-purpose',
+        description: 'Build recent-activity timeline',
+        spawnDepth: 1,
+      ),
+      const Subagent(
+        agentId: 'a9adcab7329a772ac',
+        toolUseId: 'toolu_child',
+        agentType: 'Explore',
+        description: 'Explore Flutter app conventions',
+        spawnDepth: 2,
+      ),
+    ]);
+
+    test('finds the subagent a tool call spawned', () {
+      expect(roster.forToolUse('toolu_parent')?.agentId, 'aa4832e5ce82b16f0');
+    });
+
+    /// The roster is flat and covers every depth, so a depth-2 entry is found
+    /// by the same lookup when its parent subagent's transcript is on screen.
+    test('finds a deeper subagent by the same lookup', () {
+      expect(roster.forToolUse('toolu_child')?.agentType, 'Explore');
+    });
+
+    test('a tool call that spawned nothing has no entry', () {
+      expect(roster.forToolUse('toolu_bash'), isNull);
+    });
+
+    /// Unreadable metadata still yields a roster row, so an entry can arrive
+    /// with no tool_use_id — and a tool call can arrive with no id. Pairing
+    /// those would hang one subagent off every unidentified tool row.
+    test('an entry with no tool_use_id matches no tool call', () {
+      final r = SubagentRoster([
+        const Subagent(
+          agentId: 'a1',
+          toolUseId: '',
+          agentType: 'general-purpose',
+          description: 'lost its metadata',
+          spawnDepth: 1,
+        ),
+      ]);
+
+      expect(r.forToolUse(''), isNull);
+    });
+
+    /// The bottom-of-chat list is "what is working right now", so a finished
+    /// agent must not appear in it however recently it ran.
+    test('running lists only the agents still working', () {
+      final mixed = SubagentRoster([
+        const Subagent(
+          agentId: 'a1',
+          toolUseId: 't1',
+          agentType: 'general-purpose',
+          description: 'Audit the caching layer',
+          spawnDepth: 1,
+        ),
+        const Subagent(
+          agentId: 'a2',
+          toolUseId: 't2',
+          agentType: 'general-purpose',
+          description: 'Trace the retry path',
+          spawnDepth: 1,
+          done: true,
+        ),
+      ]);
+
+      expect(mixed.running.map((s) => s.agentId), ['a1']);
+    });
+
+    /// Chips and rows must not reorder under a finger as children append, so
+    /// the roster's own order is kept rather than sorting by recency.
+    test('running keeps the roster order rather than resorting by activity',
+        () {
+      final r = SubagentRoster([
+        const Subagent(
+          agentId: 'a1',
+          toolUseId: 't1',
+          agentType: 'x',
+          description: 'first',
+          spawnDepth: 1,
+          lastActivityTs: 1000,
+        ),
+        const Subagent(
+          agentId: 'a2',
+          toolUseId: 't2',
+          agentType: 'x',
+          description: 'second',
+          spawnDepth: 1,
+          lastActivityTs: 9000,
+        ),
+      ]);
+
+      expect(r.running.map((s) => s.agentId), ['a1', 'a2']);
+    });
+  });
+}

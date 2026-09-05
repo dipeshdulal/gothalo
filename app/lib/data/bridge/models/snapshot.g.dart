@@ -30,6 +30,9 @@ _Agent _$AgentFromJson(Map<String, dynamic> json) => _Agent(
   attentionRank: (json['attention_rank'] as num?)?.toInt(),
   recencyRank: (json['recency_rank'] as num?)?.toInt(),
   lastActivityTs: (json['last_activity_ts'] as num?)?.toInt(),
+  subagents: json['subagents'] == null
+      ? null
+      : SubagentCounts.fromJson(json['subagents'] as Map<String, dynamic>),
 );
 
 Map<String, dynamic> _$AgentToJson(_Agent instance) => <String, dynamic>{
@@ -48,6 +51,7 @@ Map<String, dynamic> _$AgentToJson(_Agent instance) => <String, dynamic>{
   'attention_rank': instance.attentionRank,
   'recency_rank': instance.recencyRank,
   'last_activity_ts': instance.lastActivityTs,
+  'subagents': instance.subagents,
 };
 
 const _$AgentStatusEnumMap = {
@@ -57,6 +61,15 @@ const _$AgentStatusEnumMap = {
   AgentStatus.done: 'done',
   AgentStatus.unknown: 'unknown',
 };
+
+_SubagentCounts _$SubagentCountsFromJson(Map<String, dynamic> json) =>
+    _SubagentCounts(
+      total: (json['total'] as num?)?.toInt() ?? 0,
+      running: (json['running'] as num?)?.toInt() ?? 0,
+    );
+
+Map<String, dynamic> _$SubagentCountsToJson(_SubagentCounts instance) =>
+    <String, dynamic>{'total': instance.total, 'running': instance.running};
 
 _AgentSession _$AgentSessionFromJson(Map<String, dynamic> json) =>
     _AgentSession(value: json['value'] as String?);
