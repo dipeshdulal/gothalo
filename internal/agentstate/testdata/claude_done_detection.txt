@@ -7,7 +7,7 @@
 │                      ▝▜█████▛▘                     │ Bug fixes and reliability improvements                                                                                 │
 │                        ▘▘ ▝▝                       │ Added Claude Opus 5 (`claude-opus-5`), now the default Opus model — 1M context, fast mode at $10/$50 per Mtok          │
 │     Opus 4.8 (1M context) · Claude Max ·           │ Added `sandbox.network.strictAllowlist` setting to deny non-allowlisted hosts for sandboxed commands without prompting │
-│     dev@example.com's Organization     │ /release-notes for more                                                                                                │
+│           dev@example.com's Organization           │ /release-notes for more                                                                                                │
 │             /…/scratchpad/blocked-demo             │                                                                                                                        │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 

@@ -11,17 +11,21 @@ import 'package:firebase_core/firebase_core.dart';
 /// page must agree on the project, or the token minted by one is meaningless to
 /// the other.
 ///
-/// None of this is secret. A Firebase web `apiKey` identifies a project; it does
-/// not authorise anything on its own, which is why it ships inside every web app
-/// that uses Firebase. Access is controlled by IAM and security rules, not by
-/// hiding this.
+/// The values committed here are placeholders: push is inert until you run
+/// `scripts/setup-firebase.sh` (see README "Push: bring your own Firebase"),
+/// which fills in this file, the service worker, and `google-services.json`
+/// from your own Firebase project.
+///
+/// A Firebase web `apiKey` identifies a project; it does not authorise anything
+/// on its own, which is why it ships inside every web app that uses Firebase.
+/// Access is controlled by IAM and security rules, not by hiding this.
 const firebaseWebOptions = FirebaseOptions(
   apiKey: 'YOUR_WEB_API_KEY',
   authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
   projectId: 'YOUR_PROJECT_ID',
   storageBucket: 'YOUR_PROJECT_ID.firebasestorage.app',
   messagingSenderId: 'YOUR_SENDER_ID',
-  appId: '1:YOUR_SENDER_ID:web:76e0a519870275262aadc8',
+  appId: 'YOUR_WEB_APP_ID',
 );
 
 /// The public half of the VAPID pair, which web push requires and native push
@@ -32,6 +36,6 @@ const firebaseWebOptions = FirebaseOptions(
 /// `getToken(vapidKey:)` fails outright without it — with an error that reads
 /// like a permissions problem rather than a missing key.
 ///
-/// Also public, and also already served in the bridge's receiver page.
-const firebaseWebVapidKey =
-    'YOUR_VAPID_PUBLIC_KEY';
+/// Public by design (it is exposed to every browser that loads the page), and
+/// filled in by `scripts/setup-firebase.sh` alongside the options above.
+const firebaseWebVapidKey = 'YOUR_VAPID_PUBLIC_KEY';

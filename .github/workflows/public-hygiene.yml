@@ -1,0 +1,52 @@
+name: public-hygiene
+
+# Nobody's project keys or personal hostnames may return to tracked source.
+# The three app-side Firebase files are committed as YOUR_* placeholders;
+# `scripts/setup-firebase.sh` fills them in locally. If a real value is
+# committed, this fails the PR.
+on: [push, pull_request]
+
+jobs:
+  no-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid known project + personal identifiers
+        run: |
+          set -e
+          # NOTE: this file itself is excluded — the patterns live here.
+          hits=$(git grep -nE "5fa01|YOUR_SENDER_ID|tailnet|my-mac|YOUR_VAPID_PUBLIC_KEY" -- . \
+            ':!.github/workflows/public-hygiene.yml' \
+            ':!*.freezed.dart' ':!*.g.dart' ':!*_test.go' ':!app/test/**' ':!internal/**/testdata/**' || true)
+          if [ -n "$hits" ]; then echo "$hits"; exit 1; fi
+          echo "no known identifiers in tracked source"
+      - name: Forbid client / employer identifiers
+        run: |
+          set -e
+          # Captured agent output is real terminal scrollback; it must be
+          # scrubbed of client repos, paths and domain terms before landing.
+          hits=$(git grep -niE "example|admin-console|acme-ticket|storefront|vendor|common_cache|dipesh\.dulal|alex" -- . \
+            ':!.github/workflows/public-hygiene.yml' || true)
+          if [ -n "$hits" ]; then echo "$hits"; exit 1; fi
+          echo "no client identifiers in tracked source"
+      - name: Firebase real configs must stay untracked
+        run: |
+          set -e
+          for f in app/android/app/google-services.json \
+                   app/lib/core/firebase_web_options.dart \
+                   internal/web/assets/firebase-messaging-sw.js \
+                   internal/web/assets/push-test.html; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "$f is tracked — only its .example may be committed"; exit 1
+            fi
+          done
+          echo "real firebase configs are untracked"
+      - name: Firebase .example templates must stay placeholders
+        run: |
+          set -e
+          grep -q "YOUR_PROJECT_ID" app/android/app/google-services.json.example
+          grep -q "YOUR_WEB_API_KEY" app/lib/core/firebase_web_options.dart.example
+          grep -q "YOUR_VAPID_PUBLIC_KEY" app/lib/core/firebase_web_options.dart.example
+          grep -q "YOUR_PROJECT_ID" internal/web/assets/firebase-messaging-sw.js.example
+          grep -q "YOUR_VAPID_PUBLIC_KEY" internal/web/assets/push-test.html.example
+          echo "firebase templates are unconfigured placeholders"

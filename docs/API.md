@@ -5,7 +5,7 @@ This is the contract the app codes against. The backend was rebuilt into a
 
 ## Base URL
 ```
-https://my-mac.tailnet.ts.net:5338
+https://<host>.<tailnet>.ts.net:5338
 ```
 The gothalo bridge, reachable over the tailnet (valid TLS) on port **5338**. The
 base URL is not hardcoded in the real flow — the app derives it from the pairing
@@ -24,7 +24,7 @@ QR's origin (a tailnet URL today, a relay URL later).
 1. Operator runs `gothalo pair` on the host; it prints a QR encoding a small JSON
    payload:
    ```json
-   { "url": "https://my-mac.tailnet.ts.net:5338", "code": "<8-hex one-time code>" }
+   { "url": "https://<host>.<tailnet>.ts.net:5338", "code": "<8-hex one-time code>" }
    ```
 2. App scans the QR and parses the JSON — `url` is the bridge base URL, `code` is
    the one-time code — then:
@@ -185,8 +185,8 @@ The complete payload, channel, tag, action and routing contract lives in
 [`CONTRACT-notifications.md`](CONTRACT-notifications.md).
 
 ### Native FCM setup
-Add an **Android app** to Firebase project **YOUR_PROJECT_ID** → download
-`google-services.json` into `android/app/`. Get the device token via
+Add an **Android app** to your Firebase project (see README "Push: bring your
+own Firebase") → download `google-services.json` into `android/app/`. Get the device token via
 `firebase_messaging`, pass it as `fcm_token` during `/pair`, and
 `POST /register-token {token}` whenever it refreshes.
 

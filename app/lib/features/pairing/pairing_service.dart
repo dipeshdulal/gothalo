@@ -102,7 +102,7 @@ class PairingService {
   }
 
   /// A friendly server name from the bridge URL's first host label, e.g.
-  /// `https://my-mac.tail…ts.net:5338` → "Dipeshs Mac Studio".
+  /// `https://my-mac.tail…ts.net:5338` → "My Mac".
   String _serverNameFromUrl(String url) {
     final host = Uri.tryParse(url)?.host ?? url;
     final label = host.split('.').first;

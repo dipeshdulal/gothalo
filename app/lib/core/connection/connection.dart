@@ -30,7 +30,7 @@ sealed class Connection with _$Connection {
     /// User-facing label, e.g. "Mac Studio".
     required String name,
 
-    /// e.g. `https://my-mac.tailnet.ts.net` — no trailing slash.
+    /// e.g. `https://<host>.<tailnet>.ts.net` — no trailing slash.
     required String baseUrl,
 
     /// Bearer token for `Authorization: Bearer <token>`. Secret.
@@ -58,11 +58,9 @@ sealed class Connection with _$Connection {
   static Connection? devSeed() {
     const bearer = String.fromEnvironment('DEV_BEARER');
     if (bearer.isEmpty) return null;
-    const baseUrl = String.fromEnvironment(
-      'DEV_BASE_URL',
-      defaultValue: 'https://my-mac.tailnet.ts.net',
-    );
-    const name = String.fromEnvironment('DEV_NAME', defaultValue: 'Mac Studio (dev)');
+    const baseUrl = String.fromEnvironment('DEV_BASE_URL', defaultValue: '');
+    if (baseUrl.isEmpty) return null;
+    const name = String.fromEnvironment('DEV_NAME', defaultValue: 'Dev server');
     return const Connection(id: 'dev', name: name, baseUrl: baseUrl, bearer: bearer);
   }
 

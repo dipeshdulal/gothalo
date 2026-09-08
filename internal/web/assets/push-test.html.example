@@ -36,13 +36,16 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
   <script>
+    // Placeholders: filled in by scripts/setup-firebase.sh from your own
+    // Firebase project (see README "Push: bring your own Firebase").
+    // __SETUP_FIREBASE__ (marker: the setup script replaces this whole block).
     const firebaseConfig = {
       apiKey: "YOUR_WEB_API_KEY",
       authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
       projectId: "YOUR_PROJECT_ID",
       storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
       messagingSenderId: "YOUR_SENDER_ID",
-      appId: "1:YOUR_SENDER_ID:web:76e0a519870275262aadc8"
+      appId: "YOUR_WEB_APP_ID"
     };
     const VAPID_KEY = "YOUR_VAPID_PUBLIC_KEY";
 

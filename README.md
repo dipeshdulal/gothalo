@@ -244,6 +244,39 @@ Both credential shapes are accepted. A service-account file names its own
 project; user credentials name a *person*, so they need `push.project_id` —
 which `push login` saves for you.
 
+#### App side: bring your own Firebase
+
+FCM binds the **app binary** to one Firebase project (the sender ID is compiled
+in), so every fork needs its own project — the repo commits only `.example`
+templates with inert `YOUR_*` placeholders, and the real files are gitignored,
+so `git status` stays clean and real values can't be committed by accident:
+
+- `app/android/app/google-services.json` (+ `.example`)
+- `app/lib/core/firebase_web_options.dart` (+ `.example`)
+- `internal/web/assets/firebase-messaging-sw.js` (+ `.example` — must agree
+  with the Dart options, or the service worker mints tokens the page can't use)
+- `internal/web/assets/push-test.html` (+ `.example`, the bridge-served test
+  receiver)
+
+Until configured, push stays silent: the app builds and runs, notifications
+just never arrive. One script generates all four from your project:
+
+```bash
+./scripts/setup-firebase.sh [--project ID] [--vapid KEY]
+```
+
+It checks auth, creates/selects the project, enables the Cloud Messaging API,
+registers the Android + web apps, runs `flutterfire configure`, and propagates
+the values into the Dart options and the service worker. You'll paste one thing
+by hand: the Web Push VAPID public key (Firebase console → Project settings →
+Cloud Messaging → Web Push certificates → Generate key pair) — it has no CLI.
+Then finish the bridge side above (`push login`, `push status`) and fire
+`POST /testpush` to watch a real notification land.
+
+A committed `.github/workflows/public-hygiene.yml` fails any PR that
+reintroduces real project values or personal hostnames, so a fork can't
+accidentally push against (or bill) someone else's project.
+
 ### Pair a phone
 
 ```bash
@@ -281,3 +314,12 @@ git tag v0.1.0 && git push origin v0.1.0
 This cross-compiles darwin/linux (amd64 + arm64), publishes a GitHub Release with
 archives + `checksums.txt`, and generates the changelog. Dry-run locally with
 `goreleaser release --snapshot --clean` (artifacts land in `dist/`).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+Third-party assets keep their own terms: Inter and JetBrains Mono ship with
+their SIL Open Font License texts in `app/assets/fonts/`, and the agent logos in
+`app/assets/agents/` are their respective owners' trademarks, included to
+identify the agents the app drives.

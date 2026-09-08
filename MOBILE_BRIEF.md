@@ -17,7 +17,7 @@ being rewritten in parallel in another worktree.
 ## The bridge API (LIVE right now — test against it)
 The backend bridge is running and reachable over the tailnet via HTTPS:
 
-- Base URL: `https://my-mac.tailnet.ts.net`
+- Base URL: `https://<host>.<tailnet>.ts.net` (your bridge's tailnet URL from `tailscale serve`)
 - Auth (temporary): header `Authorization: Bearer test`  — or `?token=test` for
   GET-in-a-browser. **This shared token is temporary**: the backend is moving to
   **per-device bearer tokens issued by QR pairing** (see Coordination below).
@@ -39,12 +39,13 @@ Verified endpoints:
   device push token. (The web receiver used this; your native app registers its own.)
 - `POST /testpush` → fires a sample push to the registered token (handy to test FCM).
 
-Confirm you can reach it: `curl -H "Authorization: Bearer test" https://my-mac.tailnet.ts.net/snapshot`
+Confirm you can reach it: `curl -H "Authorization: Bearer test" https://<host>.<tailnet>.ts.net/snapshot`
 
 ## Firebase (for native push)
-- Firebase project: **YOUR_PROJECT_ID** (Cloud Messaging enabled; web push already proven).
-- For **native Android FCM** you must add an **Android app** in the Firebase console
-  under project YOUR_PROJECT_ID, download **google-services.json**, and place it in
+- Create your own Firebase project (Cloud Messaging enabled) — see README
+  "Push: bring your own Firebase" or run `scripts/setup-firebase.sh`.
+- For **native Android FCM** add an **Android app** in the Firebase console
+  under your project, download **google-services.json**, and place it in
   `android/app/`. The whole bridge→FCM→device pipeline is already proven end-to-end,
   so this is just registering the native client and minting its own token.
 
@@ -77,7 +78,7 @@ The Go backend is being rebuilt in parallel into a **cobra CLI + bridge** with:
 So: design the **connection model** as `{ baseUrl, bearer }` populated either manually
 (a settings screen, for now) or by scanning a QR (later). Plan a `qr_code_scanner`/
 `mobile_scanner` screen for pairing. The exact `/pair` contract will be handed to you
-when the backend side lands; until then, use the manual `{baseUrl:"https://my-mac.tailnet.ts.net", bearer:"test"}`
+when the backend side lands; until then, use the manual `{baseUrl:"https://<host>.<tailnet>.ts.net", bearer:"test"}`
 connection to build and test the inbox + FCM.
 
 ## Rules

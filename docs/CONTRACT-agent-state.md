@@ -85,12 +85,12 @@ leak into the contract.
   "agent_kind": "claude",
   "agent_status": "idle",
   "headline": "Both PRs are open against develop:",
-  "detail": "Both PRs are open against develop:\n\n- #1570 — fix/consolidated-arrangement-earliest — consolidated refresh window uses the earliest per-SKU\narrangement (MIN not MAX), + the cancel-deadline email fix.\nhttps://github.com/example/acme-app/pull/1570\n- #1571 — feat/order-detail-per-sku-shipping — per-SKU shipping-detail collapsible panel, gated to\nmulti-warehouse units.\nhttps://github.com/example/acme-app/pull/1571\n\nBoth are file-disjoint and independent (no stacking), so they can be reviewed and merged in any order.\nNeither commit carries any Claude attribution.\n\nOne thing I did not do: the earlier temp branch feat/per-sku-shipping-detail still exists locally at\ndevelop's HEAD with no commits — harmless, but I can delete it if you want it cleaned up.",
+  "detail": "Both PRs are open against develop:\n\n- #1570 — fix/consolidated-window-earliest — consolidated refresh window uses the earliest per-key\ntimestamp (MIN not MAX), + the retry-deadline email fix.\nhttps://github.com/example/acme-app/pull/1570\n- #1571 — feat/report-detail-per-key-summary — per-key summary collapsible panel, gated to\nmulti-region accounts.\nhttps://github.com/example/acme-app/pull/1571\n\nBoth are file-disjoint and independent (no stacking), so they can be reviewed and merged in any order.\nNeither commit carries any Claude attribution.\n\nOne thing I did not do: the earlier temp branch feat/per-key-summary-detail still exists locally at\ndevelop's HEAD with no commits — harmless, but I can delete it if you want it cleaned up.",
   "transcript": [
     "Both are file-disjoint and independent (no stacking), so they can be reviewed and merged in any order.",
     "Neither commit carries any Claude attribution.",
     "✻ Worked for 2m 43s",
-    "※ recap: Goal was surfacing per-SKU shipping data on the order-detail page plus fixing the consolidated",
+    "※ recap: Goal was surfacing per-key summary data on the report-detail page plus fixing the consolidated",
     "await review, or delete the leftover local branch if you want. (disable recaps in /config)"
   ],
   "parsed": true
@@ -217,7 +217,7 @@ Notes:
 ## Curl (dev)
 
 ```bash
-BASE=https://my-mac.tailnet.ts.net:5338
+BASE=https://<host>.<tailnet>.ts.net:5338
 TOKEN=<admin-or-device-bearer>
 
 # parsed card for a pane

@@ -6,22 +6,22 @@
 
 ⏺ Both PRs are open against develop:
 
-  - #1570 — fix/consolidated-arrangement-earliest — consolidated refresh window uses the earliest per-SKU
-  arrangement (MIN not MAX), + the cancel-deadline email fix.
+  - #1570 — fix/consolidated-window-earliest — consolidated refresh window uses the earliest per-key
+  timestamp (MIN not MAX), + the retry-deadline email fix.
   https://github.com/example/acme-app/pull/1570
-  - #1571 — feat/order-detail-per-sku-shipping — per-SKU shipping-detail collapsible panel, gated to
-  multi-warehouse units.
+  - #1571 — feat/report-detail-per-key-summary — per-key summary collapsible panel, gated to
+  multi-region accounts.
   https://github.com/example/acme-app/pull/1571
 
   Both are file-disjoint and independent (no stacking), so they can be reviewed and merged in any order.
   Neither commit carries any Claude attribution.
 
-  One thing I did not do: the earlier temp branch feat/per-sku-shipping-detail still exists locally at
+  One thing I did not do: the earlier temp branch feat/per-key-summary-detail still exists locally at
   develop's HEAD with no commits — harmless, but I can delete it if you want it cleaned up.
 
 ✻ Worked for 2m 43s
 
-※ recap: Goal was surfacing per-SKU shipping data on the order-detail page plus fixing the consolidated
+※ recap: Goal was surfacing per-key summary data on the report-detail page plus fixing the consolidated
   refresh window to the earliest date. Both are done and opened as PRs #1570 and #1571 against develop. Next:
   await review, or delete the leftover local branch if you want. (disable recaps in /config)
 
@@ -38,7 +38,7 @@
 
 
 
-───────────────────────────────────────── Implement multi-warehouse shipping logic and delivery timelines ──
+──────────────────────────────────────────────── Implement multi-region cache logic and refresh timelines ──
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent · PR #1571

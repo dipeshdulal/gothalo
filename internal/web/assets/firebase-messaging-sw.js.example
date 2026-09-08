@@ -8,14 +8,20 @@ importScripts("https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-com
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 
-firebase.initializeApp({
+// Placeholders: push is inert until scripts/setup-firebase.sh fills these in
+// from your own Firebase project (see README "Push: bring your own Firebase").
+// Must agree with app/lib/core/firebase_web_options.dart.
+// __SETUP_FIREBASE__ (marker: the setup script replaces this whole block).
+const FIREBASE_CONFIG = {
   apiKey: "YOUR_WEB_API_KEY",
   authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
   projectId: "YOUR_PROJECT_ID",
   storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
   messagingSenderId: "YOUR_SENDER_ID",
-  appId: "1:YOUR_SENDER_ID:web:76e0a519870275262aadc8"
-});
+  appId: "YOUR_WEB_APP_ID"
+};
+
+firebase.initializeApp(FIREBASE_CONFIG);
 
 const messaging = firebase.messaging();
 

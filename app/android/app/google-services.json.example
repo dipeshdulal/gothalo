@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "YOUR_SENDER_ID",
+    "project_number": "YOUR_PROJECT_NUMBER",
     "project_id": "YOUR_PROJECT_ID",
     "storage_bucket": "YOUR_PROJECT_ID.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:YOUR_SENDER_ID:android:78724f80f6e5575d2aadc8",
+        "mobilesdk_app_id": "YOUR_ANDROID_APP_ID",
         "android_client_info": {
           "package_name": "com.dipeshdulal.gothalo"
         }

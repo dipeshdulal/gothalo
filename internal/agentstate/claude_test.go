@@ -38,7 +38,7 @@ func TestClaudeParseStates(t *testing.T) {
 		{
 			name:          "idle",
 			status:        "idle",
-			title:         "Implement multi-warehouse shipping logic and delivery timelines",
+			title:         "Implement multi-region cache logic and refresh timelines",
 			detectionFile: "claude_idle_detection.txt",
 			recentFile:    "claude_idle_recent.txt",
 			wantParsed:    true,

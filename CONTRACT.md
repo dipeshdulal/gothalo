@@ -378,7 +378,7 @@ Documented so a future maintainer can reproduce it (see also
 
 **Socket path.** Not hardcoded. Resolution order: `HERDR_SOCK` env var, else
 `herdr status server --json` → its `socket` field (the authoritative running
-value). On this host that's `/Users/alex/.config/herdr/herdr.sock`.
+value). On a typical host that's `~/.config/herdr/herdr.sock`.
 
 **Wire framing** (reverse-engineered from `herdr api schema --json` +
 experimenting against the live socket; herdr 0.7.5, protocol 17):
