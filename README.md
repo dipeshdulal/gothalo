@@ -8,6 +8,16 @@ coding agents (Claude Code, Codex, Gemini, Cursor, …) from your phone: see whi
 agents are blocked/working/done, get pushed when one needs you, approve or type a
 reply, and drop into a full terminal — all over your own Tailscale network.
 
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="gothalo home screen" width="320">
+</p>
+
+<p align="center"><sub>
+  Home: what needs you, what you were last in, and everything else by state.
+  Rendered from fixture data by <code>app/test/screenshots_test.dart</code> —
+  regenerate with <code>flutter test test/screenshots_test.dart --update-goldens</code>.
+</sub></p>
+
 ## Why this exists
 
 Herdr exposes an open, documented socket API for driving agent sessions. gothalo is
