@@ -370,6 +370,10 @@ func TestDelete_MergedOnlyIntoTheRemoteDefault(t *testing.T) {
 	dir := newRepo(t)
 	remote := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, dir, "init", "-q", "--bare", remote)
+	// Point the bare remote at main like a real forge: otherwise clone checks
+	// out nothing (remote HEAD names an unborn ref) and the merge below runs
+	// against an empty head, which newer gits refuse.
+	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
 	runGit(t, dir, "remote", "add", "origin", remote)
 	runGit(t, dir, "push", "-q", "-u", "origin", "main")
 	branchWithCommit(t, dir, "feat/merged-upstream")

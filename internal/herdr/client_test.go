@@ -75,7 +75,12 @@ func TestAsAgentErrorUnknownCode(t *testing.T) {
 func TestRunForTimesOut(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "herdr-hang")
-	script := "#!/bin/sh\nsleep 60\n"
+	// exec: the shell must replace itself with sleep. Without it, killing the
+	// shell on timeout leaves the sleep child holding stdout open, and
+	// CombinedOutput blocks until sleep exits on its own — 60s, not 300ms.
+	// (Whether plain `sleep 60` gets that implicit exec is shell-dependent,
+	// which is exactly why CI hung while macOS passed.)
+	script := "#!/bin/sh\nexec sleep 60\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
 	}
