@@ -54,3 +54,6 @@ config.local.*
 /internal/web/assets/assets/
 /internal/web/assets/canvaskit/
 /internal/web/assets/icons/
+
+# Local pi agent session data — never commit.
+.pi/

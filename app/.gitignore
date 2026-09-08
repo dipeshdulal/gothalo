@@ -56,3 +56,6 @@ lib/core/firebase_web_options.dart
 # Written by `flutterfire configure` (or scripts/setup-firebase.sh).
 # Your project's real values — never commit.
 /android/app/google-services.json
+
+# Local pi agent session data — never commit.
+.pi/
