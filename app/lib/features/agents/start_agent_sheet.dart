@@ -3,10 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme.dart';
+import '../../core/tokens.dart';
+import '../../core/widgets/action_chip.dart';
 import '../../data/bridge/bridge_client.dart';
 import '../../data/bridge/bridge_providers.dart';
 import 'agent_kind_picker.dart';
 import 'agent_lifecycle_providers.dart';
+import '../inbox/inbox_providers.dart';
+import '../overview/overview_screen.dart' show spaceCwdOf;
 import '../recents/recent_providers.dart';
 import '../recents/record_open.dart';
 
@@ -90,11 +94,49 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
   String? _kind;
   bool _starting = false;
 
+  /// Enough to cover "somewhere I was just working" without turning a launch
+  /// sheet into a directory browser; Open a project already exists for that.
+  static const _recentDirLimit = 6;
+
   @override
   void dispose() {
     _cwd.dispose();
     _prompt.dispose();
     super.dispose();
+  }
+
+  /// Directories of the projects this device was recently in, on the server
+  /// being launched against, most recent first.
+  ///
+  /// Recents span every server; a path only means anything on the host that has
+  /// it. Undatable or duplicate paths are dropped rather than shown twice — two
+  /// workspaces open on one checkout is ordinary.
+  List<String> _recentDirs() {
+    final snap = ref.watch(snapshotControllerProvider).asData?.value;
+    if (snap == null) return const [];
+    final out = <String>[];
+    for (final hit in ref.watch(recentSpaceHitsProvider)) {
+      if (!hit.server.isActive) continue;
+      final panes =
+          snap.panes.where((p) => p.workspaceId == hit.workspaceId).toList();
+      final cwd = spaceCwdOf(hit.workspace, panes);
+      if (cwd.isEmpty || out.contains(cwd)) continue;
+      out.add(cwd);
+      if (out.length == _recentDirLimit) break;
+    }
+    return out;
+  }
+
+  void _useDir(String dir) => _cwd.value = TextEditingValue(
+        text: dir,
+        selection: TextSelection.collapsed(offset: dir.length),
+      );
+
+  /// The last path segment, which is what tells these apart at a glance. The
+  /// whole path is still one tap away in the field above, and in the tooltip.
+  static String _dirLabel(String dir) {
+    final parts = dir.split('/').where((p) => p.isNotEmpty).toList();
+    return parts.isEmpty ? dir : parts.last;
   }
 
   @override
@@ -159,6 +201,38 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
                 ),
                 style: const TextStyle(
                     fontFamily: AppTheme.monoFamily, fontSize: 13),
+              ),
+              // Typing an absolute path on a phone is the slowest thing in this
+              // sheet, and the answer is nearly always a project you were just
+              // in. Rebuilt off the controller so the current directory reads
+              // as selected however it was set — tapped here, or arrived with.
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _cwd,
+                builder: (context, value, _) {
+                  final dirs = _recentDirs();
+                  if (dirs.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: SizedBox(
+                      height: 36,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: dirs.length,
+                        separatorBuilder: (_, _) =>
+                            const SizedBox(width: Space.sm),
+                        itemBuilder: (_, i) => Center(
+                          child: AppActionChip(
+                            icon: Icons.folder_outlined,
+                            label: _dirLabel(dirs[i]),
+                            tooltip: dirs[i],
+                            active: value.text.trim() == dirs[i],
+                            onTap: _starting ? () {} : () => _useDir(dirs[i]),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ] else
               SheetNotice(
@@ -272,12 +346,24 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
         view: OpenedView.transcript,
       );
       navigator.pop();
+      // A dropped opening prompt is the failure that looks like success: the
+      // agent is up, so the launch "worked", and the instruction it was started
+      // to carry is simply gone. The bridge sends the reason back precisely so
+      // it can be said, and it is held longer than a routine confirmation
+      // because it means retyping the message.
+      final failed = result.promptError;
       messenger.showSnackBar(
         SnackBar(
-          content: Text(result.promptSent
-              ? '${result.kind} started and sent your message'
-              : '${result.kind} started'),
-          duration: const Duration(seconds: 2),
+          content: Text(
+            failed != null && failed.isNotEmpty
+                ? failed
+                : result.promptSent
+                    ? '${result.kind} started and sent your message'
+                    : '${result.kind} started',
+          ),
+          duration: Duration(
+            seconds: failed != null && failed.isNotEmpty ? 6 : 2,
+          ),
         ),
       );
       // Straight to the new agent's chat — the pane id came back

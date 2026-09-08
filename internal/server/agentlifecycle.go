@@ -363,7 +363,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 			"pane", qualified, "kind", body.Kind)
 	}
 
-	promptSent, promptErr := sendOpeningPrompt(c, name, qualified, body.Prompt)
+	promptSent, promptErr := sendOpeningPrompt(c, pane.PaneID, qualified, body.Prompt)
 	log.Info("started agent", "pane", qualified, "kind", body.Kind, "name", name, "prompt", promptSent)
 	s.publish(events.TypeAgentStarted, map[string]any{
 		"pane_id": qualified, "kind": body.Kind, "name": name, "created_pane": created,
@@ -524,15 +524,21 @@ func (s *Server) resolveStartPane(c *herdr.Client, mode startMode, bareTarget st
 // instruction had been delivered. The reason travels back in the response so it
 // can be shown.
 //
-// The wait is the whole reason this used to fail: the agent is addressable by
-// PANE the moment start returns, but by NAME only once Herdr's registry catches
-// up, and this addresses it by name.
-func sendOpeningPrompt(c *herdr.Client, name, qualifiedPane, prompt string) (bool, string) {
+// It is addressed BY PANE, not by the name this call just chose. Herdr accepts
+// either, but a name exists only once its registry catches up, and observed on
+// a real launch that took longer than the whole retry budget: 30s of
+// `agent_not_ready`, then the opening prompt dropped on an agent that was up
+// and idle the entire time. The pane is valid the moment start returns, which
+// removes the race rather than waiting on it.
+//
+// The retry stays as the backstop for a pane whose agent has not finished
+// coming up.
+func sendOpeningPrompt(c *herdr.Client, pane, qualifiedPane, prompt string) (bool, string) {
 	if prompt == "" {
 		return false, ""
 	}
-	if err := c.PromptAgentWhenReady(name, prompt, herdr.PromptReadyBudget); err != nil {
-		log.Error("agent start: opening prompt failed", "pane", qualifiedPane, "agent", name, "err", err)
+	if err := c.PromptAgentWhenReady(pane, prompt, herdr.PromptReadyBudget); err != nil {
+		log.Error("agent start: opening prompt failed", "pane", qualifiedPane, "err", err)
 		return false, fmt.Sprintf("the agent started but your opening prompt was not delivered: %v", err)
 	}
 	return true, ""
@@ -693,7 +699,7 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 			"pane", body.PaneID, "kind", agent.Kind)
 	}
 
-	promptSent, promptErr := sendOpeningPrompt(c, name, body.PaneID, body.Prompt)
+	promptSent, promptErr := sendOpeningPrompt(c, bare, body.PaneID, body.Prompt)
 	log.Info("restarted agent", "pane", body.PaneID, "kind", agent.Kind, "name", name, "prompt", promptSent)
 	s.publish(events.TypeAgentRestarted, map[string]any{
 		"pane_id": body.PaneID, "kind": agent.Kind, "name": name,

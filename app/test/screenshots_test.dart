@@ -26,9 +26,38 @@ import 'package:gothalo/core/theme.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
 import 'package:gothalo/features/priority/priority_providers.dart';
 import 'package:gothalo/features/recents/recent_providers.dart';
+import 'package:gothalo/data/bridge/bridge_client.dart';
+import 'package:gothalo/data/bridge/bridge_providers.dart';
+import 'package:gothalo/features/inbox/inbox_providers.dart' as inbox;
 import 'package:gothalo/features/servers/servers_screen.dart';
+import 'package:gothalo/features/timeline/timeline_providers.dart';
+import 'package:gothalo/features/timeline/timeline_screen.dart';
 
 const _phone = Size(1080, 2100);
+
+class _FixedSnapshot extends inbox.SnapshotController {
+  _FixedSnapshot(this.snap);
+  final Snapshot snap;
+  @override
+  Future<Snapshot> build() async => snap;
+}
+
+TimelineEntry _entry(
+  String pane,
+  String to, {
+  String? from,
+  String? title,
+  required String agent,
+  int minutesAgo = 0,
+}) => TimelineEntry.fromJson({
+  'ts': DateTime.now().subtract(Duration(minutes: minutesAgo)).millisecondsSinceEpoch,
+  'pane': pane,
+  'agent': agent,
+  'title': title,
+  'from': from,
+  'to': to,
+  'prev_ms': 35000 + minutesAgo * 1000,
+});
 
 ServerSummary _server() => const ServerSummary(
   id: 's1',
@@ -209,6 +238,111 @@ void main() {
     await expectLater(
       find.byType(ServersScreen),
       matchesGoldenFile('../../docs/screenshots/home.png'),
+    );
+  });
+
+  testWidgets('activity', (tester) async {
+    tester.view.physicalSize = _phone;
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    const p1 = 'w1:p1';
+    const p2 = 'w1:p2';
+    const p3 = 'w2:p1';
+    final snap = Snapshot(
+      panes: const [
+        Pane(paneId: p1, workspaceId: 'w1', cwd: '/Users/dev/projects/acme-app'),
+        Pane(paneId: p2, workspaceId: 'w1', cwd: '/Users/dev/projects/acme-app'),
+        Pane(paneId: p3, workspaceId: 'w2', cwd: '/Users/dev/projects/storefront'),
+      ],
+      agents: const [
+        Agent(
+          agent: 'claude',
+          paneId: p1,
+          workspaceId: 'w1',
+          agentStatus: AgentStatus.blocked,
+          title: 'Delete the stale release branches?',
+          cwd: '/Users/dev/projects/acme-app',
+          branch: 'feat/cleanup',
+        ),
+        Agent(
+          agent: 'codex',
+          paneId: p2,
+          workspaceId: 'w1',
+          agentStatus: AgentStatus.working,
+          title: 'Porting the settings screen',
+          cwd: '/Users/dev/projects/acme-app',
+          branch: 'feat/settings',
+        ),
+        Agent(
+          agent: 'pi',
+          paneId: p3,
+          workspaceId: 'w2',
+          agentStatus: AgentStatus.done,
+          title: 'Add retry to the upload queue',
+          cwd: '/Users/dev/projects/storefront',
+          branch: 'fix/upload-retry',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          bridgeClientProvider.overrideWithValue(null),
+          inbox.snapshotControllerProvider.overrideWith(
+            () => _FixedSnapshot(snap),
+          ),
+          activityTimelineProvider.overrideWith(
+            (ref) async => [
+              _entry(p1, 'blocked',
+                  from: 'working',
+                  agent: 'claude',
+                  title: 'Delete the stale release branches?',
+                  minutesAgo: 4),
+              _entry(p3, 'done',
+                  from: 'working',
+                  agent: 'pi',
+                  title: 'Add retry to the upload queue',
+                  minutesAgo: 26),
+              _entry(p2, 'working',
+                  from: 'idle',
+                  agent: 'codex',
+                  title: 'Porting the settings screen',
+                  minutesAgo: 51),
+              _entry(p1, 'working',
+                  from: 'idle',
+                  agent: 'claude',
+                  title: 'Delete the stale release branches?',
+                  minutesAgo: 88),
+            ],
+          ),
+        ],
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.dark,
+          home: const TimelineScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.runAsync(() async {
+      for (final a in const [
+        'assets/agents/claude.png',
+        'assets/agents/codex.png',
+        'assets/agents/pi.png',
+      ]) {
+        await precacheImage(
+            AssetImage(a), tester.element(find.byType(TimelineScreen)));
+      }
+    });
+    for (var i = 0; i < 15; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+
+    await expectLater(
+      find.byType(TimelineScreen),
+      matchesGoldenFile('../../docs/screenshots/activity.png'),
     );
   });
 }
