@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  flutter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.8"
+          cache: true
+      # Firebase config is per-install and gitignored (see README, "Push:
+      # bring your own Firebase"), so CI builds from the committed templates.
+      # Push is inert here; every other code path still compiles and runs.
+      - name: Seed Firebase config from templates
+        run: |
+          cp lib/core/firebase_web_options.dart.example lib/core/firebase_web_options.dart
+          cp android/app/google-services.json.example android/app/google-services.json
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test

@@ -195,13 +195,8 @@ class _PriorityEmpty extends StatelessWidget {
 }
 
 class _Hint extends StatelessWidget {
-  const _Hint(this.text, {this.small = false});
+  const _Hint(this.text);
   final String text;
-
-  /// A quieter hint: the "nothing needs you" empty state reads as a notice
-  /// rather than an instruction, so it sits a step down from the hints that
-  /// explain why something is missing.
-  final bool small;
 
   @override
   Widget build(BuildContext context) {
@@ -210,7 +205,6 @@ class _Hint extends StatelessWidget {
       child: Text(
         text,
         style: TextStyle(
-          fontSize: small ? 12 : null,
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),

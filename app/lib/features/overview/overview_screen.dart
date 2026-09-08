@@ -155,7 +155,7 @@ class _OverviewScreenState extends ConsumerState<OverviewScreen>
             if (workspaceId != null)
               IconButton(
                 tooltip: 'New terminal',
-                onPressed: () => newTerminal(context, ref, workspaceId!),
+                onPressed: () => newTerminal(context, ref, workspaceId),
                 icon: const Icon(Icons.add),
               ),
             if (workspaceId != null)
@@ -170,13 +170,13 @@ class _OverviewScreenState extends ConsumerState<OverviewScreen>
                         ref,
                         target: StartAgentTarget(
                           placement: StartAgentPlacement.newTab,
-                          id: workspaceId!,
+                          id: workspaceId,
                           where: 'A new tab in $project',
                           defaultCwd: projectCwd,
                         ),
                       );
                     case 'tab':
-                      newTab(context, ref, workspaceId!);
+                      newTab(context, ref, workspaceId);
                     case 'worktree':
                       showNewWorktreeSheet(
                         context,
@@ -188,7 +188,7 @@ class _OverviewScreenState extends ConsumerState<OverviewScreen>
                       removeWorktree(
                         context,
                         ref,
-                        workspaceId!,
+                        workspaceId,
                         branch ?? project,
                       );
                   }
@@ -269,7 +269,7 @@ class _OverviewScreenState extends ConsumerState<OverviewScreen>
                   ? _AllProjects(snap: snap)
                   : _OneProject(
                       snap: snap,
-                      workspaceId: workspaceId!,
+                      workspaceId: workspaceId,
                       project: project,
                       branch: branch,
                       cwd: projectCwd,
