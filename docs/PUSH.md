@@ -93,10 +93,21 @@ accidentally push against (or bill) someone else's project.
 
 ## Serving the web app elsewhere
 
-The page needs no Firebase of its own, but Firebase needs to know the page:
-add every origin you serve it from (your `GOTHALO_PUBLIC_URL`, a Pages URL, a
-custom domain) under Firebase console → Project settings → General →
-Authorized domains — otherwise `getToken` refuses with a permissions-looking
-error. Everything else (project values, VAPID key) arrives from the bridge at
-pair time.
+Nothing to allowlist. FCM web push asks only for HTTPS, the VAPID key, a
+reachable `firebase-messaging-sw.js`, and notification permission — the
+project values and VAPID key arrive from the bridge at pair time, so any
+origin works as-is.
+
+(Firebase's *Authorized domains* list is an Authentication feature — an OAuth
+redirect allowlist. gothalo doesn't use Firebase Auth, so it plays no part
+here.)
+
+Two things that do bite:
+
+- **The worker must be reachable from the page's base href.** Under a subpath
+  (GitHub Pages serves at `/<repo>/`) it lives beside `index.html`, and its
+  push scope covers that subtree — which is where the app is, so that's fine.
+- **API key referrer restrictions.** If you restricted the browser API key in
+  the Google Cloud console (APIs & Services → Credentials), every origin you
+  serve from has to be on that list. An unrestricted key needs nothing.
 

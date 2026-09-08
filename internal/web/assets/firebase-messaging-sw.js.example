@@ -128,7 +128,7 @@ self.addEventListener("notificationclick", (event) => {
         return wins[0].focus();
       }
       return self.clients.openWindow(
-        "/?push=" + encodeURIComponent(JSON.stringify(d)),
+        self.registration.scope + "?push=" + encodeURIComponent(JSON.stringify(d)),
       );
     })(),
   );

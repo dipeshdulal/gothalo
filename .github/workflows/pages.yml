@@ -1,0 +1,71 @@
+name: pages
+
+# Publishes the Flutter web app to GitHub Pages, served under /<repo>/.
+#
+# The build carries NO Firebase project of its own: it fetches the config from
+# whichever bridge it pairs with (GET /firebase-config) and initialises against
+# that, so one public build works for every install. See docs/PUSH.md.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let a running one finish rather than publishing a
+# half-uploaded site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.8"
+          cache: true
+
+      # Real Firebase config is per-install and gitignored, so we build from
+      # the committed template. Its YOUR_* placeholders are inert by design:
+      # the app treats them as "no baked project" and takes the values the
+      # bridge serves instead.
+      - name: Seed Firebase config from templates
+        run: cp lib/core/firebase_web_options.dart.example lib/core/firebase_web_options.dart
+
+      - run: flutter pub get
+
+      # Pages serves a project site under /<repo>/, and Flutter bakes the base
+      # href in at build time — without this every asset request 404s.
+      - name: Build
+        run: flutter build web --release --base-href "/${GITHUB_REPOSITORY#*/}/"
+
+      # The worker is not part of the Flutter output (it lives with the bridge
+      # assets), so it has to be placed beside index.html. The .example copy is
+      # the right one to publish: its placeholder keys fail the worker's own
+      # config check, so it uses the bridge config the page stores in IndexedDB
+      # — and no personal project values reach a public site.
+      - name: Add the push service worker
+        run: cp ../internal/web/assets/firebase-messaging-sw.js.example build/web/firebase-messaging-sw.js
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
