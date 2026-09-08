@@ -51,14 +51,11 @@ const int kSectionVisibleRows = 5;
 /// "show N more".
 ///
 /// A dozen idle agents is an ordinary state of this machine, and as full cards
-/// they took most of the screen to say that nothing wants you. Six dense rows
-/// (~44dp each) is about a third of a phone screen — enough that a handful of
-/// idle agents never sees an expander at all, and enough that a dozen does not
-/// push everything below it off the page.
+/// they took most of the screen to say that nothing wants you.
 ///
-/// A little more generous than [kSectionVisibleRows] because these rows are
-/// less than half the height, and because what it hides is by definition not
-/// urgent.
+/// Tighter than [kSectionVisibleRows] despite these rows being less than half
+/// the height: what this section hides is by definition not urgent, so the
+/// space is better spent on the sections that are.
 const int kIdleVisibleRows = 3;
 
 /// Which agent sections the user has expanded, this session.

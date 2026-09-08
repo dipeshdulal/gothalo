@@ -98,8 +98,10 @@ void main() {
       // opaque chrome and the blur is dead weight.
       expect(deco.color!.a, greaterThan(0.8), reason: '$brightness');
       expect(deco.color!.a, lessThan(1.0), reason: '$brightness');
-      // The hairline survived the change.
-      expect((deco.border as Border).bottom.width, 1);
+      // And no rule under it: the bar's edge reads from the change in surface
+      // treatment, so a hairline here would be the harsh line the scrim
+      // replaced.
+      expect(deco.border, isNull);
     }
   });
 

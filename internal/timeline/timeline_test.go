@@ -8,9 +8,13 @@ import (
 	"time"
 )
 
-// base is a fixed wall clock every test measures against, so a duration
+// base is the wall clock every test measures against, so a duration
 // assertion is an exact number rather than a tolerance.
-var base = time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+//
+// Anchored to the real clock, not a literal date: Open() evicts against
+// time.Now, so a hardcoded base silently ages past Retention and every test
+// that reloads from disk starts failing three days after it was written.
+var base = time.Now().UTC().Truncate(time.Hour)
 
 // at returns base offset by d, as unix millis — the form entries carry.
 func at(d time.Duration) int64 { return base.Add(d).UnixMilli() }

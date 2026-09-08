@@ -269,9 +269,10 @@ void main() {
       expect(split.visible.map((h) => h.agent.paneId), ['first', 'second']);
     });
 
-    test('idle is capped more generously than the card sections', () {
-      // Idle rows are less than half the height and hide nothing urgent.
-      expect(kIdleVisibleRows, greaterThan(kSectionVisibleRows));
+    test('idle carries its own cap, tighter than the card sections', () {
+      // Idle rows hide nothing urgent, so the section is kept short enough to
+      // stay out of the way of what does want you.
+      expect(kIdleVisibleRows, lessThan(kSectionVisibleRows));
       final groups = groupAgentsByState([
         ServerAgents(
           server: _server('s1'),
