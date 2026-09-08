@@ -9,12 +9,14 @@ agents are blocked/working/done, get pushed when one needs you, approve or type 
 reply, and drop into a full terminal — all over your own Tailscale network.
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="gothalo home screen" width="320">
+  <img src="docs/screenshots/home-device.png" alt="gothalo home screen" width="250">
+  <img src="docs/screenshots/chat-device.png" alt="approving an agent from the phone" width="250">
+  <img src="docs/screenshots/terminal-device.png" alt="full terminal on the phone" width="250">
 </p>
 
 <p align="center"><sub>
-  Home: what needs you, what you were last in, everything else by state.<br>
-  Rendered from fixtures by <code>app/test/screenshots_test.dart</code>.
+  Home: what needs you, what you were last in, everything else by state ·
+  approve or reply from the chat · drop into the raw terminal.
 </sub></p>
 
 ## Why this exists
