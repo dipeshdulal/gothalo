@@ -47,8 +47,8 @@ jobs:
             -- . ':!*_test.go' ':!internal/push/creds.go' || true)
           if [ -n "$hits" ]; then echo "$hits"; echo "^ live credential material"; exit 1; fi
 
-          # Real tailnet ids carry digits (tailnet); the placeholder
-          # "tailnet" does not, so fixtures using my-mac.tailnet.ts.net pass.
+          # Real tailnet ids carry digits; the placeholder segment does not,
+          # so fixtures using my-mac.tailnet.ts.net pass and real hosts fail.
           hosts=$(git grep -nEo "[a-z0-9-]+\.tail[a-z0-9]*[0-9][a-z0-9]*\.ts\.net" -- . || true)
           if [ -n "$hosts" ]; then echo "$hosts"; echo "^ real tailnet hostname"; exit 1; fi
           echo "no credentials or personal hosts"
