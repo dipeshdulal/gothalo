@@ -337,10 +337,15 @@ class PushController extends _$PushController {
       // Web push needs the VAPID public key; native does not take one at all.
       // Without it the browser refuses the subscription, and the error reads
       // like a permissions failure rather than a missing key.
+      //
+      // The worker path is relative so it resolves against the base href on
+      // every host — `/` on the bridge, `/gothalo/` on GitHub Pages. The
+      // plugin's default pins the domain root, which 404s under a subpath.
       _token = await messaging.getToken(
         vapidKey: kIsWeb
             ? ref.read(firebaseWebConfigProvider).vapidKey
             : null,
+        serviceWorkerScriptPath: kIsWeb ? 'firebase-messaging-sw.js' : null,
       );
       await _registerCurrent();
       return _token;
@@ -436,6 +441,7 @@ class PushController extends _$PushController {
         vapidKey: kIsWeb
             ? ref.read(firebaseWebConfigProvider).vapidKey
             : null,
+        serviceWorkerScriptPath: kIsWeb ? 'firebase-messaging-sw.js' : null,
       );
       await _registerCurrent();
       state = AsyncData(_token);
