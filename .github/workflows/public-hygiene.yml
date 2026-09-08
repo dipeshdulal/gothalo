@@ -1,34 +1,19 @@
 name: public-hygiene
 
-# Nobody's project keys or personal hostnames may return to tracked source.
-# The three app-side Firebase files are committed as YOUR_* placeholders;
-# `scripts/setup-firebase.sh` fills them in locally. If a real value is
-# committed, this fails the PR.
+# Keeps per-install secrets and personal identifiers out of tracked source.
+#
+# Deliberately pattern-based, not a list of names: a blocklist naming the
+# things it protects would publish them itself.
 on: [push, pull_request]
 
 jobs:
-  no-secrets:
+  hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Forbid known project + personal identifiers
-        run: |
-          set -e
-          # NOTE: this file itself is excluded — the patterns live here.
-          hits=$(git grep -nE "5fa01|YOUR_SENDER_ID|tailnet|my-mac|YOUR_VAPID_PUBLIC_KEY" -- . \
-            ':!.github/workflows/public-hygiene.yml' \
-            ':!*.freezed.dart' ':!*.g.dart' ':!*_test.go' ':!app/test/**' ':!internal/**/testdata/**' || true)
-          if [ -n "$hits" ]; then echo "$hits"; exit 1; fi
-          echo "no known identifiers in tracked source"
-      - name: Forbid client / employer identifiers
-        run: |
-          set -e
-          # Captured agent output is real terminal scrollback; it must be
-          # scrubbed of client repos, paths and domain terms before landing.
-          hits=$(git grep -niE "example|admin-console|acme-ticket|storefront|vendor|common_cache|dipesh\.dulal|alex" -- . \
-            ':!.github/workflows/public-hygiene.yml' || true)
-          if [ -n "$hits" ]; then echo "$hits"; exit 1; fi
-          echo "no client identifiers in tracked source"
+        with:
+          fetch-depth: 0
+
       - name: Firebase real configs must stay untracked
         run: |
           set -e
@@ -41,6 +26,7 @@ jobs:
             fi
           done
           echo "real firebase configs are untracked"
+
       - name: Firebase .example templates must stay placeholders
         run: |
           set -e
@@ -50,3 +36,22 @@ jobs:
           grep -q "YOUR_PROJECT_ID" internal/web/assets/firebase-messaging-sw.js.example
           grep -q "YOUR_VAPID_PUBLIC_KEY" internal/web/assets/push-test.html.example
           echo "firebase templates are unconfigured placeholders"
+
+      - name: No live credentials or personal hosts
+        run: |
+          set -e
+          # Google API keys, private keys, and real tailnet hostnames. Fixture
+          # hosts are <host>.<tailnet>.ts.net / example.ts.net / host.ts.net.
+          hits=$(git grep -nE \
+            "AIza[0-9A-Za-z_-]{35}|BEGIN [A-Z ]*PRIVATE KEY|\"private_key\"[[:space:]]*:[[:space:]]*\"-----" \
+            -- . ':!*_test.go' ':!internal/push/creds.go' || true)
+          if [ -n "$hits" ]; then echo "$hits"; echo "^ live credential material"; exit 1; fi
+
+          hosts=$(git grep -nEo "[a-z0-9-]+\.tail[a-z0-9]+\.ts\.net" -- . || true)
+          if [ -n "$hosts" ]; then echo "$hosts"; echo "^ real tailnet hostname"; exit 1; fi
+          echo "no credentials or personal hosts"
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
