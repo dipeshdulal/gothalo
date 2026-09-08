@@ -1,0 +1,57 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<section class="wrap sec--how how">
+  <div>
+    <h2 class="h2 display how__title">Hear the one that bleats.</h2>
+
+    <div class="step">
+      <h3 class="display">The dog on the ridge</h3>
+      <p>
+        A small Go binary on your Herdr host waits on Herdr's{' '}
+        <span class="mono">agent.wait</span> for every agent in every session. When one turns
+        blocked or done, it barks: one outbound push through your own Firebase project.
+        Nothing comes in.
+      </p>
+    </div>
+
+    <div class="step">
+      <h3 class="display">The bell reaches you</h3>
+      <p>
+        The notification opens on that agent. Read what it is asking. Approve, or type a
+        reply, from wherever you are sitting. A stale tap does nothing, because the approval
+        is keyed to the state it was shown for.
+      </p>
+    </div>
+
+    <div class="step">
+      <h3 class="display">Walk down if you must</h3>
+      <p>
+        For anything a shout will not fix, attach gives you the real terminal on the phone.
+        xterm.dart, not a web view. Esc, sticky Ctrl, Tab, arrows.
+      </p>
+    </div>
+
+    <p class="note">
+      Interactive traffic runs over your tailnet with a per-device token, so one lost phone
+      can be turned away without moving the fence.
+    </p>
+  </div>
+
+  <div class="how__aside">
+    <div class="bezel bezel--phone">
+      <picture>
+        <source type="image/webp" srcset={`${base}screens/chat-device.webp`} />
+        <img
+          src={`${base}screens/chat-device.jpg`}
+          width="760"
+          height="1629"
+          loading="lazy"
+          alt="An agent's chat on the phone, asking a question with approve and reply below it"
+        />
+      </picture>
+    </div>
+    <p class="caption">The bell, answered. One tap from the phone, and the agent is back to work.</p>
+  </div>
+</section>

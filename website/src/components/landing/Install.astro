@@ -1,0 +1,139 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const curl = 'curl -fsSL https://raw.githubusercontent.com/dipeshdulal/gothalo/main/install.sh | sh';
+---
+
+<section class="wrap sec rule-top stack" id="install">
+  <h2 class="h2 display">Install.</h2>
+  <div>
+    <div class="install">
+      <div class="istep">
+        <h3 class="display">Herdr agent integration</h3>
+        <div class="istep__body">
+          <p>
+            Run this on the Herdr host for every agent you use, or the transcript view shows
+            one agent's conversation under another.
+          </p>
+          <pre class="block"><code>herdr integration install claude
+herdr integration install codex
+herdr integration install gemini
+herdr integration install hermes
+herdr integration install opencode</code></pre>
+          <p>
+            One line per agent kind.{' '}
+            <a href={`${base}docs/guides/agent-integration/`}>Agent integration</a> lists where
+            each one keeps its transcript.
+          </p>
+        </div>
+      </div>
+
+      <div class="istep">
+        <h3 class="display">The bridge</h3>
+        <div class="istep__body">
+          <p>macOS or Linux, from the latest release:</p>
+          <div class="cmd">
+            <span class="cmd__prompt" aria-hidden="true">$</span>
+            <code class="cmd__text" id="install-cmd-2">{curl}</code>
+            <button
+              class="cmd__copy"
+              type="button"
+              data-copy="install-cmd-2"
+              aria-label="Copy the install command"
+            >
+              <svg
+                class="copy"
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <rect x="5" y="5" width="9" height="9" rx="1.5"></rect>
+                <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"
+                ></path>
+              </svg>
+              <svg
+                class="check"
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 8.5 6.5 12 13 4.5"></path>
+              </svg>
+            </button>
+          </div>
+          <p>
+            The script detects your OS and architecture, downloads the matching release
+            archive, and verifies its SHA-256 against the release's checksums.txt before
+            installing. That check is best effort: it needs shasum or sha256sum on the host
+            and a checksums.txt on the release. From source instead:
+          </p>
+          <pre class="block"><code>go install github.com/dipeshdulal/gothalo/cmd/gothalo@latest</code></pre>
+        </div>
+      </div>
+
+      <div class="istep">
+        <h3 class="display">Run it and pair a phone</h3>
+        <div class="istep__body">
+          <pre class="block"><code>gothalo serve            <span class="comment"># writes config.json and an admin token</span>
+gothalo-service install  <span class="comment"># supervise via launchd or systemd</span>
+gothalo pair             <span class="comment"># a one-time QR, about a 5 minute TTL</span></code></pre>
+          <p>
+            It defaults to <span class="mono">127.0.0.1:8787</span>. Point it at the tailnet
+            so the phone can reach it:
+          </p>
+          <pre class="block"><code>GOTHALO_ADDR=$(tailscale ip -4):8787 \
+GOTHALO_PUBLIC_URL=https://&lt;host&gt;.&lt;tailnet&gt;.ts.net:8787 \
+gothalo serve</code></pre>
+        </div>
+      </div>
+
+      <div class="istep">
+        <h3 class="display">The app</h3>
+        <div class="istep__body">
+          <p>
+            Android, no packaged APK yet. Point it at your own Firebase project first, then
+            build it:
+          </p>
+          <pre class="block"><code>./scripts/setup-firebase.sh --project &lt;firebase-project-id&gt;
+cd app && flutter pub get && flutter build apk --release</code></pre>
+          <p>
+            Or skip the build: a bridge built with{' '}
+            <span class="mono">./scripts/build.sh</span> bakes the app in and serves it as a PWA. Open the bridge URL, the same address
+            the app pairs to, in the phone's browser. The install.sh binary does not include
+            the web UI yet.
+          </p>
+        </div>
+      </div>
+
+      <div class="istep">
+        <h3 class="display">Push, when you want it</h3>
+        <div class="istep__body">
+          <p>
+            Without credentials the bridge logs instead of notifying. Two steps turn it on,
+            credentials for the bridge and a Firebase project for the app:
+          </p>
+          <pre class="block"><code>gothalo push login --project &lt;firebase-project-id&gt;
+./scripts/setup-firebase.sh --project &lt;firebase-project-id&gt;</code></pre>
+          <p>
+            The full walkthrough, including why every fork needs its own project, is in the{' '}
+            <a href={`${base}docs/guides/push/`}>push guide</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <p class="note">
+      The complete walkthrough, with config, env overrides and revoking a device, is at{' '}
+      <a href={`${base}docs/install/`}>Install</a>.
+    </p>
+  </div>
+</section>

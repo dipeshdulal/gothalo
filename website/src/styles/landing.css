@@ -1,0 +1,917 @@
+/* gothalo landing page. Dark, hairline-held, one illustrated layer. */
+
+:root {
+  /* the mockup's heading cream and its brighter command-box hairline */
+  --g-cream: #f3f1e8;
+  --g-hairline-strong: rgb(255 255 255 / 32%);
+
+  --g-pad: 64px;
+  --g-col: 1312px;
+  --g-rule: 1px solid var(--g-hairline);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--g-page);
+  color: var(--g-text);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--g-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  color: var(--g-text);
+}
+
+::selection {
+  background: var(--g-icon-field);
+  color: var(--g-cream);
+}
+
+:focus-visible {
+  outline: 2px solid var(--g-accent);
+  outline-offset: 3px;
+}
+
+img {
+  max-width: 100%;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 50;
+  background: var(--g-panel);
+  color: var(--g-text);
+  padding: 10px 16px;
+  border-radius: var(--g-radius);
+}
+
+.skip:focus {
+  left: 12px;
+  top: 12px;
+}
+
+/* ---------- shared ---------- */
+
+.wrap {
+  margin-inline: max(var(--g-pad), calc((100% - var(--g-col)) / 2));
+}
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  color: var(--g-cream);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+p .mono,
+dd .mono {
+  overflow-wrap: anywhere;
+}
+
+.np {
+  font-family: var(--font-deva);
+}
+
+/* section head sits on top, full width; the body below brings its own columns */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.rule-top {
+  border-top: var(--g-rule);
+}
+
+.h2 {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.15;
+  letter-spacing: -0.3px;
+}
+
+.lede {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.6;
+  color: var(--g-text-muted);
+  max-width: 58ch;
+}
+
+.prose {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 62ch;
+}
+
+.caption {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--g-text-quiet);
+  max-width: 58ch;
+}
+
+.note {
+  margin: 22px 0 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--g-text-quiet);
+  max-width: 62ch;
+}
+
+.bezel {
+  border-radius: var(--g-radius-lg);
+  border: 6px solid var(--g-panel-raised);
+  overflow: hidden;
+  background: var(--g-page);
+}
+
+.bezel--phone {
+  border-radius: 24px;
+}
+
+.bezel img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ---------- nav ---------- */
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 72px;
+  background: var(--g-page);
+  padding-inline: max(var(--g-pad), calc((100% - var(--g-col)) / 2));
+}
+
+.nav__mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--g-text);
+  text-decoration: none;
+}
+
+.nav__mark img {
+  display: block;
+  width: 26px;
+  height: 26px;
+}
+
+.nav__links {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  font-size: 15px;
+  color: var(--g-text-muted);
+}
+
+.nav__links a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav__links a:hover {
+  color: var(--g-text);
+}
+
+.nav__links a.nav__cta {
+  background: var(--g-text);
+  color: var(--g-page);
+  border-radius: var(--g-radius);
+  padding: 8px 14px;
+  font-weight: 500;
+}
+
+.nav__links a.nav__cta:hover {
+  color: var(--g-page);
+  background: var(--g-cream);
+}
+
+/* ---------- hero ---------- */
+
+.hero {
+  position: relative;
+  height: clamp(760px, 52.8vw, 1000px);
+  overflow: hidden;
+}
+
+.hero__artwrap {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.hero__art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center bottom;
+  display: block;
+}
+
+.hero__inner {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 120px var(--g-pad) 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 332px;
+  gap: 48px;
+  align-items: start;
+}
+
+.hero__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 720px;
+}
+
+.hero__title {
+  margin: 0;
+  font-size: 62px;
+  line-height: 1.08;
+  letter-spacing: -0.5px;
+}
+
+.hero__title span {
+  color: var(--g-accent-text);
+}
+
+.hero__sub {
+  margin: 0;
+  max-width: 60ch;
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--g-text-muted);
+}
+
+.hero__install {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.hero__platforms {
+  margin: 0;
+  font-size: 14px;
+  color: var(--g-text-quiet);
+}
+
+/* the phone column, and the push card that floats out of it */
+.hero__device {
+  position: relative;
+  margin-top: -68px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.hero__phone {
+  border-radius: 28px;
+  border: 6px solid var(--g-panel-raised);
+  box-shadow: 0 32px 64px rgb(0 0 0 / 55%);
+  overflow: hidden;
+  background: var(--g-page);
+}
+
+.hero__phone img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.push {
+  width: 278px;
+  box-shadow: 0 16px 32px rgb(0 0 0 / 45%);
+  background: var(--g-panel);
+  border: var(--g-rule);
+  border-radius: var(--g-radius-lg);
+  padding: 14px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  animation: push-in var(--g-motion) var(--g-ease) 600ms both;
+}
+
+.push__dot {
+  margin-top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--g-blocked);
+  flex-shrink: 0;
+}
+
+.push__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.push__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.push__text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--g-text-muted);
+}
+
+.push__text .mono {
+  font-size: 13px;
+  color: var(--g-text-quiet);
+}
+
+@keyframes push-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- command block ---------- */
+
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--g-well);
+  border: 1px solid var(--g-hairline-strong);
+  border-radius: var(--g-radius);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  max-width: 720px;
+}
+
+.cmd__prompt {
+  color: var(--g-accent-text);
+  flex-shrink: 0;
+}
+
+.cmd__text {
+  flex-grow: 1;
+  min-width: 0;
+  color: var(--g-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.cmd__copy {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--g-radius-sm);
+  color: var(--g-text-muted);
+  cursor: pointer;
+}
+
+.cmd__copy:hover {
+  color: var(--g-text);
+}
+
+.cmd__copy svg {
+  display: block;
+}
+
+.cmd__copy .check {
+  display: none;
+}
+
+.cmd__copy[data-copied] {
+  color: var(--g-done);
+}
+
+.cmd__copy[data-copied] .copy {
+  display: none;
+}
+
+.cmd__copy[data-copied] .check {
+  display: block;
+}
+
+/* ---------- steps (how it works) ---------- */
+
+.step {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 40px;
+  padding: 30px 0;
+  border-top: var(--g-rule);
+}
+
+.step h3 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.step p {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--g-text-muted);
+  max-width: 58ch;
+}
+
+.step .mono {
+  font-size: 15px;
+}
+
+.step:last-of-type {
+  border-bottom: var(--g-rule);
+}
+
+.how {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 72px;
+  align-items: start;
+}
+
+.how__title {
+  margin-bottom: 28px;
+}
+
+.how__aside {
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- features ---------- */
+
+/* one window height across the row, each shot showing the part that matters */
+.shots {
+  display: grid;
+  grid-template-columns: repeat(3, 300px);
+  justify-content: space-between;
+  gap: 44px;
+}
+
+.shot {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* the window matches the shortest shot, so the taller two crop from the foot up
+   and nothing is ever cut off at the sides */
+.shot .bezel {
+  aspect-ratio: 760 / 1196;
+}
+
+.shot .bezel img {
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.shot--foot .bezel img {
+  object-position: bottom center;
+}
+
+.shot h3 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.shot p {
+  margin: 5px 0 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--g-text-quiet);
+}
+
+/* ---------- install ---------- */
+
+.install {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.istep {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 40px;
+  padding: 28px 0;
+  border-top: var(--g-rule);
+}
+
+.istep:last-of-type {
+  border-bottom: var(--g-rule);
+}
+
+.istep h3 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.istep p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--g-text-muted);
+  max-width: 62ch;
+}
+
+.istep__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.block {
+  margin: 0;
+  background: var(--g-well);
+  border: 1px solid var(--g-hairline-strong);
+  border-radius: var(--g-radius);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--g-text);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.block .comment {
+  color: var(--g-text-quiet);
+}
+
+/* ---------- origin ---------- */
+
+.origin__head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.origin__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 64px;
+  align-items: start;
+}
+
+.origin__word {
+  margin: 0;
+  font-size: 60px;
+  line-height: 1.15;
+  color: var(--g-cream);
+}
+
+.gloss {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 6px 20px;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--g-text-muted);
+}
+
+.gloss dt {
+  margin: 0;
+  color: var(--g-text);
+}
+
+.gloss dd {
+  margin: 0;
+}
+
+/* ---------- community + footer ---------- */
+
+
+#install {
+  scroll-margin-top: 88px;
+}
+
+.foot {
+  padding: 24px 0 44px;
+  border-top: var(--g-rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  font-size: 14px;
+  color: var(--g-text-quiet);
+}
+
+.foot p {
+  margin: 0;
+}
+
+.foot__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+}
+
+.foot a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.foot a:hover {
+  color: var(--g-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---------- section rhythm ---------- */
+
+.sec {
+  padding: 64px 0;
+}
+
+.sec--day {
+  padding: 72px 0 64px;
+}
+
+.sec--how {
+  padding: 24px 0 72px;
+}
+
+.sec--origin {
+  padding: 64px 0 72px;
+}
+
+/* ---------- >=1424px: the push card floats, as in the comp ---------- */
+
+@media (min-width: 1424px) {
+  .hero__inner {
+    padding-right: 52px;
+    grid-template-columns: minmax(0, 1fr) 332px;
+  }
+
+  .push {
+    position: absolute;
+    top: 228px;
+    left: -256px;
+  }
+}
+
+/* ---------- <=1100px: hero stacks, art becomes a band ---------- */
+
+@media (max-width: 1100px) {
+  .hero {
+    height: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .hero__artwrap {
+    position: static;
+    order: 2;
+    margin-top: 48px;
+  }
+
+  .hero__art {
+    height: clamp(220px, 46vw, 380px);
+  }
+
+  .hero__inner {
+    order: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 40px;
+    padding-top: 72px;
+    max-width: none;
+    height: auto;
+  }
+
+  .hero__title {
+    font-size: 52px;
+  }
+
+  .hero__device {
+    margin-top: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 20px;
+    width: 320px;
+    max-width: 100%;
+  }
+
+  .how {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  .origin__grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  .how__aside {
+    max-width: 320px;
+  }
+
+  .h2 {
+    font-size: 34px;
+  }
+
+  .step,
+  .istep {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .shots {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 28px;
+  }
+
+}
+
+/* ---------- <=720px: phone ---------- */
+
+@media (max-width: 720px) {
+  :root {
+    --g-pad: 24px;
+  }
+
+  body {
+    font-size: 16px;
+  }
+
+  .nav__links {
+    gap: 16px;
+    font-size: 14px;
+  }
+
+  /* the app's own backdrop: flat ground with the flock faded over it, bottom-anchored,
+     at its natural aspect so nothing is cropped away */
+  .hero {
+    min-height: 0;
+    padding-bottom: 72px;
+    background: var(--g-page);
+  }
+
+  .hero__artwrap {
+    position: absolute;
+    inset: auto 0 0;
+    margin-top: 0;
+    width: 100%;
+    aspect-ratio: 474 / 1024;
+    max-height: 100%;
+    opacity: 0.45;
+    /* the ground fades out rather than cutting at the section rule */
+    mask-image: linear-gradient(to bottom, #000 76%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 76%, transparent 100%);
+  }
+
+  .hero__art {
+    height: 100%;
+    object-position: bottom center;
+  }
+
+  .hero__inner {
+    padding-top: 48px;
+    gap: 32px;
+  }
+
+  .hero__title {
+    font-size: 40px;
+    letter-spacing: -0.2px;
+  }
+
+  .hero__sub,
+  .lede,
+  .step p,
+  .prose p {
+    font-size: 17px;
+  }
+
+  .hero__device {
+    width: 260px;
+    align-self: center;
+  }
+
+  .push {
+    width: 100%;
+  }
+
+  .h2 {
+    font-size: 30px;
+  }
+
+  .step h3 {
+    font-size: 22px;
+  }
+
+  .shots {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 36px;
+  }
+
+  .shot {
+    max-width: 280px;
+  }
+
+  .origin__word {
+    font-size: 44px;
+  }
+
+  .gloss {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .gloss dd {
+    margin-bottom: 14px;
+    color: var(--g-text-quiet);
+  }
+
+  .foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .sec,
+  .sec--day,
+  .sec--how,
+  .sec--origin {
+    padding: 48px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .push {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+  }
+}

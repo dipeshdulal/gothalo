@@ -1,0 +1,67 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const shots = [
+  {
+    name: 'home-device',
+    w: 760,
+    h: 1196,
+    title: 'Home',
+    line: 'What needs you, first.',
+    alt: 'The gothalo home screen, a blocked agent at the top under "needs you"',
+  },
+  {
+    name: 'chat-device',
+    w: 760,
+    h: 1629,
+    title: 'Chat',
+    line: 'Approve, or type a reply.',
+    alt: "An agent's conversation on the phone, with an approve button and a reply field",
+  },
+  {
+    name: 'terminal-device',
+    w: 760,
+    h: 1629,
+    title: 'Terminal',
+    line: 'The real pane. xterm.dart.',
+    alt: 'A full terminal on the phone with a key bar for Esc, Ctrl, Tab and arrows',
+    foot: true,
+  },
+];
+---
+
+<section class="wrap sec rule-top stack">
+  <h2 class="h2 display">What it does.</h2>
+  <div>
+    <div class="shots">
+      {
+        shots.map((shot) => (
+          <figure class={shot.foot ? 'shot shot--foot' : 'shot'}>
+            <div class="bezel bezel--phone">
+              <picture>
+                <source type="image/webp" srcset={`${base}screens/${shot.name}.webp`} />
+                <img
+                  src={`${base}screens/${shot.name}.jpg`}
+                  width={shot.w}
+                  height={shot.h}
+                  loading="lazy"
+                  alt={shot.alt}
+                />
+              </picture>
+            </div>
+            <figcaption>
+              <h3 class="display">{shot.title}</h3>
+              <p>{shot.line}</p>
+            </figcaption>
+          </figure>
+        ))
+      }
+    </div>
+
+    <p class="note">
+      Plus a day-grouped timeline, git diffs, worktree launch, branch-delete safety, pull
+      requests through the agent, a dev-server relay and a PWA from the bridge. All of it
+      over your own tailnet.
+    </p>
+  </div>
+</section>

@@ -1,0 +1,139 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const cmd = 'curl -fsSL https://raw.githubusercontent.com/dipeshdulal/gothalo/main/install.sh | sh';
+---
+
+<section class="hero">
+  <picture class="hero__artwrap">
+    <source media="(max-width: 720px)" type="image/webp" srcset={`${base}hero-phone.webp`} />
+    <source media="(max-width: 720px)" srcset={`${base}hero-phone.jpg`} />
+    <source
+      type="image/webp"
+      srcset={`${base}hero-1440.webp 1440w, ${base}hero.webp 2848w`}
+      sizes="100vw"
+    />
+    <img
+      class="hero__art"
+      src={`${base}hero.jpg`}
+      srcset={`${base}hero-1440.jpg 1440w, ${base}hero.jpg 2848w`}
+      sizes="100vw"
+      width="2848"
+      height="1504"
+      alt="A watercolour flock of sheep grazing among rocks under a dark teal sky"
+      fetchpriority="high"
+    />
+  </picture>
+
+  <div class="hero__inner">
+    <div class="hero__copy">
+      <h1 class="hero__title display">
+        Herdr keeps the herd.<br /><span>gothalo keeps watch.</span>
+      </h1>
+      <p class="hero__sub">
+        gothalo is a self-hosted phone remote for Herdr. See which agents are working,
+        blocked, or done. Get pushed when one needs you. Approve or reply from your phone.
+        Drop into a real terminal. All over your own Tailscale network.
+      </p>
+      <div class="hero__install">
+        <div class="cmd">
+          <span class="cmd__prompt" aria-hidden="true">$</span>
+          <code class="cmd__text" id="install-cmd">{cmd}</code>
+          <button class="cmd__copy" type="button" data-copy="install-cmd" aria-label="Copy the install command">
+            <svg
+              class="copy"
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              aria-hidden="true"
+            >
+              <rect x="5" y="5" width="9" height="9" rx="1.5"></rect>
+              <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"></path>
+            </svg>
+            <svg
+              class="check"
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 8.5 6.5 12 13 4.5"></path>
+            </svg>
+          </button>
+        </div>
+        <p class="hero__platforms">
+          macOS or Linux host · Android and PWA · MIT · the script verifies the release
+          against checksums.txt
+        </p>
+      </div>
+    </div>
+
+    <div class="hero__device">
+      <div class="push">
+        <span class="push__dot" aria-hidden="true"></span>
+        <div class="push__body">
+          <p class="push__title">acme-app needs you</p>
+          <p class="push__text">
+            Delete the stale release branch? <span class="mono">feat/cleanup</span>
+          </p>
+        </div>
+      </div>
+      <div class="hero__phone">
+        <picture>
+          <source type="image/webp" srcset={`${base}screens/home-device.webp`} />
+          <img
+            src={`${base}screens/home-device.jpg`}
+            width="760"
+            height="1196"
+            alt="The gothalo home screen: one agent flagged as needing you, the rest grouped by state"
+          />
+        </picture>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script is:inline>
+  // clipboard API first; the textarea path covers browsers that refuse it
+  function legacyCopy(text) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  }
+
+  document.querySelectorAll('[data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const source = document.getElementById(button.dataset.copy);
+      if (!source) return;
+      const text = source.textContent.trim();
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch {
+        ok = legacyCopy(text);
+      }
+      if (!ok) return;
+      button.dataset.copied = 'true';
+      setTimeout(() => delete button.dataset.copied, 1200);
+    });
+  });
+</script>

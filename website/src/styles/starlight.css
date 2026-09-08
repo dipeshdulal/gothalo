@@ -1,0 +1,88 @@
+/* Maps the gothalo tokens onto Starlight's variables. */
+
+:root {
+  --sl-font: var(--font-body);
+  --sl-font-mono: var(--font-mono);
+
+  --sl-color-accent-low: var(--g-icon-field);
+  --sl-color-accent: var(--g-accent);
+  --sl-color-accent-high: var(--g-accent-text);
+
+  --sl-color-white: var(--g-text);
+  --sl-color-gray-1: var(--g-text);
+  --sl-color-gray-2: var(--g-text-muted);
+  --sl-color-gray-3: var(--g-text-quiet);
+  --sl-color-gray-4: #5c6b68;
+  --sl-color-gray-5: var(--g-panel-raised);
+  --sl-color-gray-6: var(--g-panel);
+  --sl-color-gray-7: #2b3739;
+  --sl-color-black: var(--g-page);
+
+  --sl-color-bg: var(--g-page);
+  --sl-color-bg-nav: var(--g-panel);
+  --sl-color-bg-sidebar: var(--g-page);
+  --sl-color-bg-inline-code: var(--g-panel-raised);
+  --sl-color-hairline: var(--g-hairline);
+  --sl-color-hairline-light: var(--g-hairline);
+  --sl-color-hairline-shade: var(--g-hairline);
+
+  --sl-color-red: var(--g-blocked);
+  --sl-color-blue: var(--g-working);
+  --sl-color-green: var(--g-done);
+
+  --sl-content-width: var(--g-content-max);
+  --sl-shadow-sm: none;
+  --sl-shadow-md: none;
+  --sl-shadow-lg: none;
+}
+
+:root[data-theme='light'] {
+  --sl-color-white: var(--g-text);
+  --sl-color-gray-4: #6f7c79;
+  --sl-color-gray-5: #d7dcda;
+  --sl-color-gray-6: var(--g-panel);
+  --sl-color-gray-7: #e3e7e5;
+  --sl-color-black: #ffffff;
+  --sl-color-bg: var(--g-page);
+  --sl-color-bg-nav: var(--g-panel);
+  --sl-color-bg-sidebar: var(--g-page);
+  --sl-color-bg-inline-code: #e1e6e4;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+site-title,
+.site-title {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.sl-markdown-content code:not(:where(.expressive-code *)) {
+  font-family: var(--font-mono);
+  border: 1px solid var(--g-hairline);
+  border-radius: var(--g-radius-sm);
+}
+
+:is(.expressive-code, .starlight-aside, .card, table, img) {
+  border-radius: var(--g-radius) !important;
+}
+
+::selection {
+  background: var(--g-accent);
+  color: #04100e;
+}
+
+:focus-visible {
+  outline: 2px solid var(--g-accent);
+  outline-offset: 2px;
+}
+
+/* the page title sits outside .sl-markdown-content */
+h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
