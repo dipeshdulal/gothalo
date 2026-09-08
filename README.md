@@ -13,9 +13,8 @@ reply, and drop into a full terminal — all over your own Tailscale network.
 </p>
 
 <p align="center"><sub>
-  Home: what needs you, what you were last in, and everything else by state.
-  Rendered from fixture data by <code>app/test/screenshots_test.dart</code> —
-  regenerate with <code>flutter test test/screenshots_test.dart --update-goldens</code>.
+  Home: what needs you, what you were last in, everything else by state.<br>
+  Rendered from fixtures by <code>app/test/screenshots_test.dart</code>.
 </sub></p>
 
 ## Why this exists
@@ -25,32 +24,33 @@ a small self-hosted client on top of it — a Go bridge plus a Flutter app — s
 around how my team actually works, and kept on our own Tailscale network so session
 data and terminal traffic never leave it.
 
-It's built for me and a few teammates rather than as a product, and it is shared
-in that spirit: **Android and web today, no iOS**, and push needs a Firebase
-project of your own (see [`docs/PUSH.md`](docs/PUSH.md)). If you want
-a polished, supported mobile client for Herdr, look at
-[Moshi](https://getmoshi.app), which is considerably more capable than this.
-
-MIT licensed — fork it, run it, change it.
+It's built for me and a few teammates rather than as a product. Android and web
+only, no iOS. Push needs your own Firebase project ([`docs/PUSH.md`](docs/PUSH.md)).
+If you want a polished, supported mobile client for Herdr, use
+[Moshi](https://getmoshi.app) — it's considerably more capable than this.
 
 ## Architecture
 
-```
-  Phone app (Flutter)                  Mac Studio (Herdr host)
-  ┌──────────────────┐                 ┌────────────────────────────┐
-  │  inbox / approve │                 │  gothalo (Go binary)       │
-  │  live terminal   │  ── WSS/HTTPS ─▶│   GET  /snapshot           │
-  │  xterm.dart      │   over tailnet  │   POST /send /approve      │
-  │  key row + FCM   │                 │   WS   /attach  /events    │
-  └────────┬─────────┘                 │   watcher: agent wait ──┐  │
-           ▲                           └──────────┼─────────────┼───┘
-           │                                      │ herdr socket│
-           │                                      ▼             │
-           │                           ┌────────────────────────┴──┐
-           │                           │  Herdr (api/agent/pane)   │
-           │                           └───────────────────────────┘
-           │  FCM push                            │ outbound
-           └──────────── Firebase ◀───────────────┘  (blocked/done)
+```mermaid
+flowchart TB
+  subgraph phone["📱 Phone — Flutter"]
+    APP["inbox · approve · reply<br/><i>xterm.dart</i> terminal"]
+  end
+
+  subgraph host["🖥️ Herdr host — your machine"]
+    BR["<b>gothalo</b> · Go binary<br/>/snapshot · /send · /approve<br/>WS /attach · /events"]
+    WA["watcher<br/><i>herdr agent wait</i>"]
+    HD["<b>Herdr</b><br/>api · agent · pane"]
+  end
+
+  FCM(["Firebase / FCM"])
+
+  APP <== "① interactive — HTTPS + WSS over tailnet" ==> BR
+  BR <--> |"unix socket"| HD
+  HD --> |"blocked / done"| WA
+  WA --> BR
+  BR -.-> |"② push — outbound only"| FCM
+  FCM -.-> |"notification"| APP
 ```
 
 Two independent paths:
@@ -137,15 +137,14 @@ Config lives in `~/.gothalo/config.json`; env wins. The main overrides are
 `GOTHALO_DIR`, `GOTHALO_ADDR`, `GOTHALO_PUBLIC_URL`, `GOTHALO_ADMIN_TOKEN`,
 `GOTHALO_SERVICE_ACCOUNT` and `GOTHALO_FCM_PROJECT`.
 
-There is no published release yet, so `install.sh` has nothing to fetch until
-the first tag is cut. Build the Android app from `app/` — push stays inert
-until you point it at your own Firebase project ([`docs/PUSH.md`](docs/PUSH.md)).
+No release is published yet, so `install.sh` has nothing to fetch until the
+first tag. Build the app from `app/`; push stays inert until you point it at
+your own Firebase project ([`docs/PUSH.md`](docs/PUSH.md)).
 
 ## Push notifications (optional)
 
-The bridge runs fine without them; notifications fall back to logging. Turning
-them on takes two steps — bridge credentials, and a Firebase project of your
-own for the app:
+Without credentials the bridge just logs instead of notifying. Two steps to turn
+them on — credentials for the bridge, a Firebase project for the app:
 
 ```bash
 gothalo push login --project <firebase-project-id>
