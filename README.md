@@ -1,5 +1,8 @@
 # gothalo
 
+[![ci](https://github.com/dipeshdulal/gothalo/actions/workflows/ci.yml/badge.svg)](https://github.com/dipeshdulal/gothalo/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A self-hosted mobile remote for [Herdr](https://getmoshi.app/docs/herdr) — control your
 coding agents (Claude Code, Codex, Gemini, Cursor, …) from your phone: see which
 agents are blocked/working/done, get pushed when one needs you, approve or type a
@@ -12,9 +15,13 @@ a small self-hosted client on top of it — a Go bridge plus a Flutter app — s
 around how my team actually works, and kept on our own Tailscale network so session
 data and terminal traffic never leave it.
 
-It's built for me and a few teammates rather than as a product. If you want a
-polished, supported mobile client for Herdr, look at [Moshi](https://getmoshi.app),
-which is considerably more capable than this.
+It's built for me and a few teammates rather than as a product, and it is shared
+in that spirit: **Android and web today, no iOS**, and push needs a Firebase
+project of your own (see [below](#app-side-bring-your-own-firebase)). If you want
+a polished, supported mobile client for Herdr, look at
+[Moshi](https://getmoshi.app), which is considerably more capable than this.
+
+MIT licensed — fork it, run it, change it.
 
 ## Architecture
 
@@ -63,8 +70,10 @@ default session.
 | App | **Flutter** | `xterm.dart` is a *native* terminal widget (RN would need xterm.js in a WebView) |
 | Terminal | **xterm.dart** | Renders the `attach` stream; themes/fonts for free |
 
-Only recurring cost: **Apple Developer account ($99/yr)** for iOS push. Everything
-else (Herdr, Tailscale, FCM, libraries) is free.
+**Runs at zero recurring cost.** Herdr, Tailscale, FCM and the libraries are all
+free at this scale. iOS is the only thing that would cost anything (an Apple
+Developer account, $99/yr) and it is not built — the notification contract is
+Android-only, and the app also runs as a PWA the bridge serves itself.
 
 ## Repo layout
 
@@ -95,8 +104,15 @@ Nothing secret is committed.
 
 ## Install (bridge, on the Herdr host)
 
-One line — downloads the right prebuilt binary for your OS/arch from the latest
-GitHub Release and drops it (plus the `gothalo-service` helper) onto your PATH:
+Build from source — there is no published release yet, so the installer below
+has nothing to download until the first tag is cut:
+
+```bash
+go install github.com/dipeshdulal/gothalo/cmd/gothalo@latest
+```
+
+Once a release exists, one line fetches the right prebuilt binary for your
+OS/arch and drops it (plus the `gothalo-service` helper) onto your PATH:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dipeshdulal/gothalo/main/install.sh | sh
@@ -117,7 +133,10 @@ curl -H "Authorization: Bearer <admin-token>" http://<tailscale-ip>:8787/snapsho
 ```
 
 `gothalo-service` also takes `start | stop | restart | status | logs | uninstall`.
-Prefer Go? `go install github.com/dipeshdulal/gothalo/cmd/gothalo@latest`.
+Then build and install the Android app — see
+[Push: bring your own Firebase](#app-side-bring-your-own-firebase) first, since
+notifications are inert until you point the app at a Firebase project of
+your own.
 
 See `docs/TESTING.md` for the full ladder — you validate the whole backend
 (including a real push landing on a device) before writing any app code.
