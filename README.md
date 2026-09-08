@@ -135,9 +135,10 @@ first ([`docs/PUSH.md`](docs/PUSH.md)), then build it:
 cd app && flutter pub get && flutter build apk --release
 ```
 
-Or skip the install: open the bridge URL (`GOTHALO_PUBLIC_URL`, the same
-address the app pairs to) in the phone's browser — `/` serves the app as
-a PWA.
+Or skip the install: a bridge built with `./scripts/build.sh` bakes the app
+in and serves it as a PWA — open the bridge URL (`GOTHALO_PUBLIC_URL`, the
+same address the app pairs to) in the phone's browser. (The `install.sh`
+binary doesn't include the web UI yet.)
 
 ## Run the bridge (on the Herdr host)
 
