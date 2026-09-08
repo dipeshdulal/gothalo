@@ -117,6 +117,26 @@ herdr integration install claude   # likewise: hermes, codex, opencode, …
 Why, and where each agent keeps its transcript:
 [`docs/AGENT-INTEGRATION.md`](docs/AGENT-INTEGRATION.md).
 
+## Install
+
+Bridge (macOS/Linux, from the [latest release](https://github.com/dipeshdulal/gothalo/releases)):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dipeshdulal/gothalo/main/install.sh | sh
+```
+
+Or build from source: `go install github.com/dipeshdulal/gothalo/cmd/gothalo@latest`.
+
+App (Android): no packaged APK yet — point it at your own Firebase project
+first ([`docs/PUSH.md`](docs/PUSH.md)), then build it:
+
+```sh
+./scripts/setup-firebase.sh --project <firebase-project-id>
+cd app && flutter pub get && flutter build apk --release
+```
+
+Or skip the install: the bridge serves the app as a PWA itself.
+
 ## Run the bridge (on the Herdr host)
 
 ```bash
@@ -139,9 +159,8 @@ Config lives in `~/.gothalo/config.json`; env wins. The main overrides are
 `GOTHALO_DIR`, `GOTHALO_ADDR`, `GOTHALO_PUBLIC_URL`, `GOTHALO_ADMIN_TOKEN`,
 `GOTHALO_SERVICE_ACCOUNT` and `GOTHALO_FCM_PROJECT`.
 
-No release is published yet, so `install.sh` has nothing to fetch until the
-first tag. Build the app from `app/`; push stays inert until you point it at
-your own Firebase project ([`docs/PUSH.md`](docs/PUSH.md)).
+Push stays inert until you point it at your own Firebase project
+([`docs/PUSH.md`](docs/PUSH.md)).
 
 ## Push notifications (optional)
 
