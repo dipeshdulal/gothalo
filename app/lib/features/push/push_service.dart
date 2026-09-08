@@ -1,17 +1,20 @@
 import 'dart:ui' show DartPluginRegistrant;
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../../core/firebase_web_options.dart';
+import '../../core/firebase_web_config.dart';
 import '../../data/bridge/bridge_providers.dart';
 import 'notification_actions.dart';
 import 'notification_permission_io.dart'
     if (dart.library.js_interop) 'notification_permission_web.dart';
 import 'push_payload.dart';
+import 'web_config_cache_io.dart'
+    if (dart.library.js_interop) 'web_config_cache_web.dart';
 
 part 'push_service.g.dart';
 
@@ -289,6 +292,7 @@ class PushController extends _$PushController {
   Future<String?> build() async {
     try {
       await _ensureLocal();
+      await _ensureFirebaseWeb();
 
       final messaging = FirebaseMessaging.instance;
       // iOS only honours a web notification-permission request made inside a
@@ -319,7 +323,10 @@ class PushController extends _$PushController {
       await _restoreLaunchDeepLink();
 
       // Re-register the token whenever the active bridge changes.
-      ref.listen(bridgeClientProvider, (_, _) => _registerCurrent());
+      ref.listen(bridgeClientProvider, (_, _) async {
+        await _ensureFirebaseWeb();
+        await _registerCurrent();
+      });
 
       // No permission yet on web: stop before getToken, which would only
       // fail. The token arrives later through [enable].
@@ -331,7 +338,9 @@ class PushController extends _$PushController {
       // Without it the browser refuses the subscription, and the error reads
       // like a permissions failure rather than a missing key.
       _token = await messaging.getToken(
-        vapidKey: kIsWeb ? firebaseWebVapidKey : null,
+        vapidKey: kIsWeb
+            ? ref.read(firebaseWebConfigProvider).vapidKey
+            : null,
       );
       await _registerCurrent();
       return _token;
@@ -340,6 +349,38 @@ class PushController extends _$PushController {
       debugPrint('Push disabled: $e');
       return null;
     }
+  }
+
+  /// Web only: initialise Firebase against the active bridge's project.
+  ///
+  /// A generically-built web client carries no project of its own, so it
+  /// fetches it here (GET /firebase-config) and initialises against it.
+  /// Falls back to the compiled-in setup values when the bridge has nothing
+  /// to serve — and native never enters: its config comes from
+  /// google-services.json at boot in main().
+  Future<void> _ensureFirebaseWeb() async {
+    if (!kIsWeb) return;
+    FirebaseWebConfig cfg = FirebaseWebConfig.baked;
+    try {
+      final base = ref.read(bridgeClientProvider)?.connection.baseUrl;
+      if (base != null) {
+        final fetched = await FirebaseWebConfig.fetch(base);
+        if (fetched != null) {
+          cfg = fetched;
+          await writeWebConfigCache(cfg);
+        }
+      }
+    } catch (_) {
+      // fetch already nulls on every failure; stay on baked config
+    }
+    final current =
+        Firebase.apps.isEmpty ? null : Firebase.app().options.projectId;
+    if (current != cfg.options.projectId) {
+      if (current != null) await Firebase.app().delete();
+      await Firebase.initializeApp(options: cfg.options);
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    }
+    ref.read(firebaseWebConfigProvider.notifier).state = cfg;
   }
 
   /// Recover a deep-link from whichever notification launched the app.
@@ -388,8 +429,13 @@ class PushController extends _$PushController {
       final messaging = FirebaseMessaging.instance;
       await messaging.requestPermission();
       if (kIsWeb && webNotificationPermission != 'granted') return false;
+      if (ref.read(firebaseWebConfigProvider) == FirebaseWebConfig.baked) {
+        await _ensureFirebaseWeb();
+      }
       _token = await messaging.getToken(
-        vapidKey: kIsWeb ? firebaseWebVapidKey : null,
+        vapidKey: kIsWeb
+            ? ref.read(firebaseWebConfigProvider).vapidKey
+            : null,
       );
       await _registerCurrent();
       state = AsyncData(_token);

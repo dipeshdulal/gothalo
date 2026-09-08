@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Bring-your-own-Firebase setup for gothalo push.
 #
-# FCM binds the APP BINARY to one Firebase project (sender ID compiled in), so
-# every fork needs its own project. This script wires the four app-side files
+# FCM binds the NATIVE app binary to one Firebase project (sender ID compiled
+# into google-services.json), so every fork needs its own project. The WEB app
+# is different: a generic build fetches the bridge's project at pair time from
+# GET /firebase-config (see firebase-web.json below), so one web build works
+# against any bridge. This script wires the four app-side files
 # from your project, all of which are committed as inert YOUR_* placeholders:
 #   - app/android/app/google-services.json        (via `flutterfire configure`)
 #   - app/lib/core/firebase_web_options.dart      (propagated from the above)
@@ -88,9 +91,9 @@ if [[ -z "$VAPID" ]]; then
   read -rp "VAPID public key: " VAPID
 fi
 
-python3 - "$ROOT" "$VAPID" <<'EOF'
-import re, sys, json
-root, vapid = sys.argv[1], sys.argv[2]
+python3 - "$ROOT" "$VAPID" "${GOTHALO_DIR:-$HOME/.gothalo}" <<'EOF'
+import re, sys, json, os
+root, vapid, datadir = sys.argv[1], sys.argv[2], sys.argv[3]
 
 opts = open(f"{root}/app/lib/firebase_options.dart").read()
 def grab(name):
@@ -125,10 +128,20 @@ open(f"{root}/internal/web/assets/push-test.html", "w").write(pt)
 gs = json.load(open(f"{root}/app/android/app/google-services.json"))
 assert gs["project_info"]["project_id"] == web["projectId"], "google-services.json project mismatch"
 print(f"    project: {web['projectId']}")
+
+# The bridge-side copy the generic web build fetches at pair time
+# (GET /firebase-config). Same public identifiers, plus the VAPID key.
+os.makedirs(datadir, exist_ok=True)
+webpath = os.path.join(datadir, "firebase-web.json")
+json.dump({**web, "vapidKey": vapid}, open(webpath, "w"), indent=2)
+print(f"    bridge config: {webpath}")
 EOF
 
 echo
-echo "App side done. Bridge side (per person, on the Herdr host):"
+DATADIR="${GOTHALO_DIR:-$HOME/.gothalo}"
+echo "App side done (bridge web config: $DATADIR/firebase-web.json)."
+echo "If the bridge runs on another host, copy firebase-web.json to its \$GOTHALO_DIR."
+echo "Bridge side (per person, on the Herdr host):"
 echo "  gothalo push login --project $PROJECT"
 echo "  gothalo push status   # valid + permitted before going further"
 echo "Then pair a phone and hit POST /testpush to watch a real notification land."

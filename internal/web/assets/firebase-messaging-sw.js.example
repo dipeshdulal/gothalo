@@ -1,5 +1,8 @@
 // Service worker for background web-push (tab unfocused / phone locked).
-// Firebase requires the config here too; it runs in a separate worker context.
+// The Firebase project is NOT compiled in: a generically-built web client
+// works against any bridge, so the page fetches its bridge's project at pair
+// time (GET /firebase-config) and stashes it in IndexedDB here for the
+// worker. BAKED is the setup-script fallback for bridges built the old way.
 importScripts("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js");
 importScripts("https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js");
 
@@ -11,8 +14,7 @@ self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 // Placeholders: push is inert until scripts/setup-firebase.sh fills these in
 // from your own Firebase project (see README "Push: bring your own Firebase").
 // Must agree with app/lib/core/firebase_web_options.dart.
-// __SETUP_FIREBASE__ (marker: the setup script replaces this whole block).
-const FIREBASE_CONFIG = {
+const BAKED = {
   apiKey: "YOUR_WEB_API_KEY",
   authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
   projectId: "YOUR_PROJECT_ID",
@@ -21,9 +23,65 @@ const FIREBASE_CONFIG = {
   appId: "YOUR_WEB_APP_ID"
 };
 
-firebase.initializeApp(FIREBASE_CONFIG);
+// IndexedDB slot the page writes after fetching its bridge's config:
+// database `gothalo-fcm`, store `kv`, key `config`. Same names as
+// lib/features/push/web_config_cache_web.dart writes.
+function idbGet() {
+  return new Promise((resolve) => {
+    try {
+      const open = indexedDB.open("gothalo-fcm", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("kv");
+      open.onsuccess = () => {
+        try {
+          const get = open.result
+            .transaction("kv", "readonly")
+            .objectStore("kv")
+            .get("config");
+          get.onsuccess = () => resolve(get.result || null);
+          get.onerror = () => resolve(null);
+        } catch (e) {
+          resolve(null);
+        }
+      };
+      open.onerror = () => resolve(null);
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
 
-const messaging = firebase.messaging();
+function usable(cfg) {
+  return (
+    cfg &&
+    typeof cfg.apiKey === "string" &&
+    cfg.apiKey !== "" &&
+    cfg.apiKey.indexOf("YOUR_") !== 0
+  );
+}
+
+let _messagingPromise = null;
+function ensureMessaging() {
+  if (!_messagingPromise) {
+    _messagingPromise = (async () => {
+      let cfg = null;
+      try {
+        cfg = await idbGet();
+      } catch (e) {
+        cfg = null;
+      }
+      if (!usable(cfg)) cfg = BAKED;
+      if (!usable(cfg)) return null;
+      if (!firebase.apps.length) firebase.initializeApp(cfg);
+      const m = firebase.messaging();
+      m.onBackgroundMessage(handleBackground);
+      return m;
+    })();
+  }
+  return _messagingPromise;
+}
+
+// Eager: a push can wake the worker, and registration has to win that race.
+ensureMessaging();
 
 // Alerts carry a `notification` block, which the SDK may display on its own; a
 // dismiss is data-only and reaches us here. Either way we key notifications by
@@ -31,7 +89,7 @@ const messaging = firebase.messaging();
 // earlier one rather than stacking, and a dismiss can close exactly that one.
 const tagFor = (d) => `${d.server_id || ""}/${d.agent || ""}`;
 
-messaging.onBackgroundMessage(async (payload) => {
+async function handleBackground(payload) {
   const d = payload.data || {};
 
   if (d.type === "dismiss") {
@@ -47,7 +105,7 @@ messaging.onBackgroundMessage(async (payload) => {
     requireInteraction: true, // stay until tapped, don't auto-dismiss
     data: d,
   });
-});
+}
 
 // Route a tapped notification to its agent. iOS web push cannot carry action
 // buttons (WebKit doesn't implement Notification actions), so landing the tap

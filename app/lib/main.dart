@@ -11,7 +11,6 @@ import 'core/theme.dart';
 import 'data/bridge/bridge_providers.dart';
 import 'features/inbox/inbox_providers.dart';
 import 'features/push/push_payload.dart';
-import 'core/firebase_web_options.dart';
 import 'features/push/push_service.dart';
 import 'features/push/web_tap_io.dart'
     if (dart.library.js_interop) 'features/push/web_tap_web.dart';
@@ -22,13 +21,16 @@ Future<void> main() async {
   // we simply run without push rather than crash. Push activates once Firebase
   // is configured.
   try {
-    // Native reads google-services.json / the iOS plist; the web has no such
-    // file, so its options are compiled in. Passing null on native keeps that
-    // automatic path exactly as it was.
-    await Firebase.initializeApp(
-      options: kIsWeb ? firebaseWebOptions : null,
-    );
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    // Native reads google-services.json / the iOS plist at boot; web
+    // initialises later in PushController against the active bridge's
+    // project (GET /firebase-config), so a generic build pairs anywhere.
+    // Passing null on native keeps that automatic path exactly as it was.
+    if (!kIsWeb) {
+      await Firebase.initializeApp();
+      FirebaseMessaging.onBackgroundMessage(
+        firebaseMessagingBackgroundHandler,
+      );
+    }
   } catch (e) {
     debugPrint('Firebase not configured — push disabled: $e');
   }

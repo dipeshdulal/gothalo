@@ -50,17 +50,27 @@ which `push login` saves for you.
 
 ## App side: bring your own Firebase
 
-FCM binds the **app binary** to one Firebase project (the sender ID is compiled
-in), so every fork needs its own project — the repo commits only `.example`
-templates with inert `YOUR_*` placeholders, and the real files are gitignored,
-so `git status` stays clean and real values can't be committed by accident:
+FCM binds the **native** app binary to one Firebase project (the sender ID is
+compiled into `google-services.json`), so every fork needs its own project —
+the repo commits only `.example` templates with inert `YOUR_*` placeholders,
+and the real files are gitignored, so `git status` stays clean and real values
+can't be committed by accident:
 
 - `app/android/app/google-services.json` (+ `.example`)
-- `app/lib/core/firebase_web_options.dart` (+ `.example`)
+- `app/lib/core/firebase_web_options.dart` (+ `.example`, fallback only)
 - `internal/web/assets/firebase-messaging-sw.js` (+ `.example` — must agree
   with the Dart options, or the service worker mints tokens the page can't use)
 - `internal/web/assets/push-test.html` (+ `.example`, the bridge-served test
   receiver)
+- `$GOTHALO_DIR/firebase-web.json` (no example — written by the script,
+  served by the bridge, never in the repo)
+
+The **web** app is not bound at build time: a generically-built web client
+(GitHub Pages, a custom domain, the bridge-served PWA) fetches its bridge's
+project at pair time from `GET /firebase-config` and initialises Firebase
+against it, with the service worker reading the same values from IndexedDB.
+One web build works against any bridge; each bridge keeps serving its own
+project. Native keeps the compiled-in path exactly as before.
 
 Until configured, push stays silent: the app builds and runs, notifications
 just never arrive. One script generates all four from your project:
@@ -80,4 +90,13 @@ Then finish the bridge side above (`push login`, `push status`) and fire
 A committed `.github/workflows/public-hygiene.yml` fails any PR that
 reintroduces real project values or personal hostnames, so a fork can't
 accidentally push against (or bill) someone else's project.
+
+## Serving the web app elsewhere
+
+The page needs no Firebase of its own, but Firebase needs to know the page:
+add every origin you serve it from (your `GOTHALO_PUBLIC_URL`, a Pages URL, a
+custom domain) under Firebase console → Project settings → General →
+Authorized domains — otherwise `getToken` refuses with a permissions-looking
+error. Everything else (project values, VAPID key) arrives from the bridge at
+pair time.
 

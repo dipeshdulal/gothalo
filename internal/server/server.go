@@ -132,6 +132,7 @@ func (s *Server) publish(typ string, payload any) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/info", s.handleInfo)
+mux.HandleFunc("/firebase-config", s.handleFirebaseConfig)
 	mux.HandleFunc("/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/send", s.handleSend)
 	mux.HandleFunc("/approve", s.handleApprove)
