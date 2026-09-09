@@ -23,7 +23,9 @@ export default defineConfig({
       favicon: '/favicon.png',
       customCss: ['./src/styles/tokens.css', './src/styles/starlight.css'],
       lastUpdated: true,
-      editLink: { baseUrl: 'https://github.com/dipeshdulal/gothalo/edit/main/' },
+      // resolved from the Astro root, so it needs the website/ prefix; generated
+      // pages carry their own absolute editUrl from prepare-docs
+      editLink: { baseUrl: 'https://github.com/dipeshdulal/gothalo/edit/main/website/' },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/dipeshdulal/gothalo' },
       ],

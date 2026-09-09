@@ -10,7 +10,7 @@ const out = path.resolve(here, '..', 'src', 'content', 'docs', 'docs');
 const BASE = (process.env.CUSTOM_DOMAIN ? '' : (process.env.BASE ?? '/gothalo')).replace(/\/$/, '');
 const GH = 'https://github.com/dipeshdulal/gothalo';
 // hand-written pages the wipe must never delete
-const KEEP = new Set(['index.mdx', 'start-here.md', 'install.md']);
+const KEEP = new Set(['index.mdx', 'install.md']);
 
 // source file -> route under /docs/
 const MAP = new Map([

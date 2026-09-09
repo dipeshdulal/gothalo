@@ -10,9 +10,14 @@ name: pages
 # The app build carries NO Firebase project of its own: it fetches the config
 # from whichever bridge it pairs with (GET /firebase-config) and initialises
 # against that, so one public build works for every install. See docs/PUSH.md.
+#
+# Pull requests build but do not deploy, so a broken site is caught before it
+# reaches main. No path filters: the artifact is the whole site, so a run that
+# skipped the Flutter build would publish a site with no app under it.
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -100,6 +105,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

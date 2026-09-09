@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install the gothalo bridge on your Herdr host, run it on the tailnet, pair a phone, and get the app as an APK or a PWA.
+description: Install the gothalo bridge on your Herdr host, run it on the tailnet, pair a phone, and get the app as an APK, the hosted web build, or a PWA.
 ---
 
 Everything here runs on the **Herdr host** — the machine your agents already live on.
@@ -80,9 +80,14 @@ Android, no packaged APK yet. Point it at your own Firebase project first
 cd app && flutter pub get && flutter build apk --release
 ```
 
-Or skip the install entirely: a bridge built with `./scripts/build.sh` bakes the app in and
-serves it as a **PWA** — open the bridge URL (`GOTHALO_PUBLIC_URL`, the same address the app
-pairs to) in the phone's browser. The `install.sh` binary does not include the web UI yet.
+Or skip the build entirely and open the [hosted web app](../../app/), published beside this
+site at `/gothalo/app/`. It is the same client, with no Firebase project of its own — it
+takes the bridge's at pair time — so it works against any install. Add it to the home screen
+and it runs as a **PWA**.
+
+A bridge built with `./scripts/build.sh` also bakes the app in and serves it from its own
+URL (`GOTHALO_PUBLIC_URL`, the same address the app pairs to): same origin as the API, so
+nothing to allow. The `install.sh` binary does not include the web UI yet.
 
 ## 6. Turn on push (optional)
 
