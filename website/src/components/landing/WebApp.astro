@@ -22,10 +22,11 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
     <div class="step">
       <h3 class="display">What it needs</h3>
       <p>
-        A bridge running on your machine and reachable from that browser — the tailnet
-        address you would give the Android app, or <span class="mono">localhost</span> if
-        you are on the host itself. The page is static; every request it makes goes to your
-        bridge.
+        A bridge on your machine with an <span class="mono">https</span> URL —{' '}
+        <span class="mono">tailscale serve</span> in front of it, not a bare{' '}
+        <span class="mono">http://100.x.x.x:8787</span>, because a page served over https is
+        not allowed to call a plain-http address. The page itself is static; every request it
+        makes goes to your bridge.
       </p>
     </div>
 
@@ -50,10 +51,13 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
     </div>
 
     <p class="note">
-      A browser calling a bridge on another origin needs that bridge to allow it, so run a
-      version recent enough to answer the preflight. A bridge built with{' '}
-      <span class="mono">./scripts/build.sh</span> also serves this app itself, at the same
-      address you pair to — same origin, nothing to allow.
+      A browser calling a bridge on another origin is preflighted, so the bridge has to name
+      that origin. The project's published app,{' '}
+      <span class="mono">https://dipeshdulal.github.io</span>, is permitted out of the box; a
+      fork's own Pages site is a different origin and goes in{' '}
+      <span class="mono">transport.allowed_origins</span>. A bridge built with{' '}
+      <span class="mono">./scripts/build.sh</span> serves this app itself, at the same address
+      you pair to — same origin, nothing to allow.
     </p>
   </div>
 </section>

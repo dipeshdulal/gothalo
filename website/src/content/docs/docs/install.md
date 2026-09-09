@@ -85,6 +85,12 @@ site at `/gothalo/app/`. It is the same client, with no Firebase project of its 
 takes the bridge's at pair time — so it works against any install. Add it to the home screen
 and it runs as a **PWA**.
 
+Two things it needs that the Android build does not: the bridge must have an **https** URL
+(`tailscale serve`, not a bare `http://100.x.x.x:8787` — an https page cannot call a
+plain-http one), and its origin must be on the bridge's allowlist. `https://dipeshdulal.github.io`
+is permitted out of the box; a fork's own Pages site goes in `transport.allowed_origins`
+(`GOTHALO_ALLOWED_ORIGINS`). See [Browser origins](../reference/api/#browser-origins-cors).
+
 A bridge built with `./scripts/build.sh` also bakes the app in and serves it from its own
 URL (`GOTHALO_PUBLIC_URL`, the same address the app pairs to): same origin as the API, so
 nothing to allow. The `install.sh` binary does not include the web UI yet.
