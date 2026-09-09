@@ -20,6 +20,32 @@ QR's origin (a tailnet URL today, a relay URL later).
   it is not committed. It also unlocks the admin endpoints below (so you can mint
   your own pairing codes for testing). Treat it as dev-only.
 
+### Browser origins (CORS)
+
+Only relevant to a web UI hosted somewhere other than the bridge; native apps
+and `curl` never send an `Origin` and are unaffected.
+
+A cross-origin call is preceded by a preflight `OPTIONS` carrying **no**
+credentials, which every authenticated handler here would reject — so the
+bridge answers preflights itself, before routing, for origins it permits.
+
+- Permitted by default: `https://dipeshdulal.github.io`, the project's
+  published app.
+- Anything else (a fork's Pages site, a local dev server) must be listed in
+  `transport.allowed_origins` in `~/.gothalo/config.json`, or
+  `GOTHALO_ALLOWED_ORIGINS` as a comma-separated list. Entries are exact
+  `scheme://host[:port]` strings — no wildcards — and extend the default
+  rather than replacing it.
+- An unlisted origin gets no `Access-Control-Allow-Origin`, so the browser
+  discards the reply. The request itself is still refused by the usual bearer
+  check, not by CORS: an origin is permission to *read a reply*, never
+  permission to act.
+- Responses never set `Access-Control-Allow-Credentials`; the bearer travels
+  in a header the app sets explicitly, so no cookie is ever attached.
+
+WebSocket routes (`/attach`, `/events`) do not use this list — their handshake
+is not preflighted and they carry the token in the query string.
+
 ## Pairing flow (the real onboarding)
 1. Operator runs `gothalo pair` on the host; it prints a QR encoding a small JSON
    payload:

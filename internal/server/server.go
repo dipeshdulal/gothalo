@@ -168,7 +168,7 @@ mux.HandleFunc("/firebase-config", s.handleFirebaseConfig)
 	if s.web != nil {
 		mux.Handle("/", http.FileServer(http.FS(s.web)))
 	}
-	return mux
+	return s.withCORS(mux)
 }
 
 // ---- auth ----

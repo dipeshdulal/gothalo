@@ -160,7 +160,28 @@ gothalo serve
 
 Config lives in `~/.gothalo/config.json`; env wins. The main overrides are
 `GOTHALO_DIR`, `GOTHALO_ADDR`, `GOTHALO_PUBLIC_URL`, `GOTHALO_ADMIN_TOKEN`,
-`GOTHALO_SERVICE_ACCOUNT` and `GOTHALO_FCM_PROJECT`.
+`GOTHALO_ALLOWED_ORIGINS`, `GOTHALO_SERVICE_ACCOUNT` and `GOTHALO_FCM_PROJECT`.
+
+### Reaching the bridge from a hosted web UI
+
+A browser calling the bridge from another origin sends a preflight first, so
+that origin has to be named. The project's own published app
+(`https://dipeshdulal.github.io`) is permitted out of the box; anything else —
+a fork's Pages site, a local `flutter run -d chrome` — goes in
+`allowed_origins`, as exact `scheme://host[:port]` strings:
+
+```jsonc
+// ~/.gothalo/config.json
+{ "transport": { "allowed_origins": ["https://<fork>.github.io"] } }
+```
+
+or `GOTHALO_ALLOWED_ORIGINS=https://<fork>.github.io,http://localhost:8080`.
+These extend the default rather than replacing it. Restart the bridge after
+changing them.
+
+The page must also be able to reach the bridge at all: a site served over
+**https can only call an https bridge**, so give the bridge a TLS URL
+(`tailscale serve`) rather than a bare `http://100.x.x.x:8787`.
 
 Push stays inert until you point it at your own Firebase project
 ([`docs/PUSH.md`](docs/PUSH.md)).

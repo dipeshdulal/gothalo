@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../core/connection/connection.dart';
 import 'models/snapshot.dart';
@@ -976,14 +977,36 @@ class BrowseListing {
       );
 }
 
+/// Why a browser refused a request before it ever reached the bridge.
+///
+/// Both look identical to the app — status 0, no headers, no reason — but they
+/// are fixed in completely different places, so they must not share a message.
+enum BrowserBlock {
+  /// The bridge did not name this page's origin as allowed. Always an
+  /// inference; see [BridgeClient._asBridgeException] for why.
+  cors,
+
+  /// An `https` page may not reach an `http` bridge. Decidable rather than
+  /// inferred: both schemes are in hand.
+  mixedContent,
+}
+
 /// Thrown for any bridge call that fails — network down, non-2xx, or a body we
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
 class BridgeException implements Exception {
-  BridgeException(this.message, {this.statusCode});
+  BridgeException(this.message, {this.statusCode, this.blockedBy});
 
   final String message;
   final int? statusCode;
+
+  /// Set when the browser stopped this request itself, and by which rule.
+  ///
+  /// Worth carrying rather than leaving in prose, because these are the
+  /// failures that look exactly like an unreachable server while being fixed
+  /// somewhere else entirely — a config line on the bridge, or a different
+  /// URL on the phone. Null for every ordinary failure.
+  final BrowserBlock? blockedBy;
 
   bool get isAuth => statusCode == 401 || statusCode == 403;
   bool get isBridgeDown => statusCode == 502 || statusCode == 503;
@@ -1732,6 +1755,46 @@ class BridgeClient {
 
   BridgeException _asBridgeException(DioException e) {
     final code = e.response?.statusCode;
+
+    // Mixed content is checked first because it produces the same empty
+    // failure as a CORS block, but unlike CORS it is DECIDABLE rather than
+    // inferred. Getting the order wrong sends someone to edit allowed_origins
+    // for a problem no bridge config can fix.
+    //
+    // A browser refuses a disallowed cross-origin response *to the page*, so
+    // either failure arrives here indistinguishable from a dead network:
+    // status 0, no headers, no reason. That opacity is deliberate on the
+    // browser's part and no probe gets around it — which is why the CORS
+    // wording stays hedged. It is still a strong inference: on the same
+    // tailnet a cross-origin call that fails instantly with nothing attached
+    // is far more often a missing allowed_origins entry than a machine that
+    // just went down.
+    if (_looksBrowserBlocked(e)) {
+      final block = blockFor(
+        pageOrigin: _pageOrigin,
+        baseUrl: connection.baseUrl,
+      );
+      switch (block) {
+        case BrowserBlock.mixedContent:
+          return BridgeException(
+            'This page is served over https, so the browser will not let it '
+            'reach a bridge over http. Use that bridge\'s https URL — '
+            '`tailscale serve` gives it one — and update this server\'s address.',
+            blockedBy: block,
+          );
+        case BrowserBlock.cors:
+          return BridgeException(
+            'The browser blocked this before it reached the bridge — most '
+            'likely CORS. Add "$_pageOrigin" to allowed_origins in '
+            '~/.gothalo/config.json on that machine and restart it. (If the '
+            'bridge is simply off, that looks identical from a browser.)',
+            blockedBy: block,
+          );
+        case null:
+          break;
+      }
+    }
+
     final message = switch (e.type) {
       DioExceptionType.connectionTimeout ||
       DioExceptionType.receiveTimeout ||
@@ -1747,4 +1810,53 @@ class BridgeClient {
     };
     return BridgeException(message, statusCode: code);
   }
+
+  /// The shape both browser-side blocks share: we are in a browser (nothing
+  /// else enforces these rules) and the request died with no response at all
+  /// (a reply that arrived — even a 401 — proves the browser let it through).
+  /// Which rule applies is [blockFor]'s job.
+  bool _looksBrowserBlocked(DioException e) {
+    if (!kIsWeb || e.response != null) return false;
+    return e.type == DioExceptionType.connectionError ||
+        e.type == DioExceptionType.unknown;
+  }
+
+  /// Which browser rule, if any, stops a page at [pageOrigin] from reaching
+  /// [baseUrl]. Null when the browser has no objection — same origin, or off
+  /// the web entirely — which leaves an ordinary network failure.
+  ///
+  /// Pure and public so it can be tested: the live path is gated on [kIsWeb],
+  /// which is false under `flutter test`, so the decision would otherwise go
+  /// unverified on every platform that can run the suite.
+  static BrowserBlock? blockFor({
+    required String? pageOrigin,
+    required String baseUrl,
+  }) {
+    if (pageOrigin == null) return null;
+    final target = Uri.tryParse(baseUrl);
+    if (target == null) return null;
+    // Mixed content outranks CORS: it is decided by scheme alone, and it holds
+    // even for an origin the bridge does allow.
+    if (pageOrigin.startsWith('https:') && target.isScheme('http')) {
+      return BrowserBlock.mixedContent;
+    }
+    final targetOrigin = _originOf(baseUrl);
+    if (targetOrigin != null && targetOrigin != pageOrigin) {
+      return BrowserBlock.cors;
+    }
+    return null;
+  }
+
+  /// `Uri.origin` throws on anything that is not http(s) with a host, which a
+  /// hand-typed base URL can easily be.
+  static String? _originOf(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.isScheme('http') && !uri.isScheme('https')) {
+      return null;
+    }
+    return uri.host.isEmpty ? null : uri.origin;
+  }
+
+  /// Null off the web, where [Uri.base] is a filesystem path rather than a page.
+  static String? get _pageOrigin => kIsWeb ? _originOf(Uri.base.toString()) : null;
 }

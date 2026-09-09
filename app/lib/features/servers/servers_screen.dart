@@ -10,6 +10,7 @@ import '../../core/widgets/action_chip.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../core/widgets/entrance.dart';
 import '../../core/widgets/panel_row.dart';
+import '../../data/bridge/bridge_client.dart' show BridgeException, BrowserBlock;
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/agent_groups.dart';
 import 'add_edit_server_sheet.dart';
@@ -837,10 +838,26 @@ class _StatsLine extends StatelessWidget {
       );
     }
     if (!summary!.ok) {
-      return Text(
-        'unreachable',
+      // "unreachable" points at the network, and for a browser-side block the
+      // network is fine — the fix is a config line on the bridge, or a
+      // different URL. Sending someone to check their tailnet for either is
+      // sending them to the wrong machine.
+      final error = summary!.error;
+      final label = switch (error) {
+        BridgeException(blockedBy: BrowserBlock.cors) => 'blocked by bridge (CORS)',
+        BridgeException(blockedBy: BrowserBlock.mixedContent) => 'blocked (bridge is http)',
+        _ => 'unreachable',
+      };
+      final text = Text(
+        label,
         style: TextStyle(color: scheme.error, fontSize: 11.5),
       );
+      // Only wrap when there is something to say: an empty Tooltip still pops
+      // a blank bubble on long-press, and a timed-out or tokenless server
+      // stores a plain error rather than a BridgeException.
+      return error is BridgeException
+          ? Tooltip(message: error.message, child: text)
+          : text;
     }
     final count = summary!.agents.length;
     // Wrap, not Row: with "update bridge" *and* "N need you" on a 360dp phone

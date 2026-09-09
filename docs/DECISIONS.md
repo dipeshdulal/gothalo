@@ -804,3 +804,66 @@ talking, not the user. A `State` is created once per navigation and destroyed on
 pop, so a per-instance latch is exactly one visit — and re-pushing the same agent
 builds a new `State` and records again, which is correct, because that *is* a
 second visit. See `app/lib/features/recents/record_open.dart`.
+
+## D32 — Cross-origin browser clients are opt-in, and the preflight is terminated before auth
+
+Hosting the web build somewhere other than the bridge — GitHub Pages, in the
+case that prompted this — makes the app and the API different origins, and the
+browser then enforces a rule the native app never met.
+
+The failure is not obvious from either side. The app sends its bearer in an
+`Authorization` header, which is a custom header, so before the real request the
+browser sends a preflight `OPTIONS`. A preflight carries **no credentials** by
+design. Every endpoint here authenticates, so the preflight was answered `401`,
+the browser blocked the request that would have followed, and the app — which
+renders any failure as `unreachable` (`ok => error == null`) — reported the
+machine as down. Meanwhile the bridge was perfectly healthy: the same URL hit
+directly from the phone's browser returned a real `401`, and `/snapshot` with a
+token returned `200` in 0.16s. "Unreachable" named the symptom and pointed at
+the network, and the network was never involved.
+
+**So the preflight is terminated in middleware, ahead of the mux.** It cannot be
+per-handler: the whole problem is that a handler's first act is to check a token
+the preflight is not allowed to carry. A preflight is `OPTIONS` *plus*
+`Access-Control-Request-Method`; a bare `OPTIONS` is an ordinary request and
+still routes normally.
+
+**The allowlist is exact-match, never a wildcard.** This API starts processes,
+reads repositories and proxies a terminal, so "which sites may script it"
+deserves an explicit decision.
+
+**The project's own published UI is allowed without configuration**
+(`config.DefaultAllowedOrigin`), because it is the client this bridge exists to
+serve and making every install discover and paste the same constant only turns a
+working setup into a support question. Permitting an origin is not granting
+access: every endpoint still demands a bearer, and CORS governs whose *script*
+may read a reply, not who may authenticate — a visitor with no paired token can
+do nothing.
+
+**`transport.allowed_origins` extends that set rather than replacing it**, and
+takes any number of entries (`GOTHALO_ALLOWED_ORIGINS` is the comma-separated
+equivalent). Extending is what stops the obvious footgun: adding a local dev
+server would otherwise silently cut off the hosted app, and the symptom would be
+the same undiagnosable `unreachable` this whole entry is about.
+
+**`Access-Control-Allow-Credentials` is never sent.** Auth is an explicit header,
+not an ambient cookie, so there is nothing for the browser to attach on its own;
+allowing credentialed requests would widen what an allowed origin can do while
+buying nothing.
+
+Note that the WebSocket endpoints (`/events`, `/attach`, the transcript stream)
+were never affected: browsers do not preflight a WebSocket handshake, and
+`websocket.Accept` already runs with `InsecureSkipVerify: true`, so a foreign
+origin's handshake was accepted all along. Only the HTTP surface needed this.
+
+**The app names CORS as a likely cause, hedged.** A browser refuses a
+disallowed response *to the page*, so the failure reaches Dart as status 0 with
+no headers and no reason — deliberately opaque, and no probe gets around it. But
+three facts are available and together they are a strong signal: we are on the
+web, the bridge is a different origin from the page, and the request died with
+no response at all (any reply, even a `401`, proves the browser let it through).
+On that the client sets `BridgeException.corsBlocked` and the server row reads
+`blocked by bridge (CORS)` instead of `unreachable`, with the fix in the
+message. The wording stays hedged — a bridge that is simply switched off looks
+identical from a browser — because the point is to aim the reader at the right
+machine, not to claim a certainty the platform will not give us.
