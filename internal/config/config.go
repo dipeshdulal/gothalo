@@ -46,6 +46,18 @@ type Config struct {
 // Permitting the origin is not granting access: every endpoint still demands a
 // bearer, and CORS only decides whose SCRIPT may read a reply, not who may
 // authenticate. A visitor to this page with no paired token can do nothing.
+//
+// Note this is a SHARED origin — GitHub serves every repo under an account
+// from one host, so anything else published at dipeshdulal.github.io scripts
+// from here too. Acceptable only because the bearer, not the origin, is the
+// access boundary.
+//
+// A FORK gets no such convenience: its own Pages deploy lives at
+// https://<fork>.github.io and must be named in AllowedOrigins (or
+// GOTHALO_ALLOWED_ORIGINS) like any other host. Hardcoding the upstream
+// constant cannot serve them, and the bridge has no way to learn a fork's
+// origin — it is installed from a release, not built alongside the site.
+// Documented in README.md and docs/API.md so the path is discoverable.
 const DefaultAllowedOrigin = "https://dipeshdulal.github.io"
 
 // Transport selects how phones reach the bridge. "direct" listens locally

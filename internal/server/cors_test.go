@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dipeshdulal/gothalo/internal/config"
@@ -183,5 +185,64 @@ func TestOriginMatchIgnoresTrailingSlashAndCase(t *testing.T) {
 	}
 	if srv.originAllowed(pagesOrigin + ".evil.example") {
 		t.Fatal("a suffix-extended origin must not match")
+	}
+}
+
+// A rejected origin must still leave the response uncacheable-by-origin.
+// Without Vary a shared cache is free to hand one origin's answer — including
+// the allow header it did get — to a different origin later, which quietly
+// undoes the allowlist for anyone behind that cache.
+func TestVaryOriginSetEvenWhenRefused(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		origin string
+	}{
+		{"allowed", pagesOrigin},
+		{"refused", "https://evil.example"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var reached bool
+			rec := httptest.NewRecorder()
+			corsHandler(t, corsServer(pagesOrigin), &reached).ServeHTTP(rec, preflight(c.origin))
+
+			if !slices.Contains(rec.Header().Values("Vary"), "Origin") {
+				t.Fatalf("Vary = %v, want it to include Origin", rec.Header().Values("Vary"))
+			}
+		})
+	}
+}
+
+// The non-preflight half of the allowlist. A simple GET is never preflighted,
+// so it reaches the handler whatever its origin — the allowlist's only job
+// there is to withhold the header that would let the page READ the reply.
+// Covered separately because the preflight path can pass while this one leaks.
+func TestUnlistedOriginGetsNoAllowOriginOnActualRequest(t *testing.T) {
+	var reached bool
+	req := httptest.NewRequest(http.MethodGet, "/firebase-config", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	corsHandler(t, corsServer(pagesOrigin), &reached).ServeHTTP(rec, req)
+
+	if !reached {
+		t.Fatal("a simple request must still route; CORS gates the reply, not the call")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("allow-origin = %q, want none for an unlisted origin", got)
+	}
+}
+
+// Preflights advertise only methods that exist. DELETE was advertised once
+// while no route implemented it.
+func TestAdvertisedMethodsAreImplemented(t *testing.T) {
+	var reached bool
+	rec := httptest.NewRecorder()
+	corsHandler(t, corsServer(), &reached).ServeHTTP(rec, preflight(pagesOrigin))
+
+	for _, m := range strings.Split(rec.Header().Get("Access-Control-Allow-Methods"), ",") {
+		switch m = strings.TrimSpace(m); m {
+		case http.MethodGet, http.MethodPost, http.MethodOptions:
+		default:
+			t.Errorf("advertises %q, which no handler serves", m)
+		}
 	}
 }

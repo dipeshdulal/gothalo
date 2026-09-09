@@ -55,7 +55,10 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 				return
 			}
 			h := w.Header()
-			h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			// Only what handlers actually serve. Advertising a method no route
+			// implements (DELETE was here once) buys nothing and misleads
+			// anyone reading a preflight to learn the surface.
+			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 			h.Set("Access-Control-Max-Age", corsMaxAge)
 			h.Add("Vary", "Access-Control-Request-Headers")
@@ -71,6 +74,12 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 // case-insensitively (a browser lowercases both, but a hand-edited config file
 // is not obliged to) and ignoring a trailing slash, which is easy to paste in
 // from a browser bar and never appears in a real Origin header.
+//
+// Normalizing the CONFIGURED value on every comparison, not just the incoming
+// one, is what lets the two config paths stay honest about whitespace: the env
+// var is split and trimmed up front, while a JSON array is taken as written.
+// Both end up compared the same way, and a blank entry can never match because
+// callers only reach here with a non-empty Origin.
 func (s *Server) originAllowed(origin string) bool {
 	got := normalizeOrigin(origin)
 	if got == normalizeOrigin(config.DefaultAllowedOrigin) {
