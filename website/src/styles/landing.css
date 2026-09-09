@@ -249,7 +249,7 @@ dd .mono {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 16px;
-  margin: 28px 0 0;
+  margin: 28px 0 8px;
 }
 
 .cta--hero {
