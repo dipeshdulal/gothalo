@@ -1,0 +1,59 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<section class="wrap sec rule-top stack" id="web-app">
+  <h2 class="h2 display">No store. Just a URL.</h2>
+  <div>
+    <div class="prose">
+      <p class="lede">
+        The same app, built for the web and published here. Open it in a browser, point it
+        at the bridge on your own machine, and you get the same board, the same chat, the
+        same terminal. Add it to the home screen and it runs as a PWA — offline shell, push
+        and all.
+      </p>
+    </div>
+
+    <p class="cta">
+      <a class="btn" href={`${base}app/`}>Open the web app</a>
+      <span class="cta__note">Nothing to install on the phone. Set up the bridge first.</span>
+    </p>
+
+    <div class="step">
+      <h3 class="display">What it needs</h3>
+      <p>
+        A bridge running on your machine and reachable from that browser — the tailnet
+        address you would give the Android app, or <span class="mono">localhost</span> if
+        you are on the host itself. The page is static; every request it makes goes to your
+        bridge.
+      </p>
+    </div>
+
+    <div class="step">
+      <h3 class="display">Pairing</h3>
+      <p>
+        Add a server, give it the bridge URL and a bearer token — the same pairing the
+        Android build does, and the token stays in that browser. A browser is just another
+        device: <span class="mono">gothalo devices list</span> shows it and{' '}
+        <span class="mono">gothalo devices revoke</span> turns it away.
+      </p>
+    </div>
+
+    <div class="step">
+      <h3 class="display">Push, without a project of its own</h3>
+      <p>
+        This build has no Firebase project baked in. It asks the bridge it pairs with for
+        one (<span class="mono">GET /firebase-config</span>) and registers against that, so
+        one public build works for every install and no one's project values are published
+        here. The <a href={`${base}docs/guides/push/`}>push guide</a> has the setup.
+      </p>
+    </div>
+
+    <p class="note">
+      A browser calling a bridge on another origin needs that bridge to allow it, so run a
+      version recent enough to answer the preflight. A bridge built with{' '}
+      <span class="mono">./scripts/build.sh</span> also serves this app itself, at the same
+      address you pair to — same origin, nothing to allow.
+    </p>
+  </div>
+</section>

@@ -106,10 +106,12 @@ gothalo serve</code></pre>
           <pre class="block"><code>./scripts/setup-firebase.sh --project &lt;firebase-project-id&gt;
 cd app && flutter pub get && flutter build apk --release</code></pre>
           <p>
-            Or skip the build: a bridge built with{' '}
-            <span class="mono">./scripts/build.sh</span> bakes the app in and serves it as a PWA. Open the bridge URL, the same address
-            the app pairs to, in the phone's browser. The install.sh binary does not include
-            the web UI yet.
+            Or skip the build entirely and{' '}
+            <a href={`${base}app/`}>open the web app</a> — the same client, hosted, pairing
+            with your bridge (<a href="#web-app">how that works</a>). A bridge built with{' '}
+            <span class="mono">./scripts/build.sh</span> also bakes the app in and serves it
+            as a PWA from its own URL, the same address the app pairs to. The install.sh
+            binary does not include the web UI yet.
           </p>
         </div>
       </div>

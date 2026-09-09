@@ -1,10 +1,15 @@
 name: pages
 
-# Publishes the Flutter web app to GitHub Pages, served under /<repo>/.
+# One Pages site, two surfaces:
+#   /<repo>/      the Astro + Starlight site (website/)
+#   /<repo>/app/  the Flutter web build of the app (app/)
 #
-# The build carries NO Firebase project of its own: it fetches the config from
-# whichever bridge it pairs with (GET /firebase-config) and initialises against
-# that, so one public build works for every install. See docs/PUSH.md.
+# A repo has one Pages site, so both are built here and deployed as a single
+# artifact rather than two workflows taking turns overwriting each other.
+#
+# The app build carries NO Firebase project of its own: it fetches the config
+# from whichever bridge it pairs with (GET /firebase-config) and initialises
+# against that, so one public build works for every install. See docs/PUSH.md.
 on:
   push:
     branches: [main]
@@ -24,11 +29,27 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: app
+    env:
+      # Defaults follow whichever repo is running, so a fork publishes to its
+      # own Pages URL without setting anything. vars override for a custom host.
+      SITE: ${{ vars.SITE || format('https://{0}.github.io', github.repository_owner) }}
+      BASE: ${{ vars.BASE || format('/{0}', github.event.repository.name) }}
+      CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Build the site
+        working-directory: website
+        run: |
+          npm ci
+          npm run build
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.44.8"
@@ -39,14 +60,26 @@ jobs:
       # the app treats them as "no baked project" and takes the values the
       # bridge serves instead.
       - name: Seed Firebase config from templates
+        working-directory: app
         run: cp lib/core/firebase_web_options.dart.example lib/core/firebase_web_options.dart
 
-      - run: flutter pub get
+      # Mirrors astro.config.mjs: a custom domain serves the site from the
+      # root, GitHub Pages serves it under /<repo>.
+      - name: Resolve the app's base href
+        run: |
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "APP_BASE=/app/" >> "$GITHUB_ENV"
+          else
+            echo "APP_BASE=${BASE%/}/app/" >> "$GITHUB_ENV"
+          fi
 
-      # Pages serves a project site under /<repo>/, and Flutter bakes the base
-      # href in at build time — without this every asset request 404s.
-      - name: Build
-        run: flutter build web --release --base-href "/${GITHUB_REPOSITORY#*/}/"
+      - name: Build the app
+        working-directory: app
+        run: |
+          flutter pub get
+          # Flutter bakes the base href in at build time — without the right one
+          # every asset request under /app/ 404s.
+          flutter build web --release --base-href "$APP_BASE"
 
       # The worker is not part of the Flutter output (it lives with the bridge
       # assets), so it has to be placed beside index.html. The .example copy is
@@ -54,11 +87,16 @@ jobs:
       # config check, so it uses the bridge config the page stores in IndexedDB
       # — and no personal project values reach a public site.
       - name: Add the push service worker
-        run: cp ../internal/web/assets/firebase-messaging-sw.js.example build/web/firebase-messaging-sw.js
+        run: cp internal/web/assets/firebase-messaging-sw.js.example app/build/web/firebase-messaging-sw.js
+
+      - name: Place the app under the site
+        run: |
+          mkdir -p website/dist/app
+          cp -R app/build/web/. website/dist/app/
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: app/build/web
+          path: website/dist
 
   deploy:
     needs: build

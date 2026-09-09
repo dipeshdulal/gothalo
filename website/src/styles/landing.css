@@ -223,6 +223,44 @@ dd .mono {
   background: var(--g-cream);
 }
 
+/* ---------- button + call to action ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  background: var(--g-text);
+  color: var(--g-page);
+  border-radius: var(--g-radius);
+  padding: 11px 18px;
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--g-motion-fast) var(--g-ease);
+}
+
+.btn:hover {
+  background: var(--g-cream);
+  color: var(--g-page);
+}
+
+.cta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 28px 0 0;
+}
+
+.cta--hero {
+  margin: 0;
+}
+
+.cta__note {
+  font-size: 14px;
+  color: var(--g-text-quiet);
+}
+
 /* ---------- hero ---------- */
 
 .hero {
@@ -801,6 +839,11 @@ dd .mono {
   .nav__links {
     gap: 16px;
     font-size: 14px;
+  }
+
+  /* four links do not fit a phone width; the hero's own button covers this one */
+  .nav__app {
+    display: none;
   }
 
   /* the app's own backdrop: flat ground with the flock faded over it, bottom-anchored,
