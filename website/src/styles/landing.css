@@ -244,23 +244,6 @@ dd .mono {
   color: var(--g-page);
 }
 
-.cta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin: 28px 0 8px;
-}
-
-.cta--hero {
-  margin: 0;
-}
-
-.cta__note {
-  font-size: 14px;
-  color: var(--g-text-quiet);
-}
-
 /* ---------- hero ---------- */
 
 .hero {
@@ -532,6 +515,23 @@ dd .mono {
   gap: 12px;
 }
 
+/* ---------- the hosted app ---------- */
+
+.webapp {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 72px;
+  align-items: start;
+}
+
+.webapp__aside {
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 /* ---------- features ---------- */
 
 /* one window height across the row, each shot showing the part that matters */
@@ -794,7 +794,8 @@ dd .mono {
     max-width: 100%;
   }
 
-  .how {
+  .how,
+  .webapp {
     grid-template-columns: minmax(0, 1fr);
     gap: 28px;
   }
@@ -841,8 +842,8 @@ dd .mono {
     font-size: 14px;
   }
 
-  /* four links do not fit a phone width; the hero's own button covers this one */
-  .nav__app {
+  /* four do not fit a phone width, and the install command is already in view */
+  .nav__install {
     display: none;
   }
 
