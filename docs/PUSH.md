@@ -66,11 +66,12 @@ can't be committed by accident:
   served by the bridge, never in the repo)
 
 The **web** app is not bound at build time: a generically-built web client
-(GitHub Pages, a custom domain, the bridge-served PWA) fetches its bridge's
-project at pair time from `GET /firebase-config` and initialises Firebase
-against it, with the service worker reading the same values from IndexedDB.
-One web build works against any bridge; each bridge keeps serving its own
-project. Native keeps the compiled-in path exactly as before.
+(the published build at `/gothalo/app/`, a custom domain, the bridge-served
+PWA) fetches its bridge's project at pair time from `GET /firebase-config` and
+initialises Firebase against it, with the service worker reading the same
+values from IndexedDB. One web build works against any bridge; each bridge
+keeps serving its own project. Native keeps the compiled-in path exactly as
+before.
 
 Until configured, push stays silent: the app builds and runs, notifications
 just never arrive. One script generates all four from your project:
@@ -105,8 +106,9 @@ here.)
 Two things that do bite:
 
 - **The worker must be reachable from the page's base href.** Under a subpath
-  (GitHub Pages serves at `/<repo>/`) it lives beside `index.html`, and its
-  push scope covers that subtree — which is where the app is, so that's fine.
+  (the published app is at `/<repo>/app/`, the site itself at `/<repo>/`) it
+  lives beside `index.html`, and its push scope covers that subtree — which is
+  where the app is, and no wider, so the docs are outside it.
 - **API key referrer restrictions.** If you restricted the browser API key in
   the Google Cloud console (APIs & Services → Credentials), every origin you
   serve from has to be on that list. An unrestricted key needs nothing.

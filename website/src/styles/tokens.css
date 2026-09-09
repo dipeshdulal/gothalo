@@ -1,0 +1,58 @@
+/* gothalo design tokens, from docs/WEBSITE.md 7.2. Dark is the design target. */
+
+:root {
+  --g-page: #0a0e0f;
+  --g-panel: #161e20;
+  --g-panel-raised: #1f292b;
+  --g-well: #0c1112;
+  --g-hairline: rgb(255 255 255 / 20%);
+
+  --g-accent: #00bfa5;
+  --g-accent-text: #7fd9cb;
+  --g-icon-field: #0d4a45;
+
+  --g-blocked: #ff5252;
+  --g-working: #448aff;
+  --g-done: #69f0ae;
+
+  --g-text: #eceeed;
+  --g-text-muted: #c9d1cf;
+  --g-text-quiet: #a8b5b2;
+
+  --font-display: 'Young Serif', Georgia, serif;
+  --font-body: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', Menlo, monospace;
+  --font-deva: 'Noto Sans Devanagari', var(--font-body);
+
+  --g-radius-sm: 4px;
+  --g-radius: 6px;
+  --g-radius-lg: 8px;
+
+  --g-space-1: 2px;
+  --g-space-2: 4px;
+  --g-space-3: 8px;
+  --g-space-4: 12px;
+  --g-space-5: 16px;
+  --g-gutter: 12px;
+  --g-content-max: 72rem;
+
+  --g-motion-fast: 120ms;
+  --g-motion: 200ms;
+  --g-motion-slow: 320ms;
+  --g-ease: cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+:root[data-theme='light'] {
+  --g-page: #eceeed;
+  --g-panel: #fafbfa;
+  --g-panel-raised: #ffffff;
+  --g-well: #edefee;
+  --g-hairline: rgb(0 0 0 / 16%);
+
+  --g-accent-text: #00796b;
+  --g-done: #00c853;
+
+  --g-text: #0a0e0f;
+  --g-text-muted: #2c3739;
+  --g-text-quiet: #55625f;
+}

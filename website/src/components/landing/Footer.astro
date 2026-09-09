@@ -1,0 +1,15 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const repo = 'https://github.com/dipeshdulal/gothalo';
+---
+
+<footer class="wrap foot">
+  <div class="foot__links">
+    <a href={repo}>GitHub</a>
+    <a href={`${repo}/releases`}>Releases</a>
+    <a href={`${base}docs/`}>Docs</a>
+    <a href={`${repo}/security/policy`}>Security</a>
+    <a href={`${repo}/blob/main/LICENSE`}>MIT</a>
+  </div>
+  <p>An independent project. Not affiliated with Herdr, Inc., Moshi, or Tailscale Inc.</p>
+</footer>

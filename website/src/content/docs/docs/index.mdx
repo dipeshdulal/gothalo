@@ -1,0 +1,45 @@
+---
+title: Start here
+description: gothalo is a self-hosted phone remote for Herdr. What it is, what you need on the host, and where to go next.
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+export const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+gothalo is a self-hosted mobile remote for [Herdr](https://herdr.dev) — control your
+coding agents (Claude Code, Codex, Gemini, Cursor, and the rest) from your phone: see which
+agents are blocked, working or done, get pushed when one needs you, approve or type a
+reply, and drop into a full terminal, all over your own Tailscale network. It is a small Go
+bridge on the Herdr host plus a Flutter app. MIT, no account, no relay.
+
+## Prerequisites
+
+- A **Herdr host**: the machine your agents already run on, macOS or Linux.
+- **Tailscale** on that host and on the phone. The tailnet is the auth boundary; gothalo
+  opens no public ports.
+- Herdr's **agent integration installed for every agent kind you run**, or the transcript
+  view shows one agent's conversation under another:
+
+  ```bash
+  herdr integration install claude   # likewise: hermes, codex, opencode, ...
+  ```
+
+- Optional, for push: your own **Firebase project**. Push stays inert without one.
+
+## Where to go next
+
+<CardGrid>
+  <Card title="Install">
+    Install the bridge, run it on the tailnet, pair a phone, get the app.
+    <a href={`${base}/docs/install/`}>Install</a>
+  </Card>
+  <Card title="Push">
+    Notifications are outbound-only through a Firebase project you own. Every fork needs
+    its own. <a href={`${base}/docs/guides/push/`}>Push notifications</a>
+  </Card>
+  <Card title="Contracts">
+    The wire format the app codes against: the `/events` stream, and one contract per
+    endpoint. <a href={`${base}/docs/contracts/events/`}>Contracts</a>
+  </Card>
+</CardGrid>
