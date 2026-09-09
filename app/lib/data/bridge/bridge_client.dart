@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../core/connection/connection.dart';
 import 'models/snapshot.dart';
@@ -980,10 +981,20 @@ class BrowseListing {
 /// couldn't parse. Carries a human message for the UI and the status code when
 /// there was one (e.g. 401 bad token, 502 bridge daemon not running).
 class BridgeException implements Exception {
-  BridgeException(this.message, {this.statusCode});
+  BridgeException(this.message, {this.statusCode, this.corsBlocked = false});
 
   final String message;
   final int? statusCode;
+
+  /// The browser refused this request before it ever left the tab, because the
+  /// bridge did not name this page's origin as allowed.
+  ///
+  /// Worth a flag of its own rather than just prose, because it is the one
+  /// failure that looks exactly like an unreachable server and is fixed
+  /// somewhere completely different — a config line on the bridge, not the
+  /// network. See [_asBridgeException] for why it can only ever be a strong
+  /// inference.
+  final bool corsBlocked;
 
   bool get isAuth => statusCode == 401 || statusCode == 403;
   bool get isBridgeDown => statusCode == 502 || statusCode == 503;
@@ -1732,6 +1743,25 @@ class BridgeClient {
 
   BridgeException _asBridgeException(DioException e) {
     final code = e.response?.statusCode;
+
+    // A browser refuses a disallowed cross-origin response *to the page*, so
+    // the failure arrives here indistinguishable from a dead network: status 0,
+    // no headers, no reason. That opacity is deliberate on the browser's part
+    // and there is no probe that gets around it — so this is an inference from
+    // the only three facts available, and the wording stays hedged because of
+    // it. It is a strong inference: on the same tailnet a cross-origin call
+    // that fails instantly with nothing attached is far more often a missing
+    // allowed_origins entry than a machine that just went down.
+    if (_looksCorsBlocked(e)) {
+      return BridgeException(
+        'The browser blocked this before it reached the bridge — most likely '
+        'CORS. Add "$_pageOrigin" to allowed_origins in ~/.gothalo/config.json '
+        'on that machine and restart it. (If the bridge is simply off, that '
+        'looks identical from a browser.)',
+        corsBlocked: true,
+      );
+    }
+
     final message = switch (e.type) {
       DioExceptionType.connectionTimeout ||
       DioExceptionType.receiveTimeout ||
@@ -1747,4 +1777,35 @@ class BridgeClient {
     };
     return BridgeException(message, statusCode: code);
   }
+
+  /// The three conditions that together make CORS the likely explanation:
+  /// we are in a browser (nothing else enforces origins), the bridge is a
+  /// different origin from the page (same-origin is never blocked), and the
+  /// request died with no response at all (a reply that arrived — even a 401 —
+  /// proves the browser let it through).
+  bool _looksCorsBlocked(DioException e) {
+    if (!kIsWeb || e.response != null) return false;
+    final failedAtTransport =
+        e.type == DioExceptionType.connectionError ||
+        e.type == DioExceptionType.unknown;
+    return failedAtTransport && _isCrossOrigin;
+  }
+
+  bool get _isCrossOrigin {
+    final target = _originOf(connection.baseUrl);
+    return target != null && _pageOrigin != null && target != _pageOrigin;
+  }
+
+  /// `Uri.origin` throws on anything that is not http(s) with a host, which a
+  /// hand-typed base URL can easily be.
+  static String? _originOf(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.isScheme('http') && !uri.isScheme('https')) {
+      return null;
+    }
+    return uri.host.isEmpty ? null : uri.origin;
+  }
+
+  /// Null off the web, where [Uri.base] is a filesystem path rather than a page.
+  static String? get _pageOrigin => kIsWeb ? _originOf(Uri.base.toString()) : null;
 }

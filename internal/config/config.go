@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config is the resolved runtime configuration.
@@ -37,6 +38,16 @@ type Config struct {
 	Push      Push      `json:"push"`
 }
 
+// DefaultAllowedOrigin is the project's published web build. It is allowed to
+// call the API cross-origin without configuration, because it is the UI this
+// bridge is built to serve and requiring every install to discover and paste
+// the same constant only converts a working setup into a support question.
+//
+// Permitting the origin is not granting access: every endpoint still demands a
+// bearer, and CORS only decides whose SCRIPT may read a reply, not who may
+// authenticate. A visitor to this page with no paired token can do nothing.
+const DefaultAllowedOrigin = "https://dipeshdulal.github.io"
+
 // Transport selects how phones reach the bridge. "direct" listens locally
 // (tailnet/LAN/localhost); "relay" (later) dials out to a hosted broker.
 type Transport struct {
@@ -46,6 +57,21 @@ type Transport struct {
 	// tailnet HTTPS URL from `tailscale serve`). It is embedded in the pairing
 	// QR. Empty means pairing can't hand out a reachable URL.
 	PublicURL string `json:"public_url"`
+
+	// AllowedOrigins lists ADDITIONAL browser origins permitted to call the API
+	// cross-origin, as exact scheme://host[:port] strings.
+	//
+	// Needed when the web UI is hosted somewhere other than the bridge. A
+	// browser then sends a preflight OPTIONS carrying no credentials, which
+	// every authenticated handler here rejects, so without an entry the request
+	// never reaches the real endpoint and the app reports the server as
+	// unreachable.
+	//
+	// The project's own published UI (DefaultAllowedOrigin) is always permitted
+	// on top of whatever this lists, so adding an origin here — a local dev
+	// server, a fork's Pages site — extends the set rather than replacing it and
+	// cannot silently cut off the hosted app.
+	AllowedOrigins []string `json:"allowed_origins"`
 }
 
 // Push holds Firebase Cloud Messaging settings.
@@ -126,6 +152,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("GOTHALO_PUBLIC_URL"); v != "" {
 		cfg.Transport.PublicURL = v
 	}
+	if v := os.Getenv("GOTHALO_ALLOWED_ORIGINS"); v != "" {
+		cfg.Transport.AllowedOrigins = splitList(v)
+	}
 	if v := os.Getenv("GOTHALO_SERVER_NAME"); v != "" {
 		cfg.ServerName = v
 	}
@@ -138,6 +167,19 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// splitList parses a comma-separated environment value, dropping blanks so a
+// trailing comma or a stray space does not become an empty origin that matches
+// a request whose Origin header is absent.
+func splitList(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // EnsureDataDir creates the data directory (0700) if it does not exist.

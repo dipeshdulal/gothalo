@@ -10,6 +10,7 @@ import '../../core/widgets/action_chip.dart';
 import '../../core/widgets/app_mark.dart';
 import '../../core/widgets/entrance.dart';
 import '../../core/widgets/panel_row.dart';
+import '../../data/bridge/bridge_client.dart' show BridgeException;
 import '../../data/bridge/models/snapshot.dart';
 import '../agents/agent_groups.dart';
 import 'add_edit_server_sheet.dart';
@@ -837,9 +838,17 @@ class _StatsLine extends StatelessWidget {
       );
     }
     if (!summary!.ok) {
-      return Text(
-        'unreachable',
-        style: TextStyle(color: scheme.error, fontSize: 11.5),
+      // "unreachable" points at the network, and for a CORS block the network
+      // is fine and the fix is a config line on the bridge — sending someone to
+      // check their tailnet for that is sending them to the wrong machine.
+      final error = summary!.error;
+      final blocked = error is BridgeException && error.corsBlocked;
+      return Tooltip(
+        message: error is BridgeException ? error.message : '',
+        child: Text(
+          blocked ? 'blocked by bridge (CORS)' : 'unreachable',
+          style: TextStyle(color: scheme.error, fontSize: 11.5),
+        ),
       );
     }
     final count = summary!.agents.length;
