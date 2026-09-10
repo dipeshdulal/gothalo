@@ -38,6 +38,11 @@ const _brands = <String, AgentBrand>{
     color: Color(0xFFD8B45C),
     label: 'Hermes',
   ),
+  'opencode': AgentBrand(
+    asset: 'assets/agents/opencode.png',
+    color: Color(0xFFD0CECC),
+    label: 'opencode',
+  ),
   'gemini': AgentBrand(color: Color(0xFF4285F4), label: 'Gemini'),
   'cursor': AgentBrand(color: Color(0xFF9AA0A6), label: 'Cursor'),
   'copilot': AgentBrand(color: Color(0xFF8957E5), label: 'Copilot'),
