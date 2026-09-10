@@ -38,6 +38,45 @@ import 'transcript_models.dart';
 /// Where the transcript socket is in its lifecycle, for the app-bar dot.
 enum _Conn { connecting, connected, disconnected, closed, failed }
 
+/// What a transcript endpoint's HTTP status means for the screen.
+///
+/// `/agent-transcript` resolves the pane, its kind and its session BEFORE it
+/// upgrades the socket, so a status here is a verdict about the conversation
+/// rather than transport noise — which is what makes acting on one safe.
+enum TranscriptVerdict {
+  /// Transport trouble or a bridge that is briefly down: keep reconnecting.
+  retry,
+
+  /// Permanent and worth stating, because dropping to the terminal would not
+  /// fix it either (a rejected token) or would bury it (a server-side read
+  /// that failed, which is a bug someone should see).
+  explain,
+
+  /// This pane has no readable conversation, but its PTY is still there.
+  useTerminal,
+}
+
+/// The screen's response to [status]. Shared by both paths that learn one — the
+/// pre-upgrade handshake error and the plain-HTTP probe — so they cannot drift
+/// into disagreeing about what a status means.
+TranscriptVerdict transcriptVerdictFor(int status) => switch (status) {
+  404 => TranscriptVerdict.useTerminal,
+  401 || 403 || 500 => TranscriptVerdict.explain,
+  _ => TranscriptVerdict.retry,
+};
+
+/// What to tell the user about a transcript that failed with [status], for the
+/// cases where the bridge sent no usable sentence of its own.
+String transcriptFailureMessage(int status) => switch (status) {
+  401 || 403 =>
+    'Not authorized for this transcript. The bearer token was rejected.',
+  404 =>
+    'No transcript for this pane. This agent kind may not support a chat '
+        'view yet — open the raw terminal instead.',
+  500 => 'The bridge failed to read the transcript for this pane.',
+  _ => 'The bridge could not open a transcript for this pane.',
+};
+
 /// The destructive per-agent actions in the chat's overflow menu.
 enum _AgentLifecycleAction { restart, stop }
 
@@ -51,8 +90,11 @@ enum _AgentLifecycleAction { restart, stop }
 /// de-duped on `seq`; a `tool_call` is merged with its `tool_result`
 /// (correlated on `tool.id == result.for_id`) into one collapsed row, and runs
 /// of consecutive tool calls group into an indented ledger under the assistant
-/// message. A permanent pre-upgrade error (e.g. codex/opencode → 404
-/// "transcript not supported") shows a message instead of reconnecting forever.
+/// message. A permanent pre-upgrade error stops the reconnect loop instead of
+/// retrying forever; a 404 specifically — the bridge saying this pane has no
+/// readable conversation — replaces this screen with the raw [TerminalScreen],
+/// since the PTY can always be read and is what the user would have tapped
+/// through to anyway.
 class TranscriptScreen extends ConsumerStatefulWidget {
   const TranscriptScreen({
     super.key,
@@ -562,21 +604,21 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
   }
 
   /// Ask the bridge, over plain HTTP, why the WebSocket handshake keeps being
-  /// rejected — and return its own explanation.
+  /// rejected — and return its status plus its own explanation.
   ///
   /// Dart's WebSocket client reports a rejected upgrade as a bare "not upgraded
   /// to websocket" with no status and no body, so the reason the bridge sent is
-  /// unreachable from the handshake (see [_permanentFailureMessage]). The same
-  /// URL fetched without an Upgrade header answers with the real status and a
+  /// unreachable from the handshake (see [_permanentFailure]). The same URL
+  /// fetched without an Upgrade header answers with the real status and a
   /// sentence saying what is wrong, because the endpoint deliberately fails
   /// BEFORE upgrading.
   ///
-  /// Worth the extra round trip only once retries are exhausted. Guessing
-  /// instead — the previous behaviour — told operators their agent kind "may not
-  /// support a chat view" when the truth was that the agent was sitting on a
-  /// trust prompt and had not reported its session id yet, which sends them to
-  /// debug entirely the wrong thing.
-  Future<String?> _serverFailureReason(Connection c) async {
+  /// The status matters as much as the prose: a 404 is the bridge saying this
+  /// pane has no readable conversation, which is what [_bounceToTerminal] acts
+  /// on. Null means the probe itself did not land, which is not a verdict.
+  Future<({int status, String? message})?> _serverFailureReason(
+    Connection c,
+  ) async {
     try {
       final ws = _transcriptUri(c);
       final probe = ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http');
@@ -590,15 +632,34 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
           validateStatus: (_) => true,
         ),
       );
+      final status = res.statusCode ?? 0;
       final body = (res.data ?? '').trim();
-      if (body.isEmpty || body.length > 300) return null;
-      // Go's default mux 404 explains nothing; only pass on a message the
-      // endpoint actually wrote.
-      if (body.toLowerCase() == '404 page not found') return null;
-      return body;
+      // Go's default mux 404 explains nothing, and an essay is not a message;
+      // in both cases keep the status and drop the prose.
+      final usable =
+          body.isNotEmpty &&
+          body.length <= 300 &&
+          body.toLowerCase() != '404 page not found';
+      return (status: status, message: usable ? body : null);
     } catch (_) {
       return null;
     }
+  }
+
+  /// Whether dropping to the raw PTY is a fair substitute for this view.
+  ///
+  /// It is for a pane's own transcript. It is not for a delegated one: the
+  /// pane's terminal shows the PARENT session, so bouncing there would quietly
+  /// answer a different question than the one that was asked.
+  bool get _canFallBackToTerminal => widget.subagent.isEmpty;
+
+  /// Replace this screen with the pane's raw terminal.
+  ///
+  /// `pushReplacement`, not `push`: a transcript the bridge has already refused
+  /// is not somewhere Back should land the user back on.
+  void _bounceToTerminal() {
+    if (!mounted) return;
+    context.pushReplacement('/terminal/${Uri.encodeComponent(widget.pane)}');
   }
 
   Future<void> _connect() async {
@@ -634,11 +695,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     } catch (e) {
       // A pre-upgrade HTTP error (401/404/500/502) means the socket never
       // opened. Some of these are permanent — don't reconnect into them.
-      final permanent = _permanentFailureMessage(e);
-      if (permanent != null) {
+      final status = _permanentFailureStatus(e);
+      if (status != null) {
+        if (transcriptVerdictFor(status) == TranscriptVerdict.useTerminal &&
+            _canFallBackToTerminal) {
+          _bounceToTerminal();
+          return;
+        }
         if (mounted) {
           setState(() {
-            _failure = permanent;
+            _failure = transcriptFailureMessage(status);
             _conn = _Conn.failed;
           });
         }
@@ -835,15 +901,38 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
       return;
     }
 
-    // Retries are exhausted and the pane still exists, so the bridge is
+    // The pane still exists but the socket will not open, so the bridge is
     // refusing this transcript for a reason it can state. Ask it rather than
     // guess — see _serverFailureReason.
-    if (_attempts >= _maxSilentAttempts && _failure == null) {
-      final reason = await _serverFailureReason(client.connection);
+    //
+    // Probed on the FIRST failure while no transcript has ever arrived, rather
+    // than after the whole retry budget: a 404 on a live pane is a verdict, not
+    // a blip, and the user should reach the terminal in one round trip instead
+    // of watching a spinner through ~15s of backoff first. Once a backlog HAS
+    // arrived, a drop is an ordinary reconnect and keeps the old patience.
+    if (_failure == null &&
+        (!_sawBacklogComplete || _attempts >= _maxSilentAttempts)) {
+      final probe = await _serverFailureReason(client.connection);
       if (_disposed) return;
-      if (reason != null) {
+      // A probe that did not land is not a verdict — fall through and retry.
+      final verdict = probe == null
+          ? TranscriptVerdict.retry
+          : transcriptVerdictFor(probe.status);
+      if (verdict != TranscriptVerdict.retry) {
         _reconnectTimer?.cancel();
-        if (mounted) setState(() => _failure = reason);
+        // "This pane has no readable conversation" — but its PTY is still
+        // there, so send the user somewhere useful instead of to a notice
+        // whose only real action is the button they would tap anyway.
+        if (verdict == TranscriptVerdict.useTerminal && _canFallBackToTerminal) {
+          _bounceToTerminal();
+          return;
+        }
+        if (mounted) {
+          setState(
+            () => _failure =
+                probe!.message ?? transcriptFailureMessage(probe.status),
+          );
+        }
         return;
       }
     }
@@ -853,20 +942,14 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     _reconnectTimer = Timer(delay, _connect);
   }
 
-  /// Map a pre-upgrade handshake error to a human message when it's permanent
-  /// (so we stop retrying); returns null for a transient drop worth retrying.
-  String? _permanentFailureMessage(Object error) {
+  /// The status carried by a pre-upgrade handshake error, when it is permanent
+  /// (so we stop retrying); null for a transient drop worth a retry.
+  int? _permanentFailureStatus(Object error) {
     final text = error.toString();
-    final code = RegExp(r'\b(4\d\d|5\d\d)\b').firstMatch(text)?.group(1);
-    return switch (code) {
-      '401' || '403' =>
-        'Not authorized for this transcript. The bearer token was rejected.',
-      '404' =>
-        "No transcript for this pane. This agent kind may not support a chat "
-            "view yet — open the raw terminal instead.",
-      '500' => 'The bridge failed to read the transcript for this pane.',
-      _ => null, // 502 and unknown errors: transient, let the reconnect retry
-    };
+    final digits = RegExp(r'\b(4\d\d|5\d\d)\b').firstMatch(text)?.group(1);
+    final code = int.tryParse(digits ?? '');
+    if (code == null) return null;
+    return transcriptVerdictFor(code) == TranscriptVerdict.retry ? null : code;
   }
 
   void _onScroll() {
@@ -1245,8 +1328,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     if (!_backlogComplete) {
       // Give up spinning after a few failed handshakes. Dart's WebSocket client
       // reports a rejected upgrade as a bare "not upgraded to websocket" with no
-      // HTTP status, so _permanentFailureMessage cannot recognise a 404 and the
-      // reconnect loop would otherwise sit behind this spinner forever.
+      // HTTP status, so _permanentFailure cannot recognise a 404 from the
+      // handshake alone and the reconnect loop would sit behind this spinner
+      // forever. The eager probe in _checkGoneThenReconnect normally resolves
+      // that within a round trip; this is the net for a bridge that fails the
+      // upgrade without answering a plain GET the same way.
       if (_attempts >= _maxSilentAttempts) {
         return _CenteredNotice(
           icon: Icons.chat_bubble_outline,
