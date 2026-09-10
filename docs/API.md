@@ -359,6 +359,37 @@ pane, or one Herdr reports no cwd for · `405` non-POST · `413` over the cap ·
 `502` herdr command failed.
 Full details in [`CONTRACT-image.md`](./CONTRACT-image.md).
 
+## POST /file — attach a document to a prompt
+`POST /image` for documents: same raw-bytes wire format, same no-filename
+rule, same response shape — a **pdf, docx or pptx** lands in
+`<pane cwd>/.gothalo/files/` and the returned absolute path is what the app
+inserts into the composer (and, as ever, does **not** send).
+```
+POST /file?pane=wN:p2
+Authorization: Bearer <bearer>
+Content-Type: application/octet-stream
+
+<raw document bytes>
+```
+Response `200`:
+```json
+{ "path": "/Users/dipesh/projects/gothalo/.gothalo/files/20260910-142530-9f86d081.pdf",
+  "relative_path": ".gothalo/files/20260910-142530-9f86d081.pdf",
+  "content_type": "application/pdf",
+  "bytes": 1843200 }
+```
+Capped at **25 MiB** inclusive — documents run larger than screenshots. The
+type is decided from the bytes alone: a PDF by its magic, the OOXML pair by
+opening the zip container and classifying the package parts inside (`word/…`
+→ `.docx`, `ppt/…` → `.pptx`). A plain zip, an xlsx, or anything else is a
+`415`; so are legacy `.doc`/`.ppt`, whose shared OLE container can't be told
+apart cheaply — the error says to convert first. Same drop-directory hygiene
+and retention as images, in a sibling directory.
+
+Errors: as `/image`, with the 25 MiB cap behind the `413` and the document
+allowlist behind the `415`.
+Full details in [`CONTRACT-file.md`](./CONTRACT-file.md).
+
 ## GET /commands — slash commands for the composer typeahead
 What the pane's agent will **actually accept** after a `/`, so the phone offers a
 list instead of asking the user to recall and thumb-type `/compact`.
