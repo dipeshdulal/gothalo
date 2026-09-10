@@ -68,7 +68,7 @@ void main() {
     // The strip names what is going out — a 20MB deck takes long enough that
     // "image" would read as the wrong upload.
     testWidgets('says document when a document is uploading', (tester) async {
-      final controller = _StubController(kind: 'document')
+      final controller = _StubController('document')
         ..setUploading(sent: 512 * 1024, total: 2 * 1024 * 1024);
       addTearDown(controller.dispose);
       await _pumpStatus(tester, controller);
@@ -99,7 +99,7 @@ void main() {
 /// which a widget test has — but the strip's job is to render the numbers, and
 /// those are what this pins.
 class _StubController extends ImageAttachController {
-  _StubController({String kind = 'image'}) : _kind = kind;
+  _StubController([this._kind = 'image']);
 
   final String _kind;
   bool _uploading = false;
