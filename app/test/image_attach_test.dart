@@ -65,6 +65,17 @@ void main() {
       expect(bar.value, closeTo(0.25, 0.001));
     });
 
+    // The strip names what is going out — a 20MB deck takes long enough that
+    // "image" would read as the wrong upload.
+    testWidgets('says document when a document is uploading', (tester) async {
+      final controller = _StubController('document')
+        ..setUploading(sent: 512 * 1024, total: 2 * 1024 * 1024);
+      addTearDown(controller.dispose);
+      await _pumpStatus(tester, controller);
+
+      expect(find.text('Uploading document… 0.5MB of 2.0MB'), findsOneWidget);
+    });
+
     // The failure latches in place — a snackbar disappears while the user is
     // still deciding whether the upload is worth another try.
     testWidgets('holds a failure until it is dismissed', (tester) async {
@@ -88,6 +99,9 @@ void main() {
 /// which a widget test has — but the strip's job is to render the numbers, and
 /// those are what this pins.
 class _StubController extends ImageAttachController {
+  _StubController([this._kind = 'image']);
+
+  final String _kind;
   bool _uploading = false;
   int _sent = 0;
   int _total = 0;
@@ -99,6 +113,8 @@ class _StubController extends ImageAttachController {
     notifyListeners();
   }
 
+  @override
+  String get kind => _kind;
   @override
   bool get uploading => _uploading;
   @override

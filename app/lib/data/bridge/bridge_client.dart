@@ -1753,6 +1753,97 @@ class BridgeClient {
     return _asBridgeException(e);
   }
 
+  /// The largest upload `POST /file` accepts (25 MiB, inclusive) — mirrors
+  /// `imagedrop.MaxDocumentBytes` on the bridge. Documents run larger than
+  /// screenshots, hence the higher cap; the client-side check exists for the
+  /// same reason as [maxImageBytes].
+  static const int maxFileBytes = 25 * 1024 * 1024;
+
+  /// `POST /file?pane=…` with the raw bytes → the absolute path the bridge
+  /// wrote inside that pane's working directory. [uploadImage] for documents
+  /// (pdf, docx, pptx): same raw-bytes wire format — the bridge classifies
+  /// the bytes itself, a filename never crosses the wire — same progress and
+  /// timeout reasoning, different allowlist and cap.
+  Future<ImageDrop> uploadFile(
+    String pane,
+    List<int> bytes, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    if (bytes.isEmpty) {
+      throw BridgeException('That file is empty.');
+    }
+    if (bytes.length > maxFileBytes) {
+      final mb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
+      throw BridgeException(
+        'That file is ${mb}MB — the limit is '
+        '${maxFileBytes ~/ (1024 * 1024)}MB.',
+      );
+    }
+    try {
+      // Typed `dynamic` for the same reason as uploadImage: shape-check the
+      // body so every failure surfaces as a BridgeException.
+      final res = await _dio.post<dynamic>(
+        '/file',
+        data: Stream.fromIterable([bytes]),
+        queryParameters: {'pane': pane},
+        onSendProgress: onProgress,
+        options: Options(
+          headers: {
+            Headers.contentTypeHeader: 'application/octet-stream',
+            // The bridge's over-cap fast path keys off Content-Length; a raw
+            // stream would otherwise go out chunked and unlengthed.
+            Headers.contentLengthHeader: bytes.length,
+          },
+          sendTimeout: const Duration(seconds: 90),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
+      final data = res.data;
+      if (data is! Map) {
+        throw BridgeException('The bridge returned an unexpected response.');
+      }
+      final body = Map<String, dynamic>.from(data);
+      final path = body['path'] as String?;
+      if (path == null || path.isEmpty) {
+        throw BridgeException(
+          'The bridge stored the file but returned no path.',
+        );
+      }
+      return ImageDrop(
+        path: path,
+        relativePath: (body['relative_path'] as String?) ?? path,
+        contentType: (body['content_type'] as String?) ?? '',
+        bytes: (body['bytes'] as num?)?.toInt() ?? bytes.length,
+      );
+    } on DioException catch (e) {
+      throw _asFileException(e);
+    }
+  }
+
+  /// [uploadFile]'s error mapping, mirroring [_asImageException]: `/file`'s
+  /// `404` also means an old bridge, and its refusals deserve words a user can
+  /// act on.
+  BridgeException _asFileException(DioException e) {
+    final code = e.response?.statusCode;
+    final message = switch (code) {
+      404 =>
+        'This bridge is too old to accept documents. Update it and try again.',
+      413 => 'That file is too large for the bridge (25MB limit).',
+      415 =>
+        'That file isn\'t a PDF, Word document (.docx) or PowerPoint '
+            '(.pptx). Legacy .doc/.ppt need converting first.',
+      _ => null,
+    };
+    if (message != null) return BridgeException(message, statusCode: code);
+    if (e.type == DioExceptionType.sendTimeout) {
+      return BridgeException(
+        'Upload timed out. The tailnet may be slow — try again.',
+        statusCode: code,
+      );
+    }
+    return _asBridgeException(e);
+  }
+
   BridgeException _asBridgeException(DioException e) {
     final code = e.response?.statusCode;
 

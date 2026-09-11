@@ -1,5 +1,5 @@
-// Package imagedrop lands an uploaded image inside an agent's working directory
-// and hands back the absolute path it wrote.
+// Package imagedrop lands an uploaded image — or document — inside an agent's
+// working directory and hands back the absolute path it wrote.
 //
 // The whole feature rests on one property of coding agents: give Claude Code (or
 // Codex, or opencode) a *path* to an image file and it reads the image. So the
@@ -7,6 +7,10 @@
 // a new capability — the bridge only has to put the bytes somewhere the agent
 // can reach and say where that is. The app then types the path into the composer
 // like any other prompt text.
+//
+// Documents (POST /file — pdf, docx, pptx) ride the same mechanism end to end:
+// same tree, same naming, same retention. They differ only in what Detect
+// accepts, where under .gothalo/ they land, and the size cap.
 //
 // "Somewhere the agent can reach" is why this writes under the agent's own cwd
 // rather than a temp dir: agents are scoped to their working directory and
@@ -21,6 +25,8 @@
 package imagedrop
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -83,8 +89,35 @@ var imageExts = map[string]string{
 	"image/webp": ".webp",
 }
 
-// Result is the POST /image response: where the image landed, and what the
-// bridge decided it was.
+// MaxDocumentBytes caps one document upload. Documents run larger than
+// screenshots — a slide deck full of images clears 10 MiB without trying — but
+// the handler still buffers the whole body, so the cap stays a deliberate
+// memory bound rather than a formality.
+const MaxDocumentBytes = 25 << 20 // 25 MiB
+
+// docDropDir is where documents land, relative to the agent's cwd — a sibling
+// of the images directory under the same disposable .gothalo/ root.
+const docDropDir = ".gothalo/files"
+
+// Errors the /file handler maps to status codes: 413 and 415.
+var (
+	ErrDocumentTooLarge    = fmt.Errorf("document exceeds the %d MiB limit", MaxDocumentBytes>>20)
+	ErrUnsupportedDocument = errors.New("unsupported document type: want pdf, docx, or pptx (legacy .doc/.ppt: convert first)")
+)
+
+// docExts is the document allowlist, content type -> extension. Only formats a
+// coding agent can usefully read from a path are here; xlsx and the other OOXML
+// siblings stay off until someone needs them. The pdf type comes straight from
+// the sniffer; the OOXML pair is decided by classifyZip, since every OOXML file
+// sniffs as a plain zip.
+var docExts = map[string]string{
+	"application/pdf": ".pdf",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   ".docx",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+}
+
+// Result is the POST /image and POST /file response: where the upload landed,
+// and what the bridge decided it was.
 type Result struct {
 	// Path is absolute — what the app inserts into the composer, and what the
 	// agent opens. Absolute rather than relative because the agent's cwd is not
@@ -115,6 +148,50 @@ func Detect(data []byte) (contentType, ext string, err error) {
 	return ct, ext, nil
 }
 
+// DetectDocument validates a document upload and reports the type and the
+// extension that follows from it. The same no-filename rule as images, with one
+// extra step: a pdf announces itself in its magic bytes, but every OOXML file
+// sniffs as a bare zip, so the container has to be opened and classified by
+// what it holds. A zip is a .docx because it contains Word's parts — never
+// because of anything the client said.
+func DetectDocument(data []byte) (contentType, ext string, err error) {
+	if len(data) == 0 {
+		return "", "", ErrEmpty
+	}
+	if len(data) > MaxDocumentBytes {
+		return "", "", ErrDocumentTooLarge
+	}
+	ct := http.DetectContentType(data)
+	if ct == "application/zip" {
+		ct = classifyZip(data)
+	}
+	dext, ok := docExts[ct]
+	if !ok {
+		return ct, "", ErrUnsupportedDocument
+	}
+	return ct, dext, nil
+}
+
+// classifyZip decides which Office document a zip is, by the package parts it
+// carries: word/ means a .docx, ppt/ a .pptx. Anything else — a plain archive,
+// an xlsx, a zip too corrupt to open — keeps the generic type and is rejected
+// by the allowlist above.
+func classifyZip(data []byte) string {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "application/zip"
+	}
+	for _, f := range zr.File {
+		switch {
+		case strings.HasPrefix(f.Name, "word/"):
+			return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+		case strings.HasPrefix(f.Name, "ppt/"):
+			return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+		}
+	}
+	return "application/zip"
+}
+
 // Save writes data into <cwd>/.gothalo/images and returns where it landed. now
 // is injected rather than read from the clock so the produced name — and the
 // retention sweep that follows the write — are deterministic.
@@ -132,15 +209,32 @@ func Save(cwd string, data []byte, now time.Time) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	return save(cwd, dropDir, data, ct, ext, now)
+}
+
+// SaveDocument is Save for documents: same naming, same atomic write, same
+// retention sweep, landing in .gothalo/files instead of .gothalo/images.
+func SaveDocument(cwd string, data []byte, now time.Time) (Result, error) {
+	ct, ext, err := DetectDocument(data)
+	if err != nil {
+		return Result{}, err
+	}
+	return save(cwd, docDropDir, data, ct, ext, now)
+}
+
+// save is the shared write path: everything after detection is identical for
+// images and documents, differing only in which directory under .gothalo/ the
+// bytes land in.
+func save(cwd, relDir string, data []byte, ct, ext string, now time.Time) (Result, error) {
 	if !filepath.IsAbs(cwd) {
 		// An agent with no resolvable cwd (or a relative one) would send us
 		// writing into the bridge's own process directory. Refuse instead.
 		return Result{}, fmt.Errorf("agent has no absolute working directory (%q)", cwd)
 	}
 
-	dir := filepath.Join(cwd, filepath.FromSlash(dropDir))
+	dir := filepath.Join(cwd, filepath.FromSlash(relDir))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Result{}, fmt.Errorf("create %s: %w", dropDir, err)
+		return Result{}, fmt.Errorf("create %s: %w", relDir, err)
 	}
 	if err := ensureIgnored(filepath.Dir(dir)); err != nil {
 		return Result{}, err
@@ -155,32 +249,32 @@ func Save(cwd string, data []byte, now time.Time) (Result, error) {
 	// guarantee it never opens a half-written image.
 	tmp, err := os.CreateTemp(dir, ".upload-*")
 	if err != nil {
-		return Result{}, fmt.Errorf("create temp image: %w", err)
+		return Result{}, fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return Result{}, fmt.Errorf("write image: %w", err)
+		return Result{}, fmt.Errorf("write file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		return Result{}, fmt.Errorf("write image: %w", err)
+		return Result{}, fmt.Errorf("write file: %w", err)
 	}
 	if err := os.Chmod(tmpName, 0o644); err != nil {
 		os.Remove(tmpName)
-		return Result{}, fmt.Errorf("write image: %w", err)
+		return Result{}, fmt.Errorf("write file: %w", err)
 	}
 	if err := os.Rename(tmpName, full); err != nil {
 		os.Remove(tmpName)
-		return Result{}, fmt.Errorf("write image: %w", err)
+		return Result{}, fmt.Errorf("write file: %w", err)
 	}
 
 	Prune(dir, now)
 
 	return Result{
 		Path:         full,
-		RelativePath: filepath.ToSlash(filepath.Join(filepath.FromSlash(dropDir), name)),
+		RelativePath: filepath.ToSlash(filepath.Join(filepath.FromSlash(relDir), name)),
 		ContentType:  ct,
 		Bytes:        len(data),
 	}, nil
@@ -256,7 +350,7 @@ func parseDropName(name string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	ext := filepath.Ext(name)
-	if _, ok := imageExts[extType(ext)]; !ok {
+	if extType(ext) == "" {
 		return time.Time{}, false
 	}
 	if !strings.HasPrefix(name[len(nameTimeLayout):], "-") {
@@ -269,12 +363,16 @@ func parseDropName(name string) (time.Time, bool) {
 	return at, true
 }
 
-// extType is the reverse of imageExts — an extension back to its content type,
-// used only to recognise our own files during a prune.
+// extType is the reverse of the allowlists — an extension back to its content
+// type, used only to recognise our own files during a prune. It spans both
+// kinds: each drop directory only ever holds its own, so recognising the union
+// changes nothing about what a sweep may touch.
 func extType(ext string) string {
-	for ct, e := range imageExts {
-		if e == ext {
-			return ct
+	for _, exts := range []map[string]string{imageExts, docExts} {
+		for ct, e := range exts {
+			if e == ext {
+				return ct
+			}
 		}
 	}
 	return ""

@@ -1,12 +1,13 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:image_picker/image_picker.dart';
 
 import '../../data/bridge/bridge_client.dart';
 
-/// Pick an image, upload it to a pane, hand back the path the bridge wrote —
-/// the one copy of that flow, shared by the transcript composer and the
-/// terminal's accessory bar.
+/// Pick an image — or a document — upload it to a pane, hand back the path
+/// the bridge wrote — the one copy of that flow, shared by the transcript
+/// composer and the terminal's accessory bar.
 ///
 /// The path IS the attachment. Coding agents read an image when handed a file
 /// path, so once the bytes are inside the pane's own working directory (the
@@ -27,9 +28,14 @@ class ImageAttachController extends ChangeNotifier {
   int _total = 0;
   String? _error;
   bool _disposed = false;
+  String _kind = 'image';
 
   /// True from the moment bytes start going out until the path comes back.
   bool get uploading => _uploading;
+
+  /// What is being uploaded — 'image' or 'document' — so the status strip can
+  /// say which without the two flows diverging anywhere else.
+  String get kind => _kind;
 
   /// Bytes sent / total, for the determinate progress bar. A phone pushing a
   /// few megabytes over a tailnet is slow enough that a bare spinner is
@@ -96,25 +102,96 @@ class ImageAttachController extends ChangeNotifier {
     if (picked == null || _disposed) return; // cancelled
 
     final bytes = await picked.readAsBytes();
+    await _upload(
+      kind: 'image',
+      bytes: bytes,
+      onPath: onPath,
+      send: (onProgress) =>
+          client.uploadImage(pane, bytes, onProgress: onProgress),
+    );
+  }
+
+  /// The document allowlist, mirrored from the bridge's `POST /file`. All
+  /// three identifier families are listed because each platform's picker reads
+  /// a different one (UTIs on iOS/macOS, MIME on Android, extensions on web) —
+  /// but the filter is a convenience either way: the bridge classifies the
+  /// bytes itself and rejects anything a lenient picker lets through.
+  static const XTypeGroup _documentTypes = XTypeGroup(
+    label: 'Documents',
+    extensions: ['pdf', 'docx', 'pptx'],
+    mimeTypes: [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ],
+    uniformTypeIdentifiers: [
+      'com.adobe.pdf',
+      'org.openxmlformats.wordprocessingml.document',
+      'org.openxmlformats.presentationml.presentation',
+    ],
+  );
+
+  /// [attach] for documents: pick a pdf/docx/pptx, upload it over
+  /// `POST /file`, hand the absolute path to [onPath]. Same single-upload
+  /// rule, same error surface.
+  Future<void> attachDocument({
+    required BridgeClient? client,
+    required String pane,
+    required void Function(String path) onPath,
+  }) async {
+    if (client == null || _uploading) return;
+
+    final XFile? picked;
+    try {
+      picked = await openFile(acceptedTypeGroups: const [_documentTypes]);
+    } on PlatformException catch (e) {
+      fail(e.message ?? 'Could not open the picker.');
+      return;
+    } catch (e) {
+      // Same reasoning as the image picker: a swallowed failure is a button
+      // that silently does nothing.
+      fail('Picker failed: $e');
+      return;
+    }
+    if (picked == null || _disposed) return; // cancelled
+
+    final bytes = await picked.readAsBytes();
+    await _upload(
+      kind: 'document',
+      bytes: bytes,
+      onPath: onPath,
+      send: (onProgress) =>
+          client.uploadFile(pane, bytes, onProgress: onProgress),
+    );
+  }
+
+  /// The upload half both pickers share: the state machine around one send —
+  /// progress in, path out, failure latched.
+  Future<void> _upload({
+    required String kind,
+    required List<int> bytes,
+    required void Function(String path) onPath,
+    required Future<ImageDrop> Function(
+      void Function(int sent, int total) onProgress,
+    )
+    send,
+  }) async {
     if (_disposed) return;
     _uploading = true;
+    _kind = kind;
     _sent = 0;
     _total = bytes.length;
     _error = null;
     _notify();
 
     try {
-      final drop = await client.uploadImage(
-        pane,
-        bytes,
-        onProgress: (sent, total) {
-          _sent = sent;
-          // A chunked send reports total as -1; keep the byte count we measured
-          // rather than letting the bar go indeterminate mid-upload.
-          if (total > 0) _total = total;
-          _notify();
-        },
-      );
+      final drop = await send((sent, total) {
+        _sent = sent;
+        // A chunked send reports total as -1; keep the byte count we measured
+        // rather than letting the bar go indeterminate mid-upload.
+        if (total > 0) _total = total;
+        _notify();
+      });
       if (_disposed) return;
       _uploading = false;
       _notify();
@@ -132,20 +209,21 @@ class ImageAttachController extends ChangeNotifier {
   }
 }
 
-/// Ask where the image comes from. Two sources, because the two real uses are
+/// Ask what to attach. Two image sources, because the two real uses are
 /// different: a screenshot already in the camera roll ("this screen is wrong"),
 /// and something in front of you right now (a whiteboard, a monitor, a device
-/// showing the bug).
+/// showing the bug) — plus a document row when the caller handles documents.
 ///
-/// [onPick] is called from inside the tap handler, immediately after the sheet
-/// pops, rather than by the caller awaiting this future: on the web the picker
-/// is a synthetic click on a file input, which Safari only honors while the
-/// tap's user activation is still live. Awaiting the sheet's pop animation
-/// first spends it — the tap then closes the sheet and silently nothing opens
-/// (the iOS PWA symptom).
+/// [onPick] (and [onPickFile]) is called from inside the tap handler,
+/// immediately after the sheet pops, rather than by the caller awaiting this
+/// future: on the web the picker is a synthetic click on a file input, which
+/// Safari only honors while the tap's user activation is still live. Awaiting
+/// the sheet's pop animation first spends it — the tap then closes the sheet
+/// and silently nothing opens (the iOS PWA symptom).
 Future<void> showImageSourceSheet(
   BuildContext context, {
   required void Function(ImageSource source) onPick,
+  void Function()? onPickFile,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -171,6 +249,16 @@ Future<void> showImageSourceSheet(
               onPick(ImageSource.camera);
             },
           ),
+          if (onPickFile != null)
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Document'),
+              subtitle: const Text('A PDF, Word document, or slide deck'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                onPickFile();
+              },
+            ),
         ],
       ),
     ),
@@ -244,8 +332,9 @@ class ImageUploadStatus extends StatelessWidget {
                         children: [
                           Text(
                             total > 0
-                                ? 'Uploading image… ${_mb(sent)} of ${_mb(total)}'
-                                : 'Uploading image…',
+                                ? 'Uploading ${controller.kind}… '
+                                      '${_mb(sent)} of ${_mb(total)}'
+                                : 'Uploading ${controller.kind}…',
                             style: TextStyle(
                               fontSize: 12,
                               color: scheme.onSurfaceVariant,

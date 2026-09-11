@@ -510,6 +510,16 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
     },
   );
 
+  /// The document flavor of [_attachImage]: a spec PDF or a deck lands the
+  /// same way, as a path dropped into the composer.
+  Future<void> _attachDocument() => _attach.attachDocument(
+    client: _client,
+    pane: widget.pane,
+    onPath: (path) {
+      if (mounted) _insertIntoComposer(path);
+    },
+  );
+
   /// Insert [path] at the composer's cursor, leaving the caret after it so the
   /// user can keep typing.
   ///
@@ -1288,7 +1298,11 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
                 onSend: _sendComposer,
                 onAttachImage: _attach.uploading
                     ? null
-                    : () => showImageSourceSheet(context, onPick: _attachImage),
+                    : () => showImageSourceSheet(
+                        context,
+                        onPick: _attachImage,
+                        onPickFile: _attachDocument,
+                      ),
                 hintText: _agentState?.isBlocked == true
                     ? 'Type a number, or your own reply…'
                     : null,

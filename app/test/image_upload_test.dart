@@ -196,4 +196,77 @@ void main() {
       );
     });
   });
+
+  group('uploadFile', () {
+    // A PDF as far as the bridge's sniffer is concerned — same reasoning as
+    // _png: the magic bytes are all that is read.
+    Uint8List pdf([int pad = 32]) => Uint8List.fromList([
+      ...utf8.encode('%PDF-1.7\n'),
+      ...List.filled(pad, 0),
+    ]);
+
+    test('posts raw bytes to /file with the pane and a real length', () async {
+      final adapter = _RecordingAdapter(
+        status: 200,
+        body: {
+          'path': '/repo/.gothalo/files/20260805-142530-9f86d081.pdf',
+          'relative_path': '.gothalo/files/20260805-142530-9f86d081.pdf',
+          'content_type': 'application/pdf',
+          'bytes': 41,
+        },
+      );
+      final bytes = pdf();
+      final drop = await _clientWith(adapter).uploadFile('w1:p2', bytes);
+
+      final req = adapter.seen!;
+      expect(req.method, 'POST');
+      expect(req.path, '/file');
+      expect(req.queryParameters['pane'], 'w1:p2');
+      // Same wire discipline as /image: raw bytes, a real length, no filename.
+      expect(adapter.seenBody, bytes);
+      expect(req.headers[Headers.contentLengthHeader], bytes.length);
+      expect(req.headers[Headers.contentTypeHeader], 'application/octet-stream');
+
+      expect(drop.path, '/repo/.gothalo/files/20260805-142530-9f86d081.pdf');
+      expect(drop.contentType, 'application/pdf');
+    });
+
+    test('refuses an over-cap file locally, before any request', () async {
+      final adapter = _RecordingAdapter(status: 200, body: {'path': '/x'});
+      final tooBig = Uint8List(BridgeClient.maxFileBytes + 1);
+
+      await expectLater(
+        _clientWith(adapter).uploadFile('w1:p2', tooBig),
+        throwsA(
+          isA<BridgeException>().having((e) => e.message, 'message', contains('25MB')),
+        ),
+      );
+      expect(adapter.seen, isNull);
+    });
+
+    test('maps 404 to an out-of-date bridge, not a missing agent', () async {
+      final adapter = _RecordingAdapter(status: 404, body: 'not found');
+      await expectLater(
+        _clientWith(adapter).uploadFile('w1:p2', pdf()),
+        throwsA(
+          isA<BridgeException>()
+              .having((e) => e.message, 'message', contains('too old'))
+              .having((e) => e.statusCode, 'statusCode', 404),
+        ),
+      );
+    });
+
+    test('maps 413 and 415 to what the user can act on', () async {
+      for (final (status, fragment) in [(413, 'too large'), (415, 'PDF')]) {
+        final adapter = _RecordingAdapter(status: status, body: 'nope');
+        await expectLater(
+          _clientWith(adapter).uploadFile('w1:p2', pdf()),
+          throwsA(
+            isA<BridgeException>().having((e) => e.message, 'message', contains(fragment)),
+          ),
+          reason: 'status $status',
+        );
+      }
+    });
+  });
 }

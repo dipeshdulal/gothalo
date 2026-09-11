@@ -356,6 +356,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     onPath: _typePath,
   );
 
+  /// The document flavor of [_attachImage]: same typed-path delivery, so a
+  /// PDF's path can land in a shell prompt as readily as an agent's composer.
+  Future<void> _attachDocument() => _attach.attachDocument(
+    client: _client,
+    pane: widget.pane,
+    onPath: _typePath,
+  );
+
   /// Type [path] into the PTY **without a carriage return**, the same as the
   /// transcript dropping it into the composer: the user writes the prompt
   /// around it and submits when they mean to. A trailing space keeps the next
@@ -631,8 +639,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               ),
               onKey: _send,
               uploading: _attach.uploading,
-              onAttachImage: () =>
-                  showImageSourceSheet(context, onPick: _attachImage),
+              onAttachImage: () => showImageSourceSheet(
+                context,
+                onPick: _attachImage,
+                onPickFile: _attachDocument,
+              ),
             ),
           ],
         ],
