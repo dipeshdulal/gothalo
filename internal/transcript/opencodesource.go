@@ -71,11 +71,20 @@ func opencodeDBPath() string {
 	return filepath.Join(base, "opencode", "opencode.db")
 }
 
-// openOpencodeSource opens the store read-only and verifies the session exists,
-// so a stale id 404s at connect rather than streaming nothing.
-func openOpencodeSource(sessionID string) (Source, error) {
+// openOpencodeSource resolves an opencode pane to a streamable transcript.
+//
+// OpenCode v2 exposes a supported HTTP API, so it is tried first. Its managed
+// service resolves the session by id, or by cwd when herdr has not reported one
+// (the opencode TUI integration does not always set agent_session, and without a
+// cwd fallback every opencode pane would 404). The legacy database is the
+// fallback for a stopped service or an older install.
+func openOpencodeSource(cwd, sessionID string) (Source, error) {
+	if src, err := openOpencodeV2Source(cwd, sessionID); err == nil {
+		return src, nil
+	}
+
 	if sessionID == "" {
-		// opencode sessions are keyed by id, not cwd — without agent_session.value
+		// The legacy store is keyed by id, not cwd — without agent_session.value
 		// there is nothing to look up. See the README on the herdr integration.
 		return nil, ErrNoTranscript
 	}

@@ -673,14 +673,17 @@ func closeClean(conn *websocket.Conn, reason string) {
 }
 
 // siblingSharesCwd reports whether this pane's transcript is unresolvable
-// because another live agent occupies the same working directory, naming that
-// sibling for the log.
+// because another live agent OF THE SAME KIND occupies the same working
+// directory, naming that sibling for the log.
 //
 // It only ever fires when the agent has NO session id. With one, resolution is
 // exact and a sibling is irrelevant. Without one, resolution falls back to
-// "newest transcript in this project dir whose recorded cwd matches" — and if a
-// sibling shares that directory, the fallback cannot tell the two apart. It does
-// not fail; it confidently returns the wrong conversation.
+// "newest transcript for this directory" — and if a same-kind sibling shares
+// that directory, the fallback cannot tell the two apart. It does not fail; it
+// confidently returns the wrong conversation. A sibling of a DIFFERENT kind is
+// harmless: each kind resolves in its own namespace (Claude's project dir, pi's
+// session dir, OpenCode's service), so it can never be the transcript this pane
+// would land on.
 //
 // That is not hypothetical. Starting an agent in a directory Claude has not
 // trusted parks it on a permission prompt, so it has no session id until the
@@ -713,7 +716,7 @@ func siblingInSameCwd(agents []herdr.Agent, bare string, agent herdr.Agent) (sib
 		return "", false
 	}
 	for _, other := range agents {
-		if other.PaneID == bare || other.Cwd != agent.Cwd {
+		if other.PaneID == bare || other.Cwd != agent.Cwd || other.Kind != agent.Kind {
 			continue
 		}
 		return other.PaneID, true

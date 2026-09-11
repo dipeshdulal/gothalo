@@ -66,9 +66,9 @@ func RegisterOpener(o Opener) { openers[o.Kind()] = o }
 
 // Open resolves a pane's transcript and returns it ready to stream.
 //
-// A kind with no registered opener returns ErrUnsupportedKind — that is how
-// codex/opencode report "recognized, not wired up" today, and it maps to a 404
-// with a clear message rather than a broken stream.
+// A kind with no registered opener returns ErrUnsupportedKind — currently this
+// is how codex reports "recognized, not wired up", and it maps to a 404 with a
+// clear message rather than a broken stream.
 func Open(kind, cwd, sessionID string) (Source, error) {
 	o, ok := openers[strings.ToLower(strings.TrimSpace(kind))]
 	if !ok {
