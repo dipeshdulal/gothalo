@@ -95,7 +95,7 @@ One Go binary (`gothalo`) is both the daemon and the CLI.
 cmd/gothalo/   thin entrypoint -> internal/cli
 internal/      the bridge: cli · config · herdr · watcher · push · store ·
                pairing · server · transport · events · agentstate ·
-               transcript · gitdiff · notify · web
+               transcript · opencode · gitdiff · notify · web
 app/           Flutter app (lib/{core,data,features})
 bruno/         HTTP collection for poking the API by hand
 docs/          API.md · ARCHITECTURE.md · CONTRACT-*.md · PUSH.md · TESTING.md

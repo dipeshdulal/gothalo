@@ -255,6 +255,15 @@ func (s *Server) promptState(paneID, status string) *agentstate.State {
 		Title:     agent.Title,
 		Detection: detection,
 	})
+	// Prefer the service's own question form over the screen scrape: it carries
+	// the exact choices, which ride into the notification's actions.
+	if status == "blocked" {
+		if _, form, qerr := opencodeQuestion(agent); qerr == nil {
+			if b := opencodeBlocked(form); b != nil {
+				st.Blocked = b
+			}
+		}
+	}
 	if status == "blocked" && st.AgentStatus == "blocked" {
 		if det, eerr := c.Explain(bare); eerr == nil && det != nil && det.RuleID != "" {
 			if st.Blocked == nil {

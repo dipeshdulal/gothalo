@@ -132,7 +132,7 @@ func (s *Server) publish(typ string, payload any) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/info", s.handleInfo)
-mux.HandleFunc("/firebase-config", s.handleFirebaseConfig)
+	mux.HandleFunc("/firebase-config", s.handleFirebaseConfig)
 	mux.HandleFunc("/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/send", s.handleSend)
 	mux.HandleFunc("/approve", s.handleApprove)
@@ -263,12 +263,33 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Key != "" {
+		// OpenCode's question dialog is dismissed through the service (the API
+		// equivalent of Esc), so the app's "Dismiss" choice needs no keystroke.
+		if agent, aerr := c.Get(pane); aerr == nil && body.Key == "esc" {
+			if svc, form, qerr := opencodeQuestion(agent); qerr == nil && form != nil &&
+				svc.CancelForm(form.SessionID, form.ID) == nil {
+				writeJSON(w, map[string]bool{"ok": true})
+				return
+			}
+		}
 		if err := c.SendKeys(pane, body.Key); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 		return
+	}
+	// Before typing into the pane, let an OpenCode question claim the input:
+	// while it is up a bare number selects a choice and any other text is the
+	// free-form answer. Falls through to typing when no form is pending.
+	if body.Text != "" {
+		if agent, aerr := c.Get(pane); aerr == nil && agent.Kind == "opencode" {
+			if svc, form, qerr := opencodeQuestion(agent); qerr == nil && form != nil &&
+				opencodeAnswer(svc, form, body.Text) {
+				writeJSON(w, map[string]bool{"ok": true})
+				return
+			}
+		}
 	}
 	// Split a trailing newline/CR "submit" off the text. The body is typed as a
 	// paste-safe send-text, but the Enter is delivered as a real key event:

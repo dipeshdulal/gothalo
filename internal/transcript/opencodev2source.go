@@ -3,22 +3,12 @@ package transcript
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
-	"time"
-)
 
-// opencodeAPITimeout bounds a single HTTP call to the managed service. The
-// service is local, so anything slower means it is wedged; a poll must fall
-// through rather than block a connection goroutine forever.
-const opencodeAPITimeout = 10 * time.Second
+	"github.com/dipeshdulal/gothalo/internal/opencode"
+)
 
 // opencodeV2PollPage and opencodeV2PollMax bound how far a single Poll walks
 // back. A poll normally sees one or two new messages; the caps only matter after
@@ -27,145 +17,6 @@ const (
 	opencodeV2PollPage = 200
 	opencodeV2PollMax  = 2000
 )
-
-// opencodeService is the on-disk registration OpenCode v2's managed service
-// writes at ~/.local/state/opencode/service.json: where it is listening and the
-// basic-auth password. The password is a per-service secret, so the file is mode
-// 0600 and never leaves the host.
-type opencodeService struct {
-	URL      string `json:"url"`
-	Password string `json:"password"`
-}
-
-// opencodeHTTPClient is shared by every v2 source. It bounds each request so a
-// stopped service fails fast instead of hanging a transcript connection.
-var opencodeHTTPClient = &http.Client{Timeout: opencodeAPITimeout}
-
-// opencodeStateDir mirrors OpenCode's own discovery: $XDG_STATE_HOME/opencode,
-// else ~/.local/state/opencode.
-func opencodeStateDir() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "opencode")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".local", "state", "opencode")
-}
-
-func opencodeServicePath() string {
-	dir := opencodeStateDir()
-	if dir == "" {
-		return ""
-	}
-	return filepath.Join(dir, "service.json")
-}
-
-func readOpencodeService() (opencodeService, error) {
-	path := opencodeServicePath()
-	if path == "" {
-		return opencodeService{}, os.ErrNotExist
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return opencodeService{}, err
-	}
-	var svc opencodeService
-	if err := json.Unmarshal(b, &svc); err != nil {
-		return svc, err
-	}
-	if svc.URL == "" || svc.Password == "" {
-		return svc, errors.New("opencode service credentials incomplete")
-	}
-	return svc, nil
-}
-
-// opencodeV2Verify confirms the service owns this session at this cwd. Session
-// ids are global, but a pane's cwd is part of the session's identity: without the
-// cwd check a rotated or spoofed id could stream a different project's
-// conversation. A mismatch reads as "no transcript here".
-func opencodeV2Verify(svc opencodeService, sessionID, cwd string) error {
-	req, err := http.NewRequest(http.MethodGet,
-		strings.TrimRight(svc.URL, "/")+"/api/session/"+url.PathEscape(sessionID), nil)
-	if err != nil {
-		return err
-	}
-	req.SetBasicAuth("opencode", svc.Password)
-	resp, err := opencodeHTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return ErrNoTranscript
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("opencode service session status %s", resp.Status)
-	}
-	var body struct {
-		Data struct {
-			Location struct {
-				Directory string `json:"directory"`
-			} `json:"location"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return err
-	}
-	if cwd != "" && body.Data.Location.Directory != "" &&
-		filepath.Clean(cwd) != filepath.Clean(body.Data.Location.Directory) {
-		return ErrNoTranscript
-	}
-	return nil
-}
-
-// opencodeV2SessionForCwd resolves the pane's session when herdr reported no
-// session id. The service lists sessions newest-updated first, so the first
-// top-level session whose recorded directory equals the pane's cwd is the one
-// the pane is most likely showing — the same "newest matching session" rule the
-// file-backed kinds use. Child sessions (subagents) are skipped so a delegated
-// conversation is never mistaken for the pane's own.
-func opencodeV2SessionForCwd(svc opencodeService, cwd string) (string, error) {
-	if cwd == "" {
-		return "", ErrNoTranscript
-	}
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(svc.URL, "/")+"/api/session", nil)
-	if err != nil {
-		return "", err
-	}
-	req.SetBasicAuth("opencode", svc.Password)
-	resp, err := opencodeHTTPClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("opencode service session list status %s", resp.Status)
-	}
-	var body struct {
-		Data []struct {
-			ID       string `json:"id"`
-			ParentID string `json:"parentID"`
-			Location struct {
-				Directory string `json:"directory"`
-			} `json:"location"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
-	}
-	want := filepath.Clean(cwd)
-	for _, s := range body.Data {
-		if s.ParentID != "" || s.Location.Directory == "" {
-			continue
-		}
-		if filepath.Clean(s.Location.Directory) == want {
-			return s.ID, nil
-		}
-	}
-	return "", ErrNoTranscript
-}
 
 // opencodeV2Source streams a session through OpenCode v2's managed service HTTP
 // API instead of the legacy SQLite store.
@@ -186,7 +37,7 @@ func opencodeV2SessionForCwd(svc opencodeService, cwd string) (string, error) {
 // watermark, normalizes only what is new, and de-dupes on entry id so a message
 // that grows between polls streams just its newly-appeared blocks.
 type opencodeV2Source struct {
-	service   opencodeService
+	svc       opencode.Service
 	sessionID string
 	cwd       string
 
@@ -212,24 +63,14 @@ type opencodeV2MessagesResponse struct {
 	} `json:"cursor"`
 }
 
+// request reads a service path, mapping the service's 404 to this package's
+// "no transcript here" so callers keep their existing branching.
 func (s *opencodeV2Source) request(path string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(s.service.URL, "/")+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.SetBasicAuth("opencode", s.service.Password)
-	resp, err := opencodeHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+	b, err := s.svc.Get(path)
+	if errors.Is(err, opencode.ErrNotFound) {
 		return nil, ErrNoTranscript
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("opencode service status %s", resp.Status)
-	}
-	return io.ReadAll(resp.Body)
+	return b, err
 }
 
 // loadAll fetches the whole session in ascending order, following the cursor
@@ -442,20 +283,23 @@ func (s *opencodeV2Source) Close() error { return nil }
 
 // openOpencodeV2Source resolves the managed service for this session and returns
 // a source ready to stream. An empty session id is not fatal: the service can
-// resolve one from the pane's cwd (see opencodeV2SessionForCwd). Any failure to
-// reach or verify the service is reported so the caller can fall back.
+// resolve one from the pane's cwd. Any failure to reach or verify the service is
+// reported so the caller can fall back.
 func openOpencodeV2Source(cwd, sessionID string) (Source, error) {
-	svc, err := readOpencodeService()
+	svc, err := opencode.Discover()
 	if err != nil {
 		return nil, err
 	}
 	if sessionID == "" {
-		sessionID, err = opencodeV2SessionForCwd(svc, cwd)
-		if err != nil {
-			return nil, err
+		sessionID, err = svc.SessionForCwd(cwd)
+	} else {
+		err = svc.Verify(sessionID, cwd)
+	}
+	if err != nil {
+		if errors.Is(err, opencode.ErrNotFound) {
+			return nil, ErrNoTranscript
 		}
-	} else if err := opencodeV2Verify(svc, sessionID, cwd); err != nil {
 		return nil, err
 	}
-	return &opencodeV2Source{service: svc, sessionID: sessionID, cwd: cwd, seen: map[string]bool{}}, nil
+	return &opencodeV2Source{svc: svc, sessionID: sessionID, cwd: cwd, seen: map[string]bool{}}, nil
 }
