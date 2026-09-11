@@ -1,17 +1,17 @@
-// Package transcript turns a coding agent's own on-disk session transcript into a
+// Package transcript turns a coding agent's structured session transcript into a
 // kind-agnostic, streamable chat schema. It is the "chat view" data source that
 // sits one layer above agentstate: instead of a parsed current-state card scraped
-// from the terminal, it reads the agent's structured transcript file (Claude Code
-// writes JSONL) and normalizes every entry into the same shape — messages,
-// thinking, tool calls (with command/diff), and tool results — so the app renders
-// one chat UI regardless of which agent produced it.
+// from the terminal, it reads the agent's structured transcript store (Claude Code
+// writes JSONL; OpenCode v2 exposes a local service API) and normalizes every entry
+// into the same shape — messages, thinking, tool calls (with command/diff), and
+// tool results — so the app renders one chat UI regardless of which agent produced
+// it.
 //
-// The design mirrors internal/agentstate: a per-kind Reader (claude today; codex
-// and opencode are stubs) maps its agent's transcript format onto the common
-// Entry. Unknown kinds fall back to a generic reader that emits a minimal
-// Parsed=false entry rather than failing. Adding an agent is one new file that
-// implements Reader and calls Register in its init — the endpoint, the JSON
-// contract, and existing readers stay untouched.
+// The design mirrors internal/agentstate: a per-kind Reader maps each agent's
+// transcript format onto the common Entry. Unknown kinds fall back to a generic
+// reader that emits a minimal Parsed=false entry rather than failing. Adding an
+// agent is one new file that implements Reader and calls Register in its init —
+// the endpoint, the JSON contract, and existing readers stay untouched.
 //
 // Readers are pure and panic-free: Normalize maps one raw transcript line to zero
 // or more Entry values and NEVER drops the stream because a line didn't match — an

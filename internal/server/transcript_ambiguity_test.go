@@ -26,6 +26,12 @@ func agentAt(pane, cwd, session string) herdr.Agent {
 	}
 }
 
+func agentKindAt(pane, kind, cwd, session string) herdr.Agent {
+	a := agentAt(pane, cwd, session)
+	a.Kind = kind
+	return a
+}
+
 func TestSiblingInSameCwd(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -85,6 +91,30 @@ func TestSiblingInSameCwd(t *testing.T) {
 			},
 			subject:   agentAt("wN:p15", "/Users/d/projects/gothalo", ""),
 			wantAmbig: false,
+		},
+		{
+			// A sibling of a DIFFERENT kind resolves in its own namespace, so
+			// it can never be the transcript this pane's fallback lands on. A
+			// pi agent next to an id-less opencode pane must not block the
+			// opencode service from resolving by cwd.
+			name: "a different-kind sibling is not a collision",
+			agents: []herdr.Agent{
+				agentKindAt("w4:pJ", "pi", "/Users/d", "b711dd17"),
+				agentKindAt("w4:pT", "opencode", "/Users/d", ""),
+			},
+			subject:   agentKindAt("w4:pT", "opencode", "/Users/d", ""),
+			wantAmbig: false,
+		},
+		{
+			// Same kind and same directory: the fallback still cannot choose.
+			name: "a same-kind sibling is still a collision",
+			agents: []herdr.Agent{
+				agentKindAt("w4:pJ", "opencode", "/Users/d", "b711dd17"),
+				agentKindAt("w4:pT", "opencode", "/Users/d", ""),
+			},
+			subject:     agentKindAt("w4:pT", "opencode", "/Users/d", ""),
+			wantAmbig:   true,
+			wantSibling: "w4:pJ",
 		},
 		{
 			name:      "an unknown cwd cannot be reasoned about",

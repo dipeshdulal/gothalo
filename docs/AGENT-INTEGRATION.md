@@ -43,6 +43,6 @@ looked up against:
 | `claude` | `~/.claude/projects/<encoded-cwd>/<session>.jsonl` | cwd + session id |
 | `pi` | `~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl` | session id (full path) + cwd |
 | `hermes` | `~/.hermes/state.db` (SQLite; `$HERMES_DIR` overrides) | session id |
-| `opencode` | `~/.local/share/opencode/opencode.db` (SQLite; `$OPENCODE_DATA_DIR` / `$XDG_DATA_HOME` override) | session id |
+| `opencode` | OpenCode v2 managed service API (`~/.local/state/opencode/service.json`; legacy SQLite fallback at `~/.local/share/opencode/opencode.db`) | session id + cwd |
 | `codex` | recognized, not yet wired | — |
 

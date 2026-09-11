@@ -16,9 +16,9 @@ import (
 // agent has none yet, or the mapping failed). The handler maps it to HTTP 404.
 var ErrNoTranscript = errors.New("no transcript file for pane")
 
-// ErrUnsupportedKind means the agent kind has a reader stub but no on-disk
-// transcript layout wired up yet (codex/opencode). Mapped to 404 with a clear
-// message so the app can fall back to /attach or /agent-state.
+// ErrUnsupportedKind means this file-path resolver has no transcript layout for
+// the agent kind (currently codex and OpenCode's API-backed v2 reader). Mapped to
+// 404 with a clear message so the app can fall back to /attach or /agent-state.
 var ErrUnsupportedKind = errors.New("transcript not supported for this agent kind")
 
 // EncodeProjectDir maps a project cwd to Claude Code's project-directory name.
@@ -74,7 +74,8 @@ func claudeProjectsRoot() (string, error) {
 // chat under pane B in the mobile app. "Not written yet" must read as absent,
 // not as license to guess.
 //
-// codex/opencode return ErrUnsupportedKind (their layouts aren't wired up yet).
+// Locate is only the file-path resolver: codex and OpenCode v2 use different
+// transcript sources and return ErrUnsupportedKind here.
 func Locate(kind, cwd, sessionID string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "claude":

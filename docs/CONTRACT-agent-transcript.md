@@ -703,11 +703,38 @@ From the pane, the bridge reads `cwd` and `agent_session.value` via
    **most-recently-modified** `*.jsonl` in the project dir whose own recorded `cwd`
    equals the pane's cwd (guards against a stale/rotated session id).
 
-OpenCode v2 is resolved through its local managed service API using the
-session id and pane cwd. The bridge prefers that supported API when the service
-is reachable and falls back to the legacy SQLite store when it is not. `codex`
-remains a recognized kind without a transcript source and returns `404` (see
-below).
+### opencode
+
+OpenCode v2 is read through its local **managed service HTTP API**, not its
+store. The service registers itself at `$XDG_STATE_HOME/opencode/service.json`
+(default `~/.local/state/opencode/service.json`) with the URL it is listening on
+and a per-service password; the bridge authenticates as HTTP Basic
+`opencode:<password>`. A session is resolved by id and confirmed against the
+pane's cwd (`GET /api/session/<id>` returns the session's `location.directory`);
+a cwd mismatch reads as "no transcript here" rather than streaming another
+project's chat. When herdr has not reported a session id — the opencode TUI
+integration does not always set `agent_session` — the bridge falls back to
+`GET /api/session` and takes the newest top-level session whose recorded
+directory equals the pane's cwd, the same "newest matching session" rule the
+file-backed kinds use.
+
+`GET /api/session/<id>/message?order=asc|desc&limit=<=200&cursor=…` returns the
+session as an already-projected timeline — `user`, `synthetic`, `system`,
+`shell`, `compaction`, and `assistant` messages whose `content` is an ordered
+array of `text`/`reasoning`/`tool` blocks. That projection is the reader: tool
+blocks reuse the same call/result pairing as the legacy store, including the
+applied `metadata.diff` on edits.
+
+Backlog loads the whole session and caches the normalized entries; `load_older`
+is served from that cache. The live tail walks back from the newest message to a
+watermark and emits only entry ids it has not sent, so a message the model is
+still writing is re-read until it completes and newly-appeared blocks stream
+once. The watermark stops at the newest **settled** message, so a turn that is
+still running at connect can still complete in-session.
+
+When the service is unreachable the bridge falls back to the legacy SQLite store
+below, so a stopped service or an older install keeps working. `codex` remains a
+recognized kind without a transcript source and returns `404` (see below).
 
 ### pi
 

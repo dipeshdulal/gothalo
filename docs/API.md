@@ -626,8 +626,11 @@ neighbouring pane's transcript. Install the Herdr agent integration (see the
 README) so that id is always present; for `hermes` it is required, as there is no
 cwd fallback to resolve with.
 
-`opencode` likewise keeps sessions in SQLite (`~/.local/share/opencode/opencode.db`),
-with content split across `message` rows and their child `part` rows.
+`opencode` is read through OpenCode v2's local managed service API, using the
+service registration at `~/.local/state/opencode/service.json` (URL + password,
+HTTP Basic `opencode:<password>`). The API returns one projected message list per
+session; the legacy SQLite store (`~/.local/share/opencode/opencode.db`) is the
+fallback when the service is not running.
 
 This is READ-ONLY — prompts/approvals still go through `POST /send` /
 `POST /approve`. `claude`, `hermes` and `opencode` are implemented; `codex` is

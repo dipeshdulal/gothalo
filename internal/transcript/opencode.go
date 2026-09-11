@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -59,6 +60,8 @@ type opencodePart struct {
 	Text   string          `json:"text"`
 	Tool   string          `json:"tool"`
 	CallID string          `json:"callID"`
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
 	State  json.RawMessage `json:"state"`
 }
 
@@ -69,10 +72,28 @@ type opencodeToolState struct {
 	Title    string          `json:"title"`
 	Input    json.RawMessage `json:"input"`
 	Output   string          `json:"output"`
+	Content  json.RawMessage `json:"content"`
 	Error    json.RawMessage `json:"error"`
 	Metadata struct {
 		Diff string `json:"diff"`
 	} `json:"metadata"`
+}
+
+type opencodeV2Message struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Time struct {
+		Created   int64 `json:"created"`
+		Completed int64 `json:"completed"`
+	} `json:"time"`
+	Text    string          `json:"text"`
+	Content []opencodePart  `json:"content"`
+	Error   json.RawMessage `json:"error"`
+	// A "shell" message is a user-run `!command`, not a model turn: it carries the
+	// command and its captured output directly rather than a content array.
+	CallID  string `json:"callID"`
+	Command string `json:"command"`
+	Output  string `json:"output"`
 }
 
 // opencodeDropped are part types that are turn plumbing rather than conversation.
@@ -148,9 +169,17 @@ func opencodeToolEntries(base Entry, part opencodePart) []Entry {
 
 	name := part.Tool
 	if name == "" {
+		name = part.Name
+	}
+	if name == "" {
 		name = "tool"
 	}
-	tool := &Tool{ID: part.CallID, Name: name, Title: name}
+	callID := part.CallID
+	if callID == "" {
+		// v2 puts the tool call id in `id`; legacy rows use `callID`.
+		callID = part.ID
+	}
+	tool := &Tool{ID: callID, Name: name, Title: name}
 	if st.Title != "" {
 		tool.Subtitle = oneLine(st.Title, opencodeSummaryRunes)
 	}
@@ -170,13 +199,28 @@ func opencodeToolEntries(base Entry, part opencodePart) []Entry {
 		return out
 	}
 
-	res := &Result{ForID: part.CallID, OK: st.Status == "completed"}
+	res := &Result{ForID: callID, OK: st.Status == "completed"}
 	if st.Metadata.Diff != "" {
 		diff, truncated := truncateRunes(st.Metadata.Diff, maxDiffRunes)
 		res.Diff = diff
 		res.Truncated = truncated
 	}
 	text := st.Output
+	if text == "" && len(st.Content) > 0 {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(st.Content, &blocks) == nil {
+			var parts []string
+			for _, block := range blocks {
+				if block.Text != "" {
+					parts = append(parts, block.Text)
+				}
+			}
+			text = strings.Join(parts, "\n")
+		}
+	}
 	if text == "" && len(st.Error) > 0 {
 		text = opencodeErrorText(st.Error)
 	}
@@ -192,6 +236,119 @@ func opencodeToolEntries(base Entry, part opencodePart) []Entry {
 	resEntry.Result = res
 	resEntry.ID = base.ID + "#result"
 	return append(out, resEntry)
+}
+
+// normalizeOpencodeV2Message maps one OpenCode v2 *projected* message — the
+// shape the service returns from `/api/session/{id}/message`, not a raw SQLite
+// row — onto the common Entry stream.
+//
+// The projection is already a normalized timeline, so this is a shallower
+// mapping than the legacy reader: `user`/`synthetic`/`system` carry their prose
+// inline, `assistant` carries an ordered `content` array of text/reasoning/tool
+// blocks, `compaction` carries a summary, and `shell` carries a user command.
+// The tool blocks reuse opencodeToolEntries so a v2 tool call pairs and renders
+// exactly like a legacy one.
+func normalizeOpencodeV2Message(line []byte) []Entry {
+	var msg opencodeV2Message
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return []Entry{{Kind: KindMessage, Role: RoleSystem, Text: string(line), Parsed: false}}
+	}
+	role := RoleAssistant
+	switch msg.Type {
+	case "user":
+		role = RoleUser
+	case "synthetic", "system", "compaction":
+		role = RoleSystem
+	}
+	ts := unixMillisToRFC3339(msg.Time.Created)
+
+	switch msg.Type {
+	case "user", "synthetic", "system":
+		if strings.TrimSpace(msg.Text) == "" {
+			return nil
+		}
+		return []Entry{{ID: msg.ID, TS: ts, Role: role, Kind: KindMessage,
+			Text: strings.TrimSpace(msg.Text), Parsed: true}}
+	case "compaction":
+		var c struct {
+			Summary string `json:"summary"`
+		}
+		_ = json.Unmarshal(line, &c)
+		if strings.TrimSpace(c.Summary) == "" {
+			return nil
+		}
+		text, _ := truncateRunes(strings.TrimSpace(c.Summary), maxInlineTextRunes)
+		return []Entry{{ID: msg.ID, TS: ts, Role: RoleSystem, Kind: KindMessage, Text: text, Parsed: true}}
+	case "shell":
+		return opencodeShellEntries(msg, ts)
+	case "assistant":
+		// The model's own turn: its blocks are in Content, parsed below.
+	default:
+		// agent-switched / model-switched and any future plumbing carry no
+		// conversation; dropping them keeps the chat clean.
+		return nil
+	}
+	if len(msg.Content) == 0 {
+		if len(msg.Error) == 0 {
+			return nil
+		}
+		text := opencodeErrorText(msg.Error)
+		if text == "" {
+			return nil
+		}
+		return []Entry{{ID: msg.ID, TS: ts, Role: RoleAssistant, Kind: KindMessage, Text: text, Parsed: true}}
+	}
+	var out []Entry
+	for i, part := range msg.Content {
+		base := Entry{ID: msg.ID + "#" + strconv.Itoa(i), ParentID: msg.ID, TS: ts, Role: role, Parsed: true}
+		if part.Type == "tool" {
+			out = append(out, opencodeToolEntries(base, part)...)
+			continue
+		}
+		if opencodeDropped[part.Type] {
+			continue
+		}
+		if strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+		switch part.Type {
+		case "reasoning":
+			base.Kind, base.Text = KindThinking, strings.TrimSpace(part.Text)
+		default:
+			base.Kind, base.Text = KindMessage, strings.TrimSpace(part.Text)
+		}
+		out = append(out, base)
+	}
+	return out
+}
+
+// opencodeShellEntries renders a v2 "shell" message — a command the user ran
+// directly (the `!cmd` composer escape) rather than a model turn — as the same
+// tool_call/tool_result pair a model-issued shell tool produces, so the ledger
+// renders both identically.
+func opencodeShellEntries(msg opencodeV2Message, ts string) []Entry {
+	command := strings.TrimSpace(msg.Command)
+	if command == "" {
+		return nil
+	}
+	id := msg.CallID
+	if id == "" {
+		id = msg.ID
+	}
+	call := Entry{ID: msg.ID + "#call", ParentID: msg.ID, TS: ts, Role: RoleAssistant,
+		Kind: KindToolCall, Parsed: true,
+		Tool: &Tool{ID: id, Name: "shell", Title: "shell",
+			Command: command, InputSummary: oneLine(command, opencodeSummaryRunes)}}
+	out := []Entry{call}
+
+	if strings.TrimSpace(msg.Output) == "" {
+		return out
+	}
+	summary, truncated := truncateRunes(stripANSI(msg.Output), maxOutputRunes)
+	res := Entry{ID: msg.ID + "#result", ParentID: msg.ID, TS: ts, Role: "tool",
+		Kind: KindToolResult, Parsed: true,
+		Result: &Result{ForID: id, OK: true, OutputSummary: summary, Truncated: truncated}}
+	return append(out, res)
 }
 
 // applyOpencodeInput projects a tool's input onto the rendering fields. opencode
@@ -249,5 +406,5 @@ type opencodeOpener struct{}
 func (opencodeOpener) Kind() string { return "opencode" }
 
 func (opencodeOpener) Open(cwd, sessionID string) (Source, error) {
-	return openOpencodeSource(sessionID)
+	return openOpencodeSource(cwd, sessionID)
 }
