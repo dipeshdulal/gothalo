@@ -74,6 +74,24 @@ leak into the contract.
 - **Pick a `key`-only option** (no `index`): `POST /send { "pane": pane_id, "key": "esc" }` — dispatches the raw keystroke instead of typing.
 - `state_change_seq` comes from `/snapshot` (or the push payload), not from this endpoint.
 
+### OpenCode v2 questions come from the service, not the screen
+
+OpenCode v2's `question` tool is backed by the agent's managed service API, so
+for an `opencode` pane the bridge reads the blocked prompt — question text and
+choices — from that service (`GET /api/session/<id>/form`, filtered to
+`metadata.kind == "question"`) instead of scraping the TUI. That keeps the card
+correct when the panel's wording changes: v2's footer no longer matches Herdr's
+bundled opencode screen-detection manifest. The same API answers it:
+
+- `POST /approve` replies with the first (default) choice.
+- `POST /send` with a bare option `index` replies with that choice's value.
+- `POST /send` with any other text is the free-form "Type your own answer".
+- `POST /send { "key": "esc" }` dismisses the form.
+
+Herdr still owns `agent_status` (its opencode integration reports `blocked` on
+`question.asked`). A multi-question form — which the card cannot model — and an
+unreachable service both fall back to the screen parser.
+
 ---
 
 ## Live examples — one per status

@@ -94,6 +94,19 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		History:   agentHistory(c, bare, agent, pane),
 	})
 
+	// An OpenCode v2 question is owned by the service, not the screen, so read
+	// it there when the pane is blocked. Falls back to the parser's
+	// screen-derived Blocked when the service is gone or the form is
+	// multi-question (see opencodeBlocked).
+	if state.AgentStatus == "blocked" {
+		if _, form, qerr := opencodeQuestion(agent); qerr != nil {
+			log.Warn("agent-state: opencode question read failed", "pane", pane, "err", qerr)
+		} else if b := opencodeBlocked(form); b != nil {
+			state.Blocked = b
+			state.Headline = b.Question
+		}
+	}
+
 	// Enrich a block with Herdr's own detection category (agent.explain): the
 	// semantic class — tool_approval / question_panel / dangerous_command_approval
 	// / write_file_approval — with NO per-agent plugin, for any agent Herdr

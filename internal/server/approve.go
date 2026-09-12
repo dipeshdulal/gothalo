@@ -94,6 +94,14 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 				", agent now at "+strconv.Itoa(a.StateChangeSeq))
 			return
 		}
+		// OpenCode v2's question tool is a form the service owns: answer it
+		// there, with the exact choice, rather than pressing Enter and taking
+		// whatever the TUI happened to have highlighted.
+		if svc, form, qerr := opencodeQuestion(a); qerr == nil && opencodeDefault(svc, form) {
+			log.Info("approved opencode question", "agent", body.Agent, "seq", body.Seq)
+			finish(true, "")
+			return
+		}
 		key := confirmKeyFor(a.Kind)
 		if err := c.SendKeys(pane, key); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
