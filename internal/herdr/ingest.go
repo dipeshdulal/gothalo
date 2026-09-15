@@ -105,12 +105,21 @@ type Ingester struct {
 	// evidence — if nothing has arrived for a while AND the world has moved on
 	// without us, the subscription really has stopped delivering.
 	lastEventAt time.Time
+
+	// retry throttles the reconnect loop's repeated "session ended" warnings;
+	// seedRetry the same for a seed snapshot that keeps failing. Without them an
+	// absent Herdr socket logged an identical warning every [reconnectDelay]
+	// forever. See [failureLog].
+	retry     *failureLog
+	seedRetry *failureLog
 }
 
 // NewIngester builds an Ingester over the given CLI client and bus.
 func NewIngester(cli *Client, bus *events.Bus) *Ingester {
 	return &Ingester{cli: cli, bus: bus, lastStatus: map[string]string{},
-		watchers: map[string]context.CancelFunc{}}
+		watchers:  map[string]context.CancelFunc{},
+		retry:     newFailureLog(),
+		seedRetry: newFailureLog()}
 }
 
 // Run drives the connect→subscribe→stream→reconnect loop until ctx is cancelled.
@@ -122,7 +131,7 @@ func (i *Ingester) Run(ctx context.Context) {
 			return
 		}
 		if err := i.session(ctx, first); err != nil {
-			log.Warn("herdr ingester: session ended", "session", i.cli.SessionLabel(), "err", err)
+			i.logSessionEnded(err)
 		}
 		i.bus.Publish(events.SourceGothalo, events.TypeHerdrDisconnected,
 			map[string]any{"reason": "socket closed", "session": i.cli.SessionLabel()})
@@ -132,6 +141,34 @@ func (i *Ingester) Run(ctx context.Context) {
 			return
 		case <-time.After(reconnectDelay):
 		}
+	}
+}
+
+// logSessionEnded reports the end of one connection attempt. The reconnect
+// loop calls it every [reconnectDelay], so only the first, changed, or
+// long-overdue failure is a warning; the unchanged retries go to debug. See
+// [failureLog].
+func (i *Ingester) logSessionEnded(err error) {
+	if i.retry.failed(err) {
+		log.Warn("herdr ingester: session ended", "session", i.cli.SessionLabel(), "err", err)
+		return
+	}
+	log.Debug("herdr ingester: session ended", "session", i.cli.SessionLabel(), "err", err)
+}
+
+// logConnected reports a successful subscribe. The first connection is the
+// ordinary "subscribed" line; a connection that ends a failure streak is the
+// recovery line, so an operator can see Herdr come back. A repeat connect with
+// no failure in between is debug — genuinely repetitive on a flapping socket,
+// and the bus already carries herdr_connected/herdr_resync for it.
+func (i *Ingester) logConnected(first bool, path string, subs int) {
+	switch {
+	case first:
+		log.Info("herdr ingester: subscribed", "session", i.cli.SessionLabel(), "socket", path, "subscriptions", subs)
+	case i.retry.recovered():
+		log.Info("herdr ingester: reconnected", "session", i.cli.SessionLabel(), "socket", path, "subscriptions", subs)
+	default:
+		log.Debug("herdr ingester: subscribed", "session", i.cli.SessionLabel(), "socket", path, "subscriptions", subs)
 	}
 }
 
@@ -165,7 +202,7 @@ func (i *Ingester) session(ctx context.Context, first bool) error {
 	for pane := range seeded {
 		i.ensureWatcher(ctx, pane)
 	}
-	log.Info("herdr ingester: subscribed", "session", i.cli.SessionLabel(), "socket", path, "subscriptions", len(subs))
+	i.logConnected(first, path, len(subs))
 
 	i.bus.Publish(events.SourceGothalo, events.TypeHerdrConnected,
 		map[string]any{"socket": path, "session": i.cli.SessionLabel()})
@@ -303,9 +340,17 @@ func (i *Ingester) seedStatuses() map[string]string {
 	statuses := map[string]string{}
 	agents, err := i.cli.Agents()
 	if err != nil {
-		log.Warn("herdr ingester: snapshot for seed failed", "err", err)
+		// This runs once per (re)connect, i.e. every [reconnectDelay] while the
+		// socket is up but the snapshot keeps failing — throttle it like the
+		// session failure above.
+		if i.seedRetry.failed(err) {
+			log.Warn("herdr ingester: snapshot for seed failed", "session", i.cli.SessionLabel(), "err", err)
+		} else {
+			log.Debug("herdr ingester: snapshot for seed failed", "session", i.cli.SessionLabel(), "err", err)
+		}
 		return statuses
 	}
+	i.seedRetry.recovered()
 	i.mu.Lock()
 	for _, a := range agents {
 		statuses[a.PaneID] = a.Status
@@ -369,6 +414,9 @@ func (i *Ingester) stopWatcher(pane string) {
 // connection's: these are independent sockets, so the main stream reconnecting
 // should not churn every pane watcher with it.
 func (i *Ingester) watchPane(ctx context.Context, pane string) {
+	// Per-pane, so one dead pane cannot suppress another's warning, and a pane
+	// that is simply gone (handled below) never reaches this throttle.
+	failures := newFailureLog()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -389,7 +437,14 @@ func (i *Ingester) watchPane(ctx context.Context, pane string) {
 				i.stopWatcher(pane)
 				return
 			}
-			log.Warn("herdr ingester: pane watch ended", "pane", pane, "err", err)
+			// A retry every [reconnectDelay] must not log every retry.
+			if failures.failed(err) {
+				log.Warn("herdr ingester: pane watch ended", "pane", pane, "err", err)
+			} else {
+				log.Debug("herdr ingester: pane watch ended", "pane", pane, "err", err)
+			}
+		} else {
+			failures.recovered()
 		}
 		select {
 		case <-ctx.Done():

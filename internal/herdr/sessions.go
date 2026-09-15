@@ -117,15 +117,22 @@ type Manager struct {
 	mu      sync.Mutex
 	clients map[string]*Client // key "" = default session
 	stops   map[string]func()
+
+	// discovery throttles the repeated "session discovery failed" warning.
+	// Discovery runs every [sessionSyncInterval]; with Herdr down that used to be
+	// an identical warning every 15s for as long as the bridge ran. See
+	// [failureLog].
+	discovery *failureLog
 }
 
 // NewManager builds a Manager seeded with the default-session client. onStart
 // may be nil (no per-session workers, e.g. in tests).
 func NewManager(onStart StartFunc) *Manager {
 	return &Manager{
-		onStart: onStart,
-		clients: map[string]*Client{"": New()},
-		stops:   map[string]func(){},
+		onStart:   onStart,
+		clients:   map[string]*Client{"": New()},
+		stops:     map[string]func(){},
+		discovery: newFailureLog(),
 	}
 }
 
@@ -187,7 +194,15 @@ func (m *Manager) sync() {
 	running := map[string]bool{"": true} // default is always kept
 	infos, err := m.Default().Sessions()
 	if err != nil {
-		log.Warn("session discovery failed; default session only", "err", err)
+		// Discovery runs every [sessionSyncInterval]; an absent Herdr must not
+		// mean an identical warning every 15s. See [failureLog].
+		if m.discovery.failed(err) {
+			log.Warn("session discovery failed; default session only", "err", err)
+		} else {
+			log.Debug("session discovery failed; default session only", "err", err)
+		}
+	} else {
+		m.discovery.recovered()
 	}
 	for _, in := range infos {
 		if !in.Running {
