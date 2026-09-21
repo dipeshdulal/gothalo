@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/pane_title.dart';
 import '../../data/bridge/bridge_client.dart';
@@ -386,7 +387,7 @@ class _DiffScreenState extends ConsumerState<DiffScreen> {
           ],
         ],
       ),
-      body: _buildBody(scheme),
+      body: DesktopWidth(maxWidth: 1200, child: _buildBody(scheme)),
     );
   }
 

@@ -72,6 +72,7 @@ class AgentRow extends StatelessWidget {
     this.onStar,
     this.menu,
     this.focused = false,
+    this.selected = false,
   }) : compact = false;
 
   /// The dense variant, for agents that want nothing from you.
@@ -88,7 +89,8 @@ class AgentRow extends StatelessWidget {
        onApprove = null,
        onStar = null,
        menu = null,
-       focused = false;
+       focused = false,
+       selected = false;
 
   final Agent agent;
   final VoidCallback onTap;
@@ -133,6 +135,12 @@ class AgentRow extends StatelessWidget {
   /// This is the pane Herdr has focused on the host. Lifts the fill and tints
   /// the edge, the same "you are here" marker the project view always had.
   final bool focused;
+
+  /// This is the row the user is currently looking at in a desktop
+  /// master–detail pair — the shell's agent list marking the pane open in the
+  /// detail column. Distinct from [focused], which is Herdr's own focus on the
+  /// host: selection lifts the fill, it does not claim the primary edge.
+  final bool selected;
 
   /// Rendered as a dense single line rather than a card.
   final bool compact;
@@ -249,7 +257,7 @@ class AgentRow extends StatelessWidget {
       // focused — "this one is stuck" is more urgent than "this one is where
       // your cursor is".
       borderColor: blocked ? scheme.error : (focused ? scheme.primary : null),
-      selected: focused,
+      selected: focused || selected,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -10,6 +10,7 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/connection/connection.dart';
 import '../../core/naming.dart';
 import '../../core/theme.dart';
@@ -621,7 +622,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
             // progress and the button that caused it read as one thing. Renders
             // nothing while idle.
             ImageUploadStatus(controller: _attach),
-            AccessoryKeyRow(
+            // The touch key bar is a phone affordance; a desktop has the keys
+            // on the keyboard in front of it. See [DesktopTerminalActions].
+            if (context.isDesktopLayout)
+              DesktopTerminalActions(
+                uploading: _attach.uploading,
+                onAttach: () => showImageSourceSheet(
+                  context,
+                  onPick: _attachImage,
+                  onPickFile: _attachDocument,
+                ),
+              )
+            else
+              AccessoryKeyRow(
               padOpen: _padOpen,
               onTogglePad: () => setState(() => _padOpen = !_padOpen),
               keyboardOpen: _termFocus.hasFocus,

@@ -106,6 +106,11 @@ class AppTheme {
         builders: {
           TargetPlatform.android: _SimpleSlideTransitionsBuilder(),
           TargetPlatform.iOS: _SimpleSlideTransitionsBuilder(),
+          // No desktop entry here on purpose. Desktop routes are built with a
+          // [CustomTransitionPage] (see the router) so their duration can be a
+          // short 80ms fade rather than this widget's fixed 300ms; leaving a
+          // desktop builder here would be a second, unreachable definition of
+          // the same motion.
         },
       ),
       // Transparent by default so an [AppBackground]-wrapped screen shows its
