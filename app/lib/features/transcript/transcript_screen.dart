@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/connection/connection.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
@@ -1202,9 +1203,10 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
           ),
         ],
       ),
-      body: SafeArea(
-        top: false,
-        child: Column(
+      body: DesktopWidth(
+        child: SafeArea(
+          top: false,
+          child: Column(
           children: [
             Expanded(
               child: Stack(
@@ -1314,6 +1316,7 @@ class _TranscriptScreenState extends ConsumerState<TranscriptScreen>
             ],
           ],
         ),
+      ),
       ),
     );
   }

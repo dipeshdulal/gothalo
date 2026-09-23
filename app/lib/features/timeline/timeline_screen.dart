@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/naming.dart';
@@ -67,7 +68,8 @@ class TimelineScreen extends ConsumerWidget {
             ),
           ],
         ),
-        body: timeline.when(
+        body: DesktopWidth(
+          child: timeline.when(
           // The provider re-reads on a timer and on every agent transition. Both
           // are refreshes of data already on screen, and rebuilding the list
           // through a full-page spinner would make the screen flash every time
@@ -95,6 +97,7 @@ class TimelineScreen extends ConsumerWidget {
             child: entries.isEmpty
                 ? const _EmptyState()
                 : _TimelineList(entries: entries, live: live),
+          ),
           ),
         ),
       ),

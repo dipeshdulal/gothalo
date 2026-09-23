@@ -23,6 +23,13 @@ import 'agent_row.dart';
 /// [showServer] is false wherever the server is implied — inside one server's
 /// flock, and on a home screen with a single bridge paired — so the row does
 /// not repeat the same word down the page.
+///
+/// [selectedKey] marks the row whose pane is open in the desktop shell's detail
+/// column, so the master list shows where you are. Null everywhere on a phone.
+///
+/// [capSections] keeps the phone's row caps and their expanders. Pass false on
+/// a surface with the vertical room to show every agent — the desktop list
+/// panel — so it never renders a "show N more" for rows it could have shown.
 List<Widget> buildAgentSections(
   BuildContext context,
   WidgetRef ref, {
@@ -31,6 +38,8 @@ List<Widget> buildAgentSections(
   required void Function(ServerAgentHit hit) onOpen,
   void Function(ServerAgentHit hit)? onApprove,
   bool showActivity = false,
+  String? selectedKey,
+  bool capSections = true,
 }) {
   final scheme = Theme.of(context).colorScheme;
   final expanded = ref.watch(sectionExpandedProvider);
@@ -38,11 +47,23 @@ List<Widget> buildAgentSections(
   final out = <Widget>[];
 
   for (final group in groups) {
-    final split = SectionCap.of(
-      group.agents,
-      expanded: expanded.contains(group.label),
-      cap: group.cap,
-    );
+    // The cap exists to keep a phone section from pushing the next one off the
+    // bottom. A surface with the room to spare passes `capSections: false` and
+    // shows every row instead — no "show N more", and no "show less" either,
+    // because a control that is never hiding anything is just a label taking up
+    // space. Cap-to-fit rather than cap-by-count means the split is the full
+    // list, which is exactly what `SectionCap` reports as having no overflow.
+    final split = capSections
+        ? SectionCap.of(
+            group.agents,
+            expanded: expanded.contains(group.label),
+            cap: group.cap,
+          )
+        : SectionCap.of(
+            group.agents,
+            expanded: false,
+            cap: group.agents.length,
+          );
     final isOpen = expanded.contains(group.label);
 
     out.add(
@@ -101,6 +122,7 @@ List<Widget> buildAgentSections(
           agent: hit.agent,
           serverName: showServer ? hit.server.name : null,
           showActivity: showActivity,
+          selected: selectedKey != null && hit.key == selectedKey,
           onApprove: onApprove == null ? null : () => onApprove(hit),
           onTap: () => onOpen(hit),
         ),
