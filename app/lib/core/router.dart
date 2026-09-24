@@ -13,32 +13,69 @@ import '../features/timeline/timeline_screen.dart';
 import '../features/transcript/transcript_screen.dart';
 import 'adaptive.dart';
 import 'shell/desktop_shell.dart';
+import 'theme.dart';
+
+/// How long a phone route swap takes.
+///
+/// Material's own page duration, spelled out here because the route is no
+/// longer a [MaterialPage] to inherit it from. The motion is unchanged: the
+/// same slide [buildSlidePageTransition] has always drawn, over the same 300ms.
+const _kPhonePageTransition = Duration(milliseconds: 300);
 
 /// Builds a route's page, choosing the motion by window size.
 ///
-/// A phone keeps the plain [MaterialPage] and its 300ms slide. A desktop gets a
-/// [CustomTransitionPage] so the **duration** can be set at all — the theme's
-/// [PageTransitionsTheme] only picks the visual, the route still animates for
-/// its fixed 300ms, which is what made the desktop swap feel slow and ghosty.
-/// The visual is a short fade over [kDesktopPageTransition]: no slide (the rail
-/// and the list do not move) and no cross-dissolve long enough to read as two
-/// screens at once.
-Page<void> _page(BuildContext context, GoRouterState state, Widget child) {
-  if (!context.isDesktopLayout) {
-    return MaterialPage<void>(key: state.pageKey, child: child);
-  }
+/// Both sizes get a [CustomTransitionPage]; only the duration and the
+/// transition differ — a phone slides the new screen in over 300ms, a desktop
+/// fades the detail column over [kDesktopPageTransition]. A desktop needs the
+/// custom page because the theme's [PageTransitionsTheme] only picks the
+/// visual: the route still animates for its fixed 300ms, which is what made the
+/// desktop swap feel slow and ghosty.
+///
+/// The page **type** is deliberately the same on both sides of the breakpoint.
+/// [Page.canUpdate] compares `runtimeType`, so a window dragged across
+/// [AppBreakpoints.desktop] with a [MaterialPage] on one side and a
+/// [CustomTransitionPage] on the other is not an update — the Navigator
+/// disposes the route and builds a new one. The screen's `State` goes with it:
+/// an open transcript drops its socket and its scroll position, a terminal
+/// loses its buffer, and both then reconnect. Keeping one page type makes a
+/// resize what it looks like — the same screen, wider.
+@visibleForTesting
+Page<void> buildRoutePage(
+  BuildContext context,
+  GoRouterState state,
+  Widget child,
+) {
+  final desktop = context.isDesktopLayout;
   return CustomTransitionPage<void>(
     key: state.pageKey,
     child: child,
-    transitionDuration: kDesktopPageTransition,
-    reverseTransitionDuration: kDesktopPageTransition,
-    transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-        FadeTransition(
-          opacity: animation.drive(CurveTween(curve: Curves.easeOut)),
-          child: child,
-        ),
+    transitionDuration: desktop
+        ? kDesktopPageTransition
+        : _kPhonePageTransition,
+    reverseTransitionDuration: desktop
+        ? kDesktopPageTransition
+        : _kPhonePageTransition,
+    transitionsBuilder: desktop
+        ? _fadeTransition
+        : (context, animation, secondaryAnimation, child) =>
+              buildSlidePageTransition(animation, child),
   );
 }
+
+/// The desktop's page motion: a short fade, no slide.
+///
+/// The rail and the agent list do not move across a route swap, so a slide
+/// would be the wrong story — only the detail column is becoming something
+/// else. Short enough that it never reads as two screens at once.
+Widget _fadeTransition(
+  BuildContext context,
+  Animation<double> animation,
+  Animation<double> secondaryAnimation,
+  Widget child,
+) => FadeTransition(
+  opacity: animation.drive(CurveTween(curve: Curves.easeOut)),
+  child: child,
+);
 
 /// App routes.
 ///
@@ -61,7 +98,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/pair',
         pageBuilder: (context, state) =>
-            _page(context, state, const PairingScreen()),
+            buildRoutePage(context, state, const PairingScreen()),
       ),
       ShellRoute(
         builder: (context, state, child) =>
@@ -70,31 +107,31 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/',
             pageBuilder: (context, state) =>
-                _page(context, state, const ServersScreen()),
+                buildRoutePage(context, state, const ServersScreen()),
           ),
           GoRoute(
             path: '/inbox',
             pageBuilder: (context, state) =>
-                _page(context, state, const InboxScreen()),
+                buildRoutePage(context, state, const InboxScreen()),
           ),
           GoRoute(
             path: '/priority',
             pageBuilder: (context, state) =>
-                _page(context, state, const PriorityScreen()),
+                buildRoutePage(context, state, const PriorityScreen()),
           ),
           GoRoute(
             path: '/overview',
             pageBuilder: (context, state) =>
-                _page(context, state, const OverviewScreen()),
+                buildRoutePage(context, state, const OverviewScreen()),
           ),
           GoRoute(
             path: '/timeline',
             pageBuilder: (context, state) =>
-                _page(context, state, const TimelineScreen()),
+                buildRoutePage(context, state, const TimelineScreen()),
           ),
           GoRoute(
             path: '/overview/:workspace',
-            pageBuilder: (context, state) => _page(
+            pageBuilder: (context, state) => buildRoutePage(
               context,
               state,
               OverviewScreen(workspaceId: state.pathParameters['workspace']),
@@ -102,7 +139,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/terminal/:pane',
-            pageBuilder: (context, state) => _page(
+            pageBuilder: (context, state) => buildRoutePage(
               context,
               state,
               TerminalScreen(
@@ -112,7 +149,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/transcript/:pane',
-            pageBuilder: (context, state) => _page(
+            pageBuilder: (context, state) => buildRoutePage(
               context,
               state,
               TranscriptScreen(
@@ -125,7 +162,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/diff/:pane',
-            pageBuilder: (context, state) => _page(
+            pageBuilder: (context, state) => buildRoutePage(
               context,
               state,
               DiffScreen(

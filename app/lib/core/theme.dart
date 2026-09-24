@@ -106,11 +106,12 @@ class AppTheme {
         builders: {
           TargetPlatform.android: _SimpleSlideTransitionsBuilder(),
           TargetPlatform.iOS: _SimpleSlideTransitionsBuilder(),
-          // No desktop entry here on purpose. Desktop routes are built with a
-          // [CustomTransitionPage] (see the router) so their duration can be a
-          // short 80ms fade rather than this widget's fixed 300ms; leaving a
-          // desktop builder here would be a second, unreachable definition of
-          // the same motion.
+          // No desktop entry here on purpose. Every routed screen is built as
+          // a [CustomTransitionPage] (see `buildRoutePage`), which carries its
+          // own duration and transition — 80ms and a fade on desktop, this
+          // slide over 300ms on a phone — so this theme only reaches pages
+          // routed the ordinary way. A desktop builder here would be a second,
+          // unreachable definition of the same motion.
         },
       ),
       // Transparent by default so an [AppBackground]-wrapped screen shows its
@@ -325,21 +326,31 @@ class _SimpleSlideTransitionsBuilder extends PageTransitionsBuilder {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
     Widget child,
-  ) {
-    // `animation` runs forward on push and reverse on pop, so driving the
-    // top route's position off it covers both directions: it slides in from
-    // the right on push and back out to the right on pop. The route beneath
-    // isn't touched (secondaryAnimation ignored), so it just sits still.
-    return SlideTransition(
-      position: animation.drive(
-        Tween(
-          begin: const Offset(1, 0),
-          end: Offset.zero,
-        ).chain(CurveTween(curve: Curves.easeOutCubic)),
-      ),
-      child: child,
-    );
-  }
+  ) => buildSlidePageTransition(animation, child);
+}
+
+/// The slide itself, as a plain function.
+///
+/// Two callers need this exact motion and there should only be one of it: the
+/// [PageTransitionsTheme] above, for anything routed as a [MaterialPage] (a
+/// sheet's inner navigator, say), and the router's page builder, which draws
+/// every route as a `CustomTransitionPage` so the page type stays the same
+/// across the desktop breakpoint. See `buildRoutePage` for why that matters.
+///
+/// `animation` runs forward on push and reverse on pop, so driving the top
+/// route's position off it covers both directions: it slides in from the right
+/// on push and back out to the right on pop. The route beneath isn't touched
+/// (secondaryAnimation ignored), so it just sits still.
+Widget buildSlidePageTransition(Animation<double> animation, Widget child) {
+  return SlideTransition(
+    position: animation.drive(
+      Tween(
+        begin: const Offset(1, 0),
+        end: Offset.zero,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+    ),
+    child: child,
+  );
 }
 
 /// The palette + label + icon for each [AgentStatus], resolved against the
