@@ -102,6 +102,36 @@ void main() {
     expect(kRecentSpaceStoreLimit, greaterThan(kRecentSpaceVisibleRows));
   });
 
+  test('the same project is listed once, a different worktree is not', () {
+    RecentSpaceHit hit(
+      String workspaceId,
+      String project, {
+      String? branch,
+    }) => RecentSpaceHit(
+      server: _server('s1'),
+      workspaceId: workspaceId,
+      workspace: null,
+      project: project,
+      branch: branch,
+      agentCount: 0,
+      terminalCount: 1,
+      needsAttention: false,
+    );
+
+    final rows = recentSpaceRows([
+      // Two spaces on one checkout: same project, same branch. The newest
+      // workspace wins and the older one is dropped.
+      hit('w2', 'gothalo'),
+      hit('w1', 'gothalo'),
+      // A worktree of the same repo is a different destination and survives.
+      hit('w3', 'gothalo', branch: 'feat-mobile'),
+      // Another project entirely.
+      hit('w4', 'storefront'),
+    ]);
+
+    expect(rows.map((r) => r.workspaceId), ['w2', 'w3', 'w4']);
+  });
+
   test('space history round-trips and ignores malformed entries', () {
     final raw = encodeRecentSpaces([
       const RecentSpaceOpen(serverId: 's1', workspaceId: 'w1', openedAt: 9),
