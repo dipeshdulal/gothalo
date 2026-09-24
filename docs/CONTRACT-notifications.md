@@ -109,13 +109,15 @@ only its richness degrades.
 ### Composed text
 
 ```
-title:  <server_name> · <agent_title>
+title:  <agent_title>
 body:   Needs you — <question> · 1. Yes / 2. No      (blocked)
         Finished — <headline>                        (done)
 ```
 
-Title carries *where* (the line a locked phone always shows), body carries *why*.
-Bodies are truncated to 240 runes.
+Title names the agent, body carries *why*. The server is deliberately not in the
+title — it still rides in `data` (`server_id` / `server_name`) for routing and
+attribution, and the per-server group summary labels the stack. Bodies are
+truncated to 240 runes.
 
 ---
 

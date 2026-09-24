@@ -77,8 +77,8 @@ Future<void> _show(PushPayload p) async {
         groupKey: _groupKey(p.serverId),
         // The question is usually longer than one line; without this the most
         // useful part of the notification is the part that gets ellipsized.
-        // The title already names the server, so no summaryText — it would just
-        // repeat it in the header line.
+        // No summaryText — the group summary already carries the server label,
+        // so repeating it here would only push the question down.
         styleInformation: BigTextStyleInformation(body),
         actions: blocked ? _actionsFor(p) : null,
       ),
