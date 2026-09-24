@@ -82,8 +82,10 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
   Future<void> _openSpace(RecentSpaceHit hit) => _open(hit.server, hit.route);
 
   Future<void> _openAgent(ServerSummary server, Agent agent) =>
-      // Agents open the chat/transcript view by default (with a terminal toggle).
-      _open(server, '/transcript/${Uri.encodeComponent(agent.paneId)}');
+      // Agents open their raw terminal by default; the chat/transcript view is
+      // a sub-view of it, reached from the terminal's chat icon and only when
+      // the bridge has a readable transcript to show.
+      _open(server, '/terminal/${Uri.encodeComponent(agent.paneId)}');
 
   Future<void> _confirmDelete(ServerSummary server) async {
     final ok = await showDialog<bool>(

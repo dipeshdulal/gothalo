@@ -311,11 +311,10 @@ class _EntryTile extends StatelessWidget {
 
     final isTerminal = terminal != null;
     return InkWell(
+      // Every transition row opens the pane's raw terminal; the chat view is
+      // reached from there, and only when the bridge has a readable transcript.
       onTap: openable
-          ? () => context.push(
-              '${isTerminal ? '/terminal' : '/transcript'}'
-              '/${Uri.encodeComponent(entry.pane)}',
-            )
+          ? () => context.push('/terminal/${Uri.encodeComponent(entry.pane)}')
           : null,
       child: Container(
         // A block is the one transition that costs you time, so it gets the

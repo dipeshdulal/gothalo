@@ -244,7 +244,7 @@ A tap can arrive through either of two paths, and both are handled:
   `getInitialMessage()` / `onMessageOpenedApp`.
 
 Routing **switches the active server first** when the alert came from a bridge
-other than the current one, then opens the agent's transcript. An unrecognised
+other than the current one, then opens the agent's terminal. An unrecognised
 `server_id` leaves the selection alone rather than refusing to navigate.
 
 ---
