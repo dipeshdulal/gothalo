@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
+import '../../core/clock.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/naming.dart';
 import '../../core/theme.dart';
@@ -107,15 +108,20 @@ class TimelineScreen extends ConsumerWidget {
 
 /// The list itself: day headers, hour dividers inside a day, and one row per
 /// recorded transition.
-class _TimelineList extends StatelessWidget {
+class _TimelineList extends ConsumerWidget {
   const _TimelineList({required this.entries, required this.live});
 
   final List<TimelineEntry> entries;
   final Snapshot? live;
 
   @override
-  Widget build(BuildContext context) {
-    final rows = _layout(entries, live);
+  Widget build(BuildContext context, WidgetRef ref) {
+    // One "now" for the whole list, from the injectable clock so a screenshot
+    // renders at a fixed instant. Read here rather than per-row so the day
+    // headers and the still-running durations cannot disagree about what day it
+    // is across a midnight boundary mid-build.
+    final now = ref.watch(nowProvider)();
+    final rows = _layout(entries, live, now);
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 24),
@@ -137,8 +143,9 @@ sealed class _Row {
 }
 
 class _DayHeader extends _Row {
-  const _DayHeader(this.day);
+  const _DayHeader(this.day, this.now);
   final DateTime day;
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
@@ -146,7 +153,7 @@ class _DayHeader extends _Row {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
       child: Text(
-        dayLabel(day).toUpperCase(),
+        dayLabel(day, now: now).toUpperCase(),
         style: TextStyle(
           color: scheme.primary,
           fontSize: 11.5,
@@ -205,7 +212,7 @@ class _HourHeader extends _Row {
 /// agent is blocked now. Asking the live state closes that gap, and when there
 /// is no snapshot to ask (a cold start) nothing is claimed rather than
 /// something possibly false.
-List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live) {
+List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live, DateTime now) {
   final liveStatus = {
     for (final a in live?.agents ?? const <Agent>[]) a.paneId: a.agentStatus,
   };
@@ -240,7 +247,7 @@ List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live) {
       day = at;
       hour = null;
       flush();
-      rows.add(_DayHeader(at));
+      rows.add(_DayHeader(at, now));
     }
     if (hour == null || hour.hour != at.hour) {
       hour = at;
@@ -261,6 +268,7 @@ List<_Row> _layout(List<TimelineEntry> entries, Snapshot? live) {
         openable: current != null,
         where: agent?.projectLine ?? '',
         terminal: agent == null && pane != null ? pane : null,
+        now: now,
       ),
     );
   }
@@ -288,6 +296,7 @@ class _EntryTile extends StatelessWidget {
     required this.openable,
     required this.where,
     required this.terminal,
+    required this.now,
   });
 
   final TimelineEntry entry;
@@ -302,6 +311,10 @@ class _EntryTile extends StatelessWidget {
   /// Set when the pane behind this entry has no agent in it, so the row can
   /// name it as a terminal instead.
   final Pane? terminal;
+
+  /// The list's one "now", so a still-running duration is measured from the
+  /// same instant the day header was.
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
@@ -423,7 +436,7 @@ class _EntryTile extends StatelessWidget {
                     runSpacing: 2,
                     children: [
                       _Transition(entry: entry, accent: accent),
-                      _Elapsed(entry: entry, ongoing: ongoing),
+                      _Elapsed(entry: entry, ongoing: ongoing, now: now),
                     ],
                   ),
                 ],
@@ -512,10 +525,15 @@ class _Transition extends StatelessWidget {
 /// "0s": the bridge omits it when it could not see where the span began, and
 /// zero is a real value it uses for an instantaneous flip.
 class _Elapsed extends StatelessWidget {
-  const _Elapsed({required this.entry, required this.ongoing});
+  const _Elapsed({
+    required this.entry,
+    required this.ongoing,
+    required this.now,
+  });
 
   final TimelineEntry entry;
   final bool ongoing;
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
@@ -527,7 +545,7 @@ class _Elapsed extends StatelessWidget {
       final blocked = entry.to == 'blocked';
       final label =
           '${statusFromWire(entry.to).label.toLowerCase()} '
-          '${formatDuration(DateTime.now().difference(entry.at))}';
+          '${formatDuration(now.difference(entry.at))}';
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
         decoration: BoxDecoration(

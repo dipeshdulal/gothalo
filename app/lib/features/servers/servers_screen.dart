@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
+import '../../core/clock.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
 import '../../core/tokens.dart';
@@ -364,7 +365,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
 /// way. The state line reuses the terminal-native idiom from [StatusMark]: a
 /// status dot (red = needs you, teal = all clear) beside a small uppercase mono
 /// label.
-class _GreetingHeader extends StatelessWidget {
+class _GreetingHeader extends ConsumerWidget {
   const _GreetingHeader({required this.needsYou});
 
   /// Blocked agents across all servers — the thing the greeting should own up
@@ -372,9 +373,12 @@ class _GreetingHeader extends StatelessWidget {
   final int needsYou;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final now = DateTime.now();
+    // Through the injectable clock, not DateTime.now(): the greeting and the
+    // date are wall-clock dependent, and the screenshot golden renders them at
+    // a fixed instant.
+    final now = ref.watch(nowProvider)();
     final greeting = switch (now.hour) {
       < 12 => 'Good morning',
       < 17 => 'Good afternoon',
