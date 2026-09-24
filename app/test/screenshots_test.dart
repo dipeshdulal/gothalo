@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gothalo/core/clock.dart';
 import 'package:gothalo/core/connection/connection_providers.dart';
 import 'package:gothalo/core/theme.dart';
 import 'package:gothalo/data/bridge/models/snapshot.dart';
@@ -34,6 +35,15 @@ import 'package:gothalo/features/timeline/timeline_providers.dart';
 import 'package:gothalo/features/timeline/timeline_screen.dart';
 
 const _phone = Size(1080, 2100);
+
+/// The instant every screenshot is rendered at.
+///
+/// Two of these screens read the wall clock — the home greeting and today's
+/// date, and the activity timeline's hour dividers, entry times and
+/// still-running durations — so without a frozen clock the goldens would only
+/// match on the day and at the time of day they were generated. A Tuesday late
+/// morning, matching what the committed images already show.
+final _frozenNow = DateTime(2026, 9, 8, 11, 6);
 
 class _FixedSnapshot extends inbox.SnapshotController {
   _FixedSnapshot(this.snap);
@@ -50,7 +60,9 @@ TimelineEntry _entry(
   required String agent,
   int minutesAgo = 0,
 }) => TimelineEntry.fromJson({
-  'ts': DateTime.now().subtract(Duration(minutes: minutesAgo)).millisecondsSinceEpoch,
+  'ts': _frozenNow
+      .subtract(Duration(minutes: minutesAgo))
+      .millisecondsSinceEpoch,
   'pane': pane,
   'agent': agent,
   'title': title,
@@ -188,6 +200,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          nowProvider.overrideWithValue(() => _frozenNow),
           serversProvider.overrideWith((ref) => Stream.value([server])),
           serverAgentsProvider.overrideWith(
             (ref, id) async => ServerAgents(server: server, agents: agents),
@@ -289,6 +302,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          nowProvider.overrideWithValue(() => _frozenNow),
           bridgeClientProvider.overrideWithValue(null),
           inbox.snapshotControllerProvider.overrideWith(
             () => _FixedSnapshot(snap),
