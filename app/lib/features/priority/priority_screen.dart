@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
@@ -54,8 +55,9 @@ class PriorityScreen extends ConsumerWidget {
         // Builder: `FlatAppBar.padding` reads the MediaQuery that
         // `extendBodyBehindAppBar` rewrites, so it has to be asked from inside
         // the body. See `FlatAppBar.padding`.
-        body: Builder(
-          builder: (context) => RefreshIndicator(
+        body: DesktopWidth(
+          child: Builder(
+            builder: (context) => RefreshIndicator(
             onRefresh: () async => ref.invalidate(serverAgentsProvider),
             // No screen-wide loading state: each server resolves independently, so a
             // reachable one renders straight away instead of waiting behind a
@@ -147,6 +149,7 @@ class PriorityScreen extends ConsumerWidget {
                 ],
               ],
             ),
+          ),
           ),
         ),
       ),

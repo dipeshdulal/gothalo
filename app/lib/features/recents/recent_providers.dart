@@ -440,6 +440,18 @@ class RecentSpaceHit {
   final bool needsAttention;
 
   String get key => recentSpaceKey(server.id, workspaceId);
+
+  /// Identity of the **project** this shortcut stands for, as opposed to the
+  /// workspace it happens to point at.
+  ///
+  /// A repo's main checkout and each of its worktrees are separate Herdr
+  /// workspaces, and two spaces can even sit on one checkout, so keying the
+  /// strip by [workspaceId] lists the same project name several times over.
+  /// Server is part of the key for the same reason it is in [key]: one repo
+  /// name can exist on two bridges. The branch is part of it so two worktrees
+  /// of one repo stay distinct — they are genuinely different destinations.
+  String get projectKey => '${server.id}::${projectLabel(project, branch)}';
+
   String get route => '/overview/${Uri.encodeComponent(workspaceId)}';
 }
 
@@ -496,10 +508,27 @@ List<RecentSpaceHit> resolveRecentSpaces(
   return out;
 }
 
+/// The rows the Recent project strip actually renders.
+///
+/// Deduped by [RecentSpaceHit.projectKey]: a repo's main checkout and its
+/// worktrees are separate Herdr workspaces, and two spaces can sit on one
+/// checkout, so without this the strip lists "gothalo" three times. The first
+/// occurrence wins — the list is already newest-first — and the cap is applied
+/// **after** dedupe, so a collapsed repeat is backfilled by the next project
+/// rather than leaving a gap.
 List<RecentSpaceHit> recentSpaceRows(
   List<RecentSpaceHit> hits, {
   int cap = kRecentSpaceVisibleRows,
-}) => hits.take(cap).toList();
+}) {
+  final out = <RecentSpaceHit>[];
+  final seen = <String>{};
+  for (final hit in hits) {
+    if (!seen.add(hit.projectKey)) continue;
+    out.add(hit);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
 
 /// Live recent project shortcuts across every paired server.
 final recentSpaceHitsProvider = Provider<List<RecentSpaceHit>>((ref) {

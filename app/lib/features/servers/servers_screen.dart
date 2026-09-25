@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
@@ -168,8 +169,9 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
           tooltip: 'Add server manually',
           child: const Icon(Icons.add),
         ),
-        body: Builder(
-          builder: (context) => servers.when(
+        body: DesktopWidth(
+          child: Builder(
+            builder: (context) => servers.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('$e')),
             data: (list) {
@@ -350,6 +352,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                 ],
               );
             },
+          ),
           ),
         ),
       ),

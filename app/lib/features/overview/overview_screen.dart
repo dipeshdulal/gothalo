@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
 import '../../core/naming.dart';
 import '../../core/theme.dart';
@@ -245,7 +246,8 @@ class _OverviewScreenState extends ConsumerState<OverviewScreen>
             ),
           ],
         ),
-        body: snapshot.when(
+        body: DesktopWidth(
+          child: snapshot.when(
           skipLoadingOnRefresh: true,
           skipLoadingOnReload: true,
           loading: () => const Center(child: CircularProgressIndicator()),
@@ -276,6 +278,7 @@ class _OverviewScreenState extends ConsumerState<OverviewScreen>
                     ),
             );
           },
+        ),
         ),
       ),
     );

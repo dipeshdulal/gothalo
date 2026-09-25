@@ -175,3 +175,58 @@ class AccessoryKeyRow extends StatelessWidget {
     );
   }
 }
+
+/// The desktop terminal's bottom bar.
+///
+/// The seven-button [AccessoryKeyRow] is a **touch** affordance: Esc, Tab, ^C,
+/// the arrow pad and the soft-keyboard toggle are all there because a phone has
+/// no physical keys. With a keyboard in front of you they are at best redundant
+/// and at worst a strip of noise under the buffer, so none of them are drawn
+/// here.
+///
+/// One thing is kept, because a keyboard cannot do it: **attaching an image or
+/// document**, which types the uploaded file's path into the pane. It lives on
+/// the same bottom edge it does on a phone rather than moving to the app bar, so
+/// the two layouts keep one place for "put a file into this pane".
+class DesktopTerminalActions extends StatelessWidget {
+  const DesktopTerminalActions({
+    super.key,
+    required this.uploading,
+    required this.onAttach,
+  });
+
+  /// Lights the button while an upload is in flight; a tap is a no-op then.
+  final bool uploading;
+  final VoidCallback onAttach;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.4),
+            ),
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            AccessoryButton(
+              icon: Icons.add_photo_alternate_outlined,
+              onTap: uploading ? () {} : onAttach,
+              active: uploading,
+              outlined: true,
+              semanticLabel: 'Attach an image or document',
+              tooltip: 'Attach an image or document',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

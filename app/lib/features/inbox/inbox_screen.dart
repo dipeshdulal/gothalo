@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/adaptive.dart';
 import '../../core/app_background.dart';
 import '../../core/connection/connection_providers.dart';
 import '../../core/theme.dart';
@@ -91,8 +92,9 @@ class InboxScreen extends ConsumerWidget {
               ],
             ),
           ),
-          body: Column(
-            children: [
+          body: DesktopWidth(
+            child: Column(
+              children: [
               const EnablePushBanner(),
               _QuickActions(snapshot: snapshot),
               Expanded(
@@ -117,6 +119,7 @@ class InboxScreen extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
           ),
         ),
       ),
