@@ -12,7 +12,7 @@ Map<String, dynamic> blockedData({String? options}) => {
   'server_id': 'srv1',
   'server_name': 'Mac Studio',
   'agent_title': 'claude — gothalo',
-  'title': 'Mac Studio · claude — gothalo',
+  'title': 'claude — gothalo',
   'body': 'Needs you — Run `rm -rf build`? · 1. Yes / 2. No',
   'question': 'Run `rm -rf build`?',
   'category': 'dangerous_command_approval',

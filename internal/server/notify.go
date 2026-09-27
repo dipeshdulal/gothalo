@@ -69,10 +69,13 @@ type notification struct {
 
 // compose builds the user-visible notification for one transition.
 //
-// Title carries the WHERE — "<server> · <agent>" — because that is the line a
-// locked phone always shows, and "which of my machines is this?" was previously
-// unanswerable. Body carries the WHY: the agent's real question when we could
-// read one, its last headline otherwise.
+// Title carries the WHERE — the agent — because that is the line a locked phone
+// always shows. The server is deliberately left out of it: a phone usually
+// watches one machine, and the "<server> · " prefix only pushed the agent's name
+// out of view. The payload still carries server_id/server_name for routing and
+// attribution, and the per-server group summary labels the stack. Body carries
+// the WHY: the agent's real question when we could read one, its last headline
+// otherwise.
 func (s *Server) compose(paneID, status, title string, seq int, st *agentstate.State) notification {
 	agent := strings.TrimSpace(title)
 	if agent == "" {
@@ -94,9 +97,6 @@ func (s *Server) compose(paneID, status, title string, seq int, st *agentstate.S
 	}
 
 	n.title = agent
-	if server != "" {
-		n.title = server + " · " + agent
-	}
 
 	switch status {
 	case "blocked":

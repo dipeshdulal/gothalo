@@ -15,8 +15,9 @@ func composer(t *testing.T) *Server {
 }
 
 // TestComposeBlockedSaysWhichServerAndWhy is the whole point of the rework: from
-// the lock screen alone the notification must answer which machine, which agent,
-// and what it is asking.
+// the lock screen alone the notification must name the agent and say what it is
+// asking. The machine is no longer in the title, but still rides in the data for
+// routing and attribution.
 func TestComposeBlockedSaysWhichServerAndWhy(t *testing.T) {
 	s := composer(t)
 	st := &agentstate.State{
@@ -33,8 +34,8 @@ func TestComposeBlockedSaysWhichServerAndWhy(t *testing.T) {
 
 	n := s.compose("acme/w1:p2", "blocked", "claude — gothalo", 7, st)
 
-	if !strings.Contains(n.title, "Mac Studio") {
-		t.Errorf("title = %q, must name the server", n.title)
+	if strings.Contains(n.title, "Mac Studio") {
+		t.Errorf("title = %q, must not name the server", n.title)
 	}
 	if !strings.Contains(n.title, "claude — gothalo") {
 		t.Errorf("title = %q, must name the agent", n.title)
@@ -118,12 +119,12 @@ func TestComposeTruncatesBody(t *testing.T) {
 	}
 }
 
-// TestComposeNoServerName: a bridge with no name must not produce a title with a
-// dangling separator.
-func TestComposeNoServerName(t *testing.T) {
-	s := &Server{cfg: &config.Config{ServerID: "srv1"}}
+// TestComposeTitleIsJustTheAgent: a named bridge and an unnamed one must read
+// the same, since the server is not part of the visible title.
+func TestComposeTitleIsJustTheAgent(t *testing.T) {
+	s := composer(t)
 	n := s.compose("w1:p2", "blocked", "claude", 1, nil)
-	if strings.HasPrefix(n.title, "·") || strings.Contains(n.title, " · ") {
-		t.Errorf("title = %q, want no separator when the server is unnamed", n.title)
+	if n.title != "claude" {
+		t.Errorf("title = %q, want the agent alone", n.title)
 	}
 }

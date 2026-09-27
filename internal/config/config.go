@@ -30,8 +30,9 @@ type Config struct {
 	// its deep-link can't know which server to open. Generated on first serve.
 	ServerID string `json:"server_id"`
 
-	// ServerName is the human label for this machine ("Mac Studio"), shown as the
-	// notification title and in the app's server list. Defaults to the hostname.
+	// ServerName is the human label for this machine ("Mac Studio"), shown in
+	// the app's server list and as the label on that machine's notification
+	// group. Defaults to the hostname.
 	ServerName string `json:"server_name"`
 
 	Transport Transport `json:"transport"`
