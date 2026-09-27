@@ -88,11 +88,12 @@ class _GothaloAppState extends ConsumerState<GothaloApp> {
       _showUnroutable(target.serverName);
       return;
     }
-    // `prompt=1` asks the transcript to surface the blocked prompt's options
-    // sheet unasked — a notification tap means the user is coming to answer.
+    // Notifications land on the raw terminal, where a blocked prompt actually
+    // lives — the chat view is reached from there, and only when the bridge
+    // has a readable transcript for the pane.
     ref
         .read(routerProvider)
-        .push('/transcript/${Uri.encodeComponent(target.pane)}?prompt=1');
+        .push('/terminal/${Uri.encodeComponent(target.pane)}');
   }
 
   void _showUnroutable(String serverName) {

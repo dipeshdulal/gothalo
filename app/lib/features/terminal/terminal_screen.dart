@@ -95,6 +95,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   /// acknowledges it on the host too, once per visit.
   bool _markedDoneSeen = false;
 
+  /// Whether the bridge can serve a chat transcript for this pane. Starts false
+  /// so the app-bar chat icon is hidden until a probe says otherwise — the icon
+  /// is the only route into the transcript, and a pane with no readable
+  /// conversation must not offer one. See [BridgeClient.hasTranscript].
+  bool _hasTranscript = false;
+
+  /// The activity signature the last transcript probe was made against. A
+  /// transcript that does not exist yet appears when the agent first speaks, so
+  /// a hidden icon is re-probed when the agent's activity or status changes —
+  /// the moments a transcript could have come into being — and not on every
+  /// snapshot frame in between.
+  (int?, AgentStatus?)? _probedActivity;
+
+  /// True once a probe has been fired for the current client/pane.
+  bool _probedTranscript = false;
+
   /// Coalesces resize signals. `onResize` fires continuously while the soft
   /// keyboard slides open/closed; sending each one flashes the screen with a
   /// full agent repaint. We debounce so exactly one resize goes out once the
@@ -164,6 +180,18 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       path: '/attach',
       queryParameters: {'pane': widget.pane, 'token': c.bearer},
     );
+  }
+
+  /// Ask the bridge whether this pane has a readable chat transcript, and show
+  /// the app-bar chat icon only when it does. Fired on open and again while the
+  /// icon is hidden and the agent's activity or status changes (see
+  /// [_probedActivity]) — the moments a transcript can newly appear.
+  Future<void> _probeTranscript() async {
+    final client = _client;
+    if (client == null || _disposed) return;
+    final exists = await client.hasTranscript(widget.pane);
+    if (!mounted) return;
+    setState(() => _hasTranscript = exists);
   }
 
   Future<void> _connect() async {
@@ -440,6 +468,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       _sub = null;
       _channel?.sink.close(ws_status.normalClosure);
       _attempts = 0;
+      _probedTranscript = false;
+      _probedActivity = null;
+      _hasTranscript = false;
       WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
     }
 
@@ -452,6 +483,20 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
         agent = a;
         break;
       }
+    }
+    // Offer the chat view only when the bridge can actually serve one. Probed
+    // once on open, then again only while the icon is still hidden and the
+    // agent's activity or status has moved — a just-started agent has no
+    // transcript yet, and that change is what lets the icon appear once it
+    // speaks. A plain-shell pane has no agent and so is never probed.
+    final activity = (agent?.lastActivityTs, agent?.agentStatus);
+    if (_client != null &&
+        agent != null &&
+        (!_probedTranscript ||
+            (!_hasTranscript && activity != _probedActivity))) {
+      _probedTranscript = true;
+      _probedActivity = activity;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _probeTranscript());
     }
     // "I was just in this agent's terminal" — recorded so the home screen's
     // Recent section can put you back in the terminal rather than the chat.
@@ -527,8 +572,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               icon: const Icon(Icons.check_circle_outline),
               color: scheme.primary,
             ),
-          // The chat/transcript view is only meaningful for an agent pane.
-          if (agent != null)
+          // The chat view is a sub-view of this terminal and the only route
+          // into it, so it appears only when the bridge has confirmed a
+          // readable transcript for this agent pane. See [_probeTranscript].
+          if (agent != null && _hasTranscript)
             IconButton(
               tooltip: 'Chat view',
               onPressed: () => context.push(

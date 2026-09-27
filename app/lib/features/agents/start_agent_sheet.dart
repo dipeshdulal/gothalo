@@ -366,9 +366,10 @@ class _StartAgentSheetState extends ConsumerState<_StartAgentSheet> {
           ),
         ),
       );
-      // Straight to the new agent's chat — the pane id came back
-      // session-qualified precisely so no lookup is needed in between.
-      router.push('/transcript/${Uri.encodeComponent(result.paneId)}');
+      // Straight to the new agent's terminal — the pane id came back
+      // session-qualified precisely so no lookup is needed in between. The chat
+      // view is reachable from there once the agent has wrote a transcript.
+      router.push('/terminal/${Uri.encodeComponent(result.paneId)}');
     } on BridgeException catch (e) {
       if (!mounted) return;
       // The sheet deliberately stays open: the common failures (bad path, busy
