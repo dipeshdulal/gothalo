@@ -188,7 +188,7 @@ class _JumpSheetState extends ConsumerState<_JumpSheet> {
       }
     }
     Navigator.of(context).pop();
-    widget.navContext.push('/transcript/${Uri.encodeComponent(a.paneId)}');
+    widget.navContext.push('/terminal/${Uri.encodeComponent(a.paneId)}');
   }
 
   @override

@@ -1070,6 +1070,42 @@ class BridgeClient {
     }
   }
 
+  /// `GET /agent-transcript?probe=1` → whether this pane has a readable
+  /// chat transcript worth offering.
+  ///
+  /// The bridge resolves the pane, its kind and its session, and opens the
+  /// transcript BEFORE answering a probe (see `docs/CONTRACT-agent-transcript.md`),
+  /// so a probe is a real existence check — cheap, no WebSocket involved:
+  /// a `404` is the bridge saying this pane has no readable conversation,
+  /// while a `204` (or, against a bridge too old for `?probe=1`, the `426` an
+  /// upgrade-only endpoint answers a plain GET with, a `200`, a transient
+  /// `5xx`, or a probe that never landed at all) means the chat view is worth
+  /// offering.
+  ///
+  /// Only a definitive `404` is a "no". The terminal's chat icon is the only
+  /// way into the transcript, so hiding it on a guess costs a feature, whereas
+  /// a wrong `true` costs one tap — the transcript screen bounces back to the
+  /// terminal on a real 404 anyway.
+  Future<bool> hasTranscript(String pane) async {
+    try {
+      final res = await _dio.get<String>(
+        '/agent-transcript',
+        queryParameters: {'pane': pane, 'probe': '1'},
+        options: Options(
+          responseType: ResponseType.plain,
+          receiveTimeout: const Duration(seconds: 5),
+          // The interesting answers ARE the error statuses, so don't throw.
+          validateStatus: (_) => true,
+        ),
+      );
+      return res.statusCode != 404;
+    } catch (_) {
+      // The probe itself did not land (offline, timeout). Not a verdict —
+      // offer the view and let the transcript screen be the judge.
+      return true;
+    }
+  }
+
   /// `GET /info` → this bridge's own identity: `server_id` and `server_name`.
   ///
   /// The app stores the id against the saved server so an incoming push, which

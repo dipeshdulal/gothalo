@@ -154,7 +154,6 @@ final routerProvider = Provider<GoRouter>((ref) {
               state,
               TranscriptScreen(
                 pane: Uri.decodeComponent(state.pathParameters['pane'] ?? ''),
-                openPrompt: state.uri.queryParameters['prompt'] == '1',
                 subagent: state.uri.queryParameters['subagent'] ?? '',
                 subagentLabel: state.uri.queryParameters['label'] ?? '',
               ),
