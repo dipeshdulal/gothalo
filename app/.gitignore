@@ -59,3 +59,6 @@ lib/core/firebase_web_options.dart
 
 # Local pi agent session data — never commit.
 .pi/
+
+# Screenshot golden test failure artifacts
+/test/failures/

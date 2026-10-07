@@ -5,10 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gothalo/core/connection/connection.dart';
 import 'package:gothalo/data/bridge/bridge_client.dart';
 
-/// `/agent-transcript` resolves the pane, its kind and its session BEFORE it
-/// upgrades the socket, so a plain GET is a real existence probe: `404` is the
-/// bridge saying this pane has no readable conversation, while the `426` a
-/// healthy upgrade-only endpoint answers a plain GET with is a "yes".
+/// `/agent-transcript` resolves the pane, its kind and its session and opens
+/// the transcript BEFORE anything socket-related, so a `?probe=1` GET is a
+/// real, cheap existence probe: `404` is the bridge saying this pane has no
+/// readable conversation, while `204` (or the `426` a pre-probe bridge
+/// answers a plain GET with) is a "yes".
 ///
 /// That verdict is what gates the terminal's chat icon, and the icon is the
 /// only route into the transcript — so getting it wrong in the *other*
@@ -88,5 +89,8 @@ void main() {
 
     expect(adapter.calls.single.path, '/agent-transcript');
     expect(adapter.calls.single.queryParameters['pane'], 'w1:p1');
+    // The cheap probe: the bridge must not open a socket or log a ws-accept
+    // error on an existence check.
+    expect(adapter.calls.single.queryParameters['probe'], '1');
   });
 }

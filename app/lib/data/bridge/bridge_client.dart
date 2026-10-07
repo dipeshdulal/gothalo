@@ -1070,15 +1070,17 @@ class BridgeClient {
     }
   }
 
-  /// `GET /agent-transcript` (plain HTTP) → whether this pane has a readable
+  /// `GET /agent-transcript?probe=1` → whether this pane has a readable
   /// chat transcript worth offering.
   ///
-  /// `/agent-transcript` resolves the pane, its kind and its session BEFORE it
-  /// upgrades the socket (see `docs/CONTRACT-agent-transcript.md`), so a plain
-  /// GET is a cheap existence probe: a `404` is the bridge saying this pane has
-  /// no readable conversation, while the `426` a healthy upgrade-only endpoint
-  /// answers a plain GET with — or a `200`, a transient `5xx`, or a probe that
-  /// never landed at all — means the chat view is worth offering.
+  /// The bridge resolves the pane, its kind and its session, and opens the
+  /// transcript BEFORE answering a probe (see `docs/CONTRACT-agent-transcript.md`),
+  /// so a probe is a real existence check — cheap, no WebSocket involved:
+  /// a `404` is the bridge saying this pane has no readable conversation,
+  /// while a `204` (or, against a bridge too old for `?probe=1`, the `426` an
+  /// upgrade-only endpoint answers a plain GET with, a `200`, a transient
+  /// `5xx`, or a probe that never landed at all) means the chat view is worth
+  /// offering.
   ///
   /// Only a definitive `404` is a "no". The terminal's chat icon is the only
   /// way into the transcript, so hiding it on a guess costs a feature, whereas
@@ -1088,7 +1090,7 @@ class BridgeClient {
     try {
       final res = await _dio.get<String>(
         '/agent-transcript',
-        queryParameters: {'pane': pane},
+        queryParameters: {'pane': pane, 'probe': '1'},
         options: Options(
           responseType: ResponseType.plain,
           receiveTimeout: const Duration(seconds: 5),

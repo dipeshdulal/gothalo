@@ -189,8 +189,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   Future<void> _probeTranscript() async {
     final client = _client;
     if (client == null || _disposed) return;
-    final exists = await client.hasTranscript(widget.pane);
+    final pane = widget.pane;
+    final exists = await client.hasTranscript(pane);
     if (!mounted) return;
+    // The user may have moved to a different pane/client while this probe was
+    // in flight — applying its verdict now would set the icon for a pane we
+    // no longer show.
+    if (pane != widget.pane || !identical(client, _client)) return;
     setState(() => _hasTranscript = exists);
   }
 

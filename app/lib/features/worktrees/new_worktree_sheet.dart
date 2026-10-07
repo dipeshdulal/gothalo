@@ -438,7 +438,7 @@ class _NewWorktreeSheetState extends ConsumerState<_NewWorktreeSheet> {
       ));
       // Straight into the new agent's terminal — the pane id comes back
       // session-qualified precisely so no lookup is needed in between. The chat
-      // view is reachable from there once the agent has wrote a transcript.
+      // view is reachable from there once the agent has written a transcript.
       router.push('/terminal/${Uri.encodeComponent(result.paneId)}');
     } on BridgeException catch (e) {
       final message = worktreeAgentFailure(
