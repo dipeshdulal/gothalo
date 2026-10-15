@@ -105,7 +105,7 @@ acceptable answer when half of it worked. Every ending is distinct:
 |---|---|---|
 | Toggle **off**, create ok | worktree + idle shell | `Worktree "feat/thing" created` — unchanged from before this feature |
 | Toggle off/on, create **fails** | nothing | The bridge's own message (`{"error"}` body), sheet stays open on the branch field |
-| Create ok, agent ok, no prompt asked | worktree + agent | `feat/thing created — claude started`, then straight to the agent's chat |
+| Create ok, agent ok, no prompt asked | worktree + agent | `feat/thing created — claude started`, then straight to the agent's terminal |
 | Create ok, agent ok, prompt delivered | worktree + agent, instructed | `… started and given your message` |
 | Create ok, agent ok, prompt **dropped** (`prompt_sent:false` + `prompt_error`) | worktree + agent, idle | `… started, but your message was not delivered` |
 | Create ok, agent **fails** | worktree + idle shell | An outcome panel naming **both** halves, the checkout path, and the bridge's sentence — plus **Try again**, which retries only the agent |

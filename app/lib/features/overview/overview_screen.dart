@@ -1173,8 +1173,10 @@ class _NeedsYouSection extends StatelessWidget {
 /// **chooser**, not a design: it picks [AgentRow] or [TerminalRow] and hands
 /// each the menu.
 ///
-/// The chat shortcut is gone rather than carried over — tapping the row already
-/// opens the transcript, so it was a second control doing the first one's job.
+/// The chat shortcut is gone rather than carried over — tapping the row opens
+/// the terminal, where the chat view lives behind the app-bar icon (shown only
+/// when the bridge can serve a transcript), so it would be a second control
+/// doing the first one's job.
 class _PaneCard extends ConsumerWidget {
   const _PaneCard({
     required this.pane,
@@ -1208,7 +1210,7 @@ class _PaneCard extends ConsumerWidget {
             : null,
         menu: _PaneMenu(pane: pane, agent: a, tab: tab, siblings: siblings),
         onTap: () =>
-            context.push('/transcript/${Uri.encodeComponent(pane.paneId)}'),
+            context.push('/terminal/${Uri.encodeComponent(pane.paneId)}'),
       );
     }
     return TerminalRow(

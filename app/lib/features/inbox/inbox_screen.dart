@@ -278,7 +278,7 @@ class _AgentsTab extends ConsumerWidget {
         showActivity: true,
         onApprove: (hit) => approveAgent(context, ref, hit.agent),
         onOpen: (hit) => context.push(
-          '/transcript/${Uri.encodeComponent(hit.agent.paneId)}',
+          '/terminal/${Uri.encodeComponent(hit.agent.paneId)}',
         ),
       ),
     );

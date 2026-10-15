@@ -282,6 +282,16 @@ func (s *Server) handleAgentTranscript(w http.ResponseWriter, r *http.Request) {
 	stream := &transcriptStream{src: src, sessionID: agent.SessionID()}
 	defer stream.Close()
 
+	// ?probe=1 is the cheap existence check the app uses to gate its "chat"
+	// icon: resolve + open the transcript, confirm, done — no subagent roster,
+	// no backlog page, no ws accept (which used to log an ERROR on every plain
+	// GET probe). A transcript that fails to open already 404'd above, so
+	// reaching here is a "yes".
+	if r.URL.Query().Get("probe") == "1" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// The roster is advisory: a session that delegated nothing, or a kind with no
 	// subagent concept, yields an empty list. A failure here must not cost the
 	// user their transcript, so it is logged and the stream continues without it.

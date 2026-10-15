@@ -599,6 +599,10 @@ just hide the mode control for those kinds (their `/agent-state` omits
 ## WS /agent-transcript — streamed structured chat (agent panes)
 `GET /agent-transcript?pane=<pane_id>&token=<bearer>[&subagent=<agent_id>]` upgraded
 to a **WebSocket**.
+Add `&probe=1` for a cheap existence check: the handler resolves the pane and
+opens the transcript, then answers `204` (or `404` when there is no readable
+transcript) **without** opening the WebSocket — no backlog read, no subagent
+roster, no accept-error log.
 This is the *chat view* data source: instead of scraping the terminal (like
 `/agent-state`) or streaming raw PTY bytes (like `/attach`), the bridge reads the
 agent's **own transcript file** (Claude Code writes JSONL at

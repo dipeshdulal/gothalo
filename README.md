@@ -16,7 +16,8 @@ reply, and drop into a full terminal — all over your own Tailscale network.
 
 <p align="center"><sub>
   Home: what needs you, what you were last in, everything else by state ·
-  approve or reply from the chat · drop into the raw terminal.
+  approve or reply from the raw terminal · read the chat view from there when
+  the agent has one.
 </sub></p>
 
 ## Why this exists
